@@ -938,33 +938,85 @@ sv::MadeUp fullSpec(uint64_t stamp, uint32_t tracks, uint32_t albums) {
   return m;
 }
 
+// View 4's day 5 of counting: 11 Nov, counting since 7 Nov.
+constexpr uint16_t kDay5Today = 314, kDay5Since = 310;
+
 }  // namespace
 
+bool madeUpState(uint8_t n, Lifetime* life, PhaseInfo* phase) {
+  if (n == 0 || n >= kMadeUpViews) return false;
+  Lifetime l = fullLife();
+  PhaseInfo p;
+  p.phase = Phase::Ready;
+  p.outcome = Outcome::Ok;
+  p.version = 1;
+  switch (n) {
+    case 1: break;  // a full card
+    case 2:         // nothing played: the first day today (the first save's)
+      l.plays = 0;
+      l.listenedMs = 0;
+      l.sinceDay = kFullToday;
+      l.countingDays = 1;
+      p = PhaseInfo();
+      break;
+    case 3:  // no clock: the first day kept (its snapshot: DAYS over 30 days, Recently played by session)
+      l.dated = false;
+      l.today = sf::kUnsetDay;
+      l.countingDays = 0;
+      l.nowMin = 0;
+      break;
+    case 4:  // day 5 of counting, 11 Nov: opens 6 Dec
+      l.today = kDay5Today;
+      l.sinceDay = kDay5Since;
+      l.countingDays = sv::countingDaysOf(true, kDay5Today, kDay5Since);
+      l.plays = 37;
+      l.listenedMs = (uint64_t{2} * 60 + 41) * 60000;
+      l.nowMin = kDay5Today * kDayMin + 18 * 60 + 5;
+      break;
+    case 5:  // folding: the boot's fold under way
+      l.folding = true;
+      p = PhaseInfo();
+      p.phase = Phase::Working;
+      p.why = sv::kWhyBoot;
+      p.version = 1;
+      break;
+    case 6:  // no card: the card out
+      l.cardIn = false;
+      p.phase = Phase::NoCard;
+      p.why = sv::kWhyCard;
+      p.outcome = Outcome::CardAway;
+      break;
+    case 7:  // waiting: held past 3 s (Auto DJ's join)
+      p.phase = Phase::Waiting;
+      p.why = sv::kWhyJoin;
+      p.outcome = Outcome::None;
+      break;
+    case 8:  // no room: every grade refused
+      p.phase = Phase::NoRoom;
+      p.outcome = Outcome::NoRoom;
+      break;
+    default:  // 9, unread: a read fault
+      p.phase = Phase::Unread;
+      p.outcome = Outcome::Io;
+      break;
+  }
+  if (life) *life = l;
+  if (phase) *phase = p;
+  return true;
+}
+
+bool madeUpWrites(uint8_t n) { return n == 1 || n == 3 || n == 4; }
+
 bool madeUpView(uint8_t n, uint64_t buildStamp, uint32_t trackCount, uint32_t albums, MadeUpView* out) {
-  if (n == 0 || n >= kMadeUpViews || !out) return false;
+  if (!out) return false;
   MadeUpView v;
-  v.life = fullLife();
-  v.phase.phase = Phase::Ready;
-  v.phase.outcome = Outcome::Ok;
-  v.phase.version = 1;
+  if (!madeUpState(n, &v.life, &v.phase)) return false;
+  v.snapshot = madeUpWrites(n);
   switch (n) {
     case 1:  // a full card
-      v.snapshot = true;
       v.spec = fullSpec(buildStamp, trackCount, albums);
       break;
-    case 2:  // nothing played: the first day today (the first save's)
-      v.life.plays = 0;
-      v.life.listenedMs = 0;
-      v.life.sinceDay = kFullToday;
-      v.life.countingDays = 1;
-      v.phase = PhaseInfo();
-      break;
-    case 3: {  // no clock: the first day kept, DAYS over 30 days (O5 open), Recently played by session
-      v.life.dated = false;
-      v.life.today = sf::kUnsetDay;
-      v.life.countingDays = 0;
-      v.life.nowMin = 0;
-      v.snapshot = true;
+    case 3:  // no clock: DAYS over 30 days (O5 open), Recently played by session
       v.spec = fullSpec(buildStamp, trackCount, albums);
       v.spec.dated = false;
       v.spec.time = 0;
@@ -972,26 +1024,17 @@ bool madeUpView(uint8_t n, uint64_t buildStamp, uint32_t trackCount, uint32_t al
       v.spec.sessionRows = 6;
       v.spec.earlierRows = 40;
       break;
-    }
-    case 4: {  // day 5 of counting, 11 Nov: opens 6 Dec; the Lists grade (Not played yet can't open)
-      const uint16_t today = 314, since = 310;
-      v.life.today = today;
-      v.life.sinceDay = since;
-      v.life.countingDays = sv::countingDaysOf(true, today, since);
-      v.life.plays = 37;
-      v.life.listenedMs = (uint64_t{2} * 60 + 41) * 60000;
-      v.life.nowMin = today * kDayMin + 18 * 60 + 5;
-      v.snapshot = true;
+    case 4: {  // day 5 of counting: the Lists grade (Not played yet can't open)
       sv::MadeUp& m = v.spec;
       m = fullSpec(buildStamp, trackCount, albums);
       m.grade = sv::Grade::Lists;
       m.notPlayedEvery = 0;
       m.time = v.life.nowMin * 60 + 1;
-      m.today = today;
-      m.sinceDay = since;
-      m.firstDay = since;
-      m.newestDay = today;
-      m.rcntFirstDay = since;
+      m.today = kDay5Today;
+      m.sinceDay = kDay5Since;
+      m.firstDay = kDay5Since;
+      m.newestDay = kDay5Today;
+      m.rcntFirstDay = kDay5Since;
       const uint32_t mins[7] = {0, 0, 12, 47, 30, 41, 31};
       const uint16_t plays[7] = {0, 0, 3, 11, 7, 9, 7};
       for (uint32_t i = 0; i < sr::kWeekDays; ++i) {
@@ -1010,41 +1053,30 @@ bool madeUpView(uint8_t n, uint64_t buildStamp, uint32_t trackCount, uint32_t al
       m.earlierRows = 0;
       break;
     }
-    case 5:  // folding: the boot's fold under way
-      v.life.folding = true;
-      v.phase = PhaseInfo();
-      v.phase.phase = Phase::Working;
-      v.phase.why = sv::kWhyBoot;
-      v.phase.version = 1;
-      break;
-    case 6:  // no card: the card out
-      v.life.cardIn = false;
-      v.phase.phase = Phase::NoCard;
-      v.phase.why = sv::kWhyCard;
-      v.phase.outcome = Outcome::CardAway;
-      break;
-    case 7:  // waiting: held past 3 s (Auto DJ's join)
-      v.phase.phase = Phase::Waiting;
-      v.phase.why = sv::kWhyJoin;
-      v.phase.outcome = Outcome::None;
-      break;
-    case 8:  // no room: every grade refused
-      v.phase.phase = Phase::NoRoom;
-      v.phase.outcome = Outcome::NoRoom;
-      break;
-    default:  // 9, unread: a read fault
-      v.phase.phase = Phase::Unread;
-      v.phase.outcome = Outcome::Io;
-      break;
+    default: break;  // (no snapshot: the lifetime and phase alone)
   }
   *out = v;
   return true;
 }
 
-bool madeUpNoLog(uint8_t n) {
-  if (n == 0) return true;
-  MadeUpView v;
-  return madeUpView(n, 0, 0, 0, &v) && !v.snapshot;
+bool madeUpNoLog(uint8_t n) { return n == 0 || (n < kMadeUpViews && !madeUpWrites(n)); }
+
+const char* madeUpName(uint8_t n) {
+  static const char* const kNames[kMadeUpViews] = {"the card's own", "a full card", "nothing played", "no clock",
+                                                   "day 5 of counting", "folding", "no card", "waiting",
+                                                   "no room", "unread"};
+  return n < kMadeUpViews ? kNames[n] : "?";
+}
+
+bool madeUpArg(const char* a, uint8_t* n) {
+  if (!a || a[0] != 'x' || a[1] < '0' || a[1] > '9' || a[2] != 0) return false;
+  if (n) *n = static_cast<uint8_t>(a[1] - '0');
+  return true;
+}
+
+Rise riseOf(const Lifetime& l, uint8_t view) {
+  if (view != 0 && view < kMadeUpViews) return Rise::MadeUp;
+  return asksOnEdge(l) ? Rise::Ask : Rise::None;
 }
 
 }  // namespace statsview

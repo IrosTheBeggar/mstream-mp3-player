@@ -245,7 +245,7 @@ public:
   // ui<n>: tab n; uib back; uic the coach cards; uiL<tag> the language
   // (uiL the list, uiL- forget it and the tips); uiP the first boot's picker;
   // uiS the stats pages' state (a dark screen left dark), uiSh their hub,
-  // uiS<shelf>[w] a shelf.
+  // uiS<shelf>[w] a shelf, uiSw Last 7 days, uiSx<n> a made-up view.
   void command(const char* a);
 
   // ---- the language ----
@@ -433,16 +433,26 @@ public:
 
   // ---- the listening stats' pages (docs/LISTENING-STATS.md 7.1, 7.11, 9.7) ----
   // What the pages read, each through one accessor (a made-up view's
-  // lifetime and phase stand in for the host's here: S12): RAM, us.
+  // lifetime and phase stand in for the host's here while one is on:
+  // statsview::madeUpState(), S12): RAM, us.
   void statsLifetime(statsview::Lifetime& out);
   void statsPhase(statsview::PhaseInfo& out);
   // The visit's snapshot once landed (UiHost::statsSnapshot()), only over
   // the index it was made of (D6: its key, buildStamp and trackCount,
-  // the live index's); else null. Read at each draw and act, never kept.
+  // the live index's), and only a made-up view's own while one is on, only
+  // a real one while none is (statsview::viewServes()); else null. Read at
+  // each draw and act, never kept.
   const statsvisit::Snapshot* statsSnapshot() const;
   // A page's ask (a Try again, an ask due: D9 as replaced): none under a
-  // made-up view (look only, D16). True: queued.
+  // made-up view (look only, D16: only a Try again's tap comes here then,
+  // every automatic ask being off under its lifetime; refused with the
+  // look-only toast). True: queued.
   bool statsAsk(statsview::UiAsk a);
+  // A listener's act on a stats page under a made-up view (uiSx<n>, look
+  // only, as uil<n>'s library: statsview::actRefused()): refused, a [ui]
+  // line naming `what` and the look-only toast (stats.made_up). False: no
+  // view on (or the tray's window): the act goes on.
+  bool statsLookOnly(statsview::Act a, const char* what);
   // Most played's window into the held snapshot's header byte (UiHost::
   // statsSetWindow(): the UI's one write to it, D7; nothing held, nothing).
   void statsSetWindow(uint8_t window) { host_.statsSetWindow(window); }
@@ -557,9 +567,10 @@ private:
   // stats page in its stack, lit, not suspended, not uil's synthetic
   // library) after a navigation, a tab, the dark or a suspend. Its rising
   // edge asks the visit (D1: before the page's first draw; D3: none for the
-  // stats off, the card out, nothing played, a made-up view); its falling
-  // edge releases the snapshot (D1: after the stats page's leave(), so its
-  // place is saved first; `why`, its [listen] words).
+  // stats off, the card out, nothing played), or with a made-up view on
+  // writes the view's snapshot again (D16: never an ask; statsview::
+  // riseOf()); its falling edge releases the snapshot (D1: after the stats
+  // page's leave(), so its place is saved first; `why`, its [listen] words).
   void statsEdge(const char* why);
   // Closes what reads the snapshot (D4): the Library's sheet and the jump
   // grid over its list; never a dialog or another's sheet. True: one went.
@@ -570,6 +581,12 @@ private:
   // enter(). Under a modal that stays (a dialog) nothing is drawn: the page
   // is drawn whole when it goes.
   void statsReattach(const char* why);
+  // Its two halves: the page shown that reads the stats left (what reads
+  // the snapshot closed, its place saved; `entryToo`: the Artists root too,
+  // its entry row decided again at its enter(), for a made-up view put on
+  // or ended: uiSx<n>), true if it shows; then entered again.
+  bool statsLeave(bool entryToo);
+  void statsEnter();
   // The stats' news (UiHost::statsNews(), consumed here once a pass): the
   // stats page shown follows it. Also at the wake (`why` "the wake"),
   // before redrawAll(): a look that moved in the dark with no news (a play
@@ -586,6 +603,16 @@ private:
   // hub: statsview::shelfArg(); its push's ms).
   void statsPrint();
   void statsCommand(const char* a);
+  // uiSx<n> (9.3, look only: S12): made-up view n on (1-9) or off (0).
+  // Refused for the synthetic library (uil0 first) and, for a view that
+  // writes a snapshot (1, 3, 4), with the Dance tab up (its block can't be
+  // lent). While the held condition is up, the view written now (UiHost::
+  // statsMadeUp(): whatever was held released first; 0 a made-up snapshot
+  // released), else at its next rise; the page that reads the stats (a
+  // stats page, the Artists root's entry row) entered again in it. Ending
+  // one while held: the page's one ask (D9 as replaced) or the rise's card
+  // mark, as a rise would.
+  void statsMadeUpCommand(uint8_t n);
 
   UiHost& host_;
   Input& input_;
@@ -764,6 +791,12 @@ private:
   // risesCardOut(): statsPhase() reads Idle as No card, phaseSeen()), until
   // a page's ask or the fall. In the same hole.
   bool statsCardOut_ = false;
+  // The made-up view on (console uiSx<n>: 1-9; 0 none), RAM only (no NVS),
+  // in the same hole (S3b's S12: not a byte of internal .bss, G5's): the
+  // pages' lifetime and phase are its, their snapshot only its own, nothing
+  // asks, every act is refused (look only), and each rise writes its
+  // snapshot again (statsEdge()). The usual releases free it as any other.
+  uint8_t statsView_ = 0;
   // The list's current motion, for its "[ui] scroll:" line (a page without
   // a list, Now Playing's seek bar: "[ui] scrub:"; a finger on the A-Z
   // rail: "[ui] rail scrub:", its band frames and its rail-only frames

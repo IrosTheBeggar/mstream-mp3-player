@@ -111,6 +111,12 @@
 // once the clock is set (undatedStale(): never with no clock, a dated or
 // made-up snapshot, or a made-up view's lifetime), released, then Week and
 // the hub's Working line with one ask due, and the dated landing not stale.
+// And the made-up views as the Ui takes them (S3b's S12, uiSx<n>): its
+// accessors' lifetime and phase (no recipe), the views that write, the
+// console's argument and names, the rise writing a view again (never an
+// ask), the snapshot the pages read under a view and with none (a real
+// ask's write clears the mark), and every act refused under a view but the
+// tray's window.
 // Run: pio test -e native -f test_ui_stats
 #include <unity.h>
 
@@ -1725,6 +1731,193 @@ void test_the_made_up_views_with_no_play_log() {
     TEST_ASSERT_EQUAL_MESSAGE(!v.snapshot, madeUpNoLog(n), msg);
   }
   for (unsigned n = kMadeUpViews; n <= 0xFF; ++n) TEST_ASSERT_FALSE(madeUpNoLog(static_cast<uint8_t>(n)));
+}
+
+namespace {
+
+void putReal(Snap& b, bool dated);  // (a real ask's snapshot: below, S11's review)
+
+void sameLife(const Lifetime& a, const Lifetime& b, const char* msg) {
+  TEST_ASSERT_EQUAL_MESSAGE(a.on, b.on, msg);
+  TEST_ASSERT_EQUAL_MESSAGE(a.folding, b.folding, msg);
+  TEST_ASSERT_EQUAL_MESSAGE(a.cardIn, b.cardIn, msg);
+  TEST_ASSERT_EQUAL_MESSAGE(a.dated, b.dated, msg);
+  TEST_ASSERT_EQUAL_UINT16_MESSAGE(a.today, b.today, msg);
+  TEST_ASSERT_EQUAL_UINT16_MESSAGE(a.sinceDay, b.sinceDay, msg);
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(a.countingDays, b.countingDays, msg);
+  TEST_ASSERT_EQUAL_UINT64_MESSAGE(a.plays, b.plays, msg);
+  TEST_ASSERT_EQUAL_UINT64_MESSAGE(a.listenedMs, b.listenedMs, msg);
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(a.nowMin, b.nowMin, msg);
+  TEST_ASSERT_EQUAL_MESSAGE(a.madeUp, b.madeUp, msg);
+}
+
+}  // namespace
+
+// S3b's S12: the made-up views as the Ui takes them (uiSx<n>, look only).
+// - Its accessors' lifetime and phase (madeUpState(): no recipe) are the
+//   view's, for every n; the views that write a snapshot (1, 3, 4: the
+//   Dance tab's block, so uiSx says so on that tab), the console's names
+//   and argument.
+// - The rise with a view on writes it again, never asks, whatever the
+//   lifetime says (the view's own: madeUp; a host's off, card out, empty);
+//   with none, D3's asks.
+// - The snapshot the pages read: the view's own under a view, a real one
+//   with none; a real ask's write over the view's block clears the mark (a
+//   real ask replaces it), so it is no view's.
+// - Every act refused under a view (Play, Play next, + Queue, Auto DJ from
+//   here, Shuffle all, Try again), the tray's window never; none with no
+//   view. The Try again rows views 8 and 9 draw are refused by the same
+//   rule, and no look has an ask due under any view.
+void test_the_made_up_views_as_the_ui_takes_them() {
+  // The accessors' lifetime and phase: the view's, without its recipe.
+  for (unsigned u = 0; u <= 0xFF; ++u) {
+    const uint8_t n = static_cast<uint8_t>(u);
+    char msg[24];
+    snprintf(msg, sizeof(msg), "view %u", u);
+    MadeUpView v;
+    const bool there = madeUpView(n, kStamp, kTracks, kAlbums, &v);
+    Lifetime l;
+    PhaseInfo p;
+    TEST_ASSERT_EQUAL_MESSAGE(there, madeUpState(n, &l, &p), msg);
+    TEST_ASSERT_EQUAL_MESSAGE(n >= 1 && n <= 9, there, msg);
+    TEST_ASSERT_EQUAL_MESSAGE(n == 1 || n == 3 || n == 4, madeUpWrites(n), msg);
+    if (!there) {
+      TEST_ASSERT_EQUAL_STRING_MESSAGE(n == 0 ? "the card's own" : "?", madeUpName(n), msg);
+      continue;
+    }
+    sameLife(v.life, l, msg);
+    TEST_ASSERT_TRUE_MESSAGE(l.madeUp, msg);
+    TEST_ASSERT_EQUAL_MESSAGE(static_cast<int>(v.phase.phase), static_cast<int>(p.phase), msg);
+    TEST_ASSERT_EQUAL_MESSAGE(static_cast<int>(v.phase.outcome), static_cast<int>(p.outcome), msg);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(v.phase.why, p.why, msg);
+    TEST_ASSERT_EQUAL_UINT16_MESSAGE(v.phase.version, p.version, msg);
+    TEST_ASSERT_EQUAL_MESSAGE(v.snapshot, madeUpWrites(n), msg);
+    // Either out alone.
+    Lifetime l2;
+    PhaseInfo p2;
+    TEST_ASSERT_TRUE_MESSAGE(madeUpState(n, &l2, nullptr), msg);
+    sameLife(l, l2, msg);
+    TEST_ASSERT_TRUE_MESSAGE(madeUpState(n, nullptr, &p2), msg);
+    TEST_ASSERT_EQUAL_MESSAGE(static_cast<int>(p.phase), static_cast<int>(p2.phase), msg);
+  }
+  // Out untouched for no view.
+  Lifetime untouched = dated();
+  TEST_ASSERT_FALSE(madeUpState(0, &untouched, nullptr));
+  sameLife(dated(), untouched, "view 0 leaves the out alone");
+  const char* const names[kMadeUpViews] = {"the card's own", "a full card", "nothing played", "no clock",
+                                           "day 5 of counting", "folding", "no card", "waiting", "no room",
+                                           "unread"};
+  for (uint8_t n = 0; n < kMadeUpViews; ++n) TEST_ASSERT_EQUAL_STRING(names[n], madeUpName(n));
+
+  // uiSx<n>'s argument: "x" and one digit.
+  uint8_t n = 0xEE;
+  for (uint8_t d = 0; d <= 9; ++d) {
+    char a[4] = {'x', static_cast<char>('0' + d), 0, 0};
+    TEST_ASSERT_TRUE(madeUpArg(a, &n));
+    TEST_ASSERT_EQUAL_UINT8(d, n);
+  }
+  n = 0xEE;
+  for (const char* bad : {"x", "x10", "xa", "x-1", "x1 ", "X1", "", "1", "x/", "x:"}) {
+    TEST_ASSERT_FALSE_MESSAGE(madeUpArg(bad, &n), bad);
+  }
+  TEST_ASSERT_FALSE(madeUpArg(nullptr, &n));
+  TEST_ASSERT_EQUAL_UINT8(0xEE, n);  // (nothing written on a refusal)
+  TEST_ASSERT_TRUE(madeUpArg("x7", nullptr));
+
+  // The rise: a view on writes it again, never asks; none, D3's asks.
+  Lifetime off = dated();
+  off.on = false;
+  Lifetime out = dated();
+  out.cardIn = false;
+  Lifetime empty = dated();
+  empty.plays = 0;
+  empty.listenedMs = 0;
+  for (uint8_t v = 1; v < kMadeUpViews; ++v) {
+    Lifetime own;
+    TEST_ASSERT_TRUE(madeUpState(v, &own, nullptr));
+    for (const Lifetime* l : {&own, &off, &out, &empty}) {
+      TEST_ASSERT_EQUAL(Rise::MadeUp, riseOf(*l, v));
+    }
+    TEST_ASSERT_EQUAL(Rise::MadeUp, riseOf(dated(), v));
+    // ... and its own lifetime never asks by itself (D16).
+    TEST_ASSERT_FALSE(asksOnEdge(own));
+  }
+  TEST_ASSERT_EQUAL(Rise::Ask, riseOf(dated(), 0));
+  TEST_ASSERT_EQUAL(Rise::Ask, riseOf(noClock(), 0));
+  TEST_ASSERT_EQUAL(Rise::Ask, riseOf(dated(5), 0));
+  TEST_ASSERT_EQUAL(Rise::None, riseOf(off, 0));
+  TEST_ASSERT_EQUAL(Rise::None, riseOf(out, 0));
+  TEST_ASSERT_EQUAL(Rise::None, riseOf(empty, 0));
+  // (No such view: as none.)
+  TEST_ASSERT_EQUAL(Rise::Ask, riseOf(dated(), kMadeUpViews));
+  TEST_ASSERT_EQUAL(Rise::None, riseOf(off, 0xFF));
+
+  // The snapshot the pages read.
+  Snap made;
+  put(made, fullCard());
+  TEST_ASSERT_TRUE(made->madeUp());
+  TEST_ASSERT_TRUE(viewServes(*made.s(), true));
+  TEST_ASSERT_FALSE(viewServes(*made.s(), false));  // (never for the card's)
+  Snap real;
+  putReal(real, true);
+  TEST_ASSERT_FALSE(real->madeUp());
+  TEST_ASSERT_TRUE(viewServes(*real.s(), false));
+  TEST_ASSERT_FALSE(viewServes(*real.s(), true));  // (never under a view's lifetime)
+  // A real ask over the view's block (a console Hv or Hu under a view: the
+  // held snapshot rewritten whole) clears the mark: a real one from then.
+  Snap over;
+  put(over, fullCard());
+  TEST_ASSERT_TRUE(over->madeUp());
+  putReal(over, true);
+  TEST_ASSERT_TRUE(over->resolved());
+  TEST_ASSERT_FALSE(over->madeUp());
+  TEST_ASSERT_TRUE(viewServes(*over.s(), false));
+  TEST_ASSERT_FALSE(viewServes(*over.s(), true));
+  // ... and the view's again over a real one (the next rise's write).
+  MadeUpView v3;
+  TEST_ASSERT_TRUE(madeUpView(3, kStamp, kTracks, kAlbums, &v3));
+  put(over, v3.spec);
+  TEST_ASSERT_TRUE(over->madeUp() && !over->dated());
+  TEST_ASSERT_TRUE(viewServes(*over.s(), true));
+
+  // The acts: every one refused under a view, the tray's window never;
+  // none refused with no view.
+  for (const Act a : {Act::Queue, Act::AutoDj, Act::ShuffleAll, Act::Ask}) {
+    TEST_ASSERT_TRUE(actRefused(a, true));
+    TEST_ASSERT_FALSE(actRefused(a, false));
+  }
+  TEST_ASSERT_FALSE(actRefused(Act::Window, true));
+  TEST_ASSERT_FALSE(actRefused(Act::Window, false));
+  // The Try again rows views 8 and 9 draw (look only): their taps the Ask
+  // refused, and no look under any view has an ask due, written or not.
+  for (uint8_t v = 1; v < kMadeUpViews; ++v) {
+    Lifetime l;
+    PhaseInfo p;
+    TEST_ASSERT_TRUE(madeUpState(v, &l, &p));
+    const statsvisit::Snapshot* snap = nullptr;
+    Snap b;
+    if (madeUpWrites(v)) {
+      MadeUpView mv;
+      TEST_ASSERT_TRUE(madeUpView(v, kStamp, kTracks, kAlbums, &mv));
+      put(b, mv.spec);
+      snap = b.s();
+    }
+    for (const statsvisit::Snapshot* s : {snap, static_cast<const statsvisit::Snapshot*>(nullptr)}) {
+      const HubLook h = hubLook(l, p, s);
+      TEST_ASSERT_FALSE(h.page.askDue);
+      TEST_ASSERT_FALSE(weekLook(l, p, s).page.askDue);
+      for (uint32_t k = 0; k < kShelves; ++k) {
+        TEST_ASSERT_FALSE(shelfLook(shelfId(static_cast<Shelf>(k)), l, p, s).page.askDue);
+      }
+      if (h.rows == kHubRows + 1) {
+        TEST_ASSERT_EQUAL(RowKind::TryAgain, h.item[kHubRows].kind);
+        TEST_ASSERT_TRUE(actRefused(Act::Ask, l.madeUp));
+      }
+    }
+  }
+  MadeUpView v9;
+  TEST_ASSERT_TRUE(madeUpView(9, kStamp, kTracks, kAlbums, &v9));
+  TEST_ASSERT_EQUAL_UINT32(kHubRows + 1, hubLook(v9.life, v9.phase, nullptr).rows);
 }
 
 // ---------------------------------------------------------------------------
@@ -3384,6 +3577,7 @@ int main(int, char**) {
   RUN_TEST(test_week_from_a_made_up_snapshot);
   RUN_TEST(test_the_made_up_views);
   RUN_TEST(test_the_made_up_views_with_no_play_log);
+  RUN_TEST(test_the_made_up_views_as_the_ui_takes_them);
   RUN_TEST(test_the_forms_of_the_lines);
   RUN_TEST(test_a_ranked_row_keeps_its_count);
   RUN_TEST(test_relative_times);

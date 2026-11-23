@@ -344,9 +344,10 @@ void StatsLists::command(const char* arg) {
       if (!snap_) {
         Serial.println("[listen] Hu0: no snapshot held");
       } else if (!(flags_ & kFake)) {
-        Serial.printf("[listen] Hu0: the snapshot held (%lu B at 0x%08lx) isn't Hu's (a stats page's, or an ask's "
-                      "under way): kept\n",
-                      static_cast<ul>(snapshotBytes()), static_cast<ul>(reinterpret_cast<uintptr_t>(snap_)));
+        Serial.printf("[listen] Hu0: the snapshot held (%lu B at 0x%08lx) isn't Hu's (%s): kept\n",
+                      static_cast<ul>(snapshotBytes()), static_cast<ul>(reinterpret_cast<uintptr_t>(snap_)),
+                      snap_->madeUp() ? "a made-up view's, uiSx: uiSx0 ends it"
+                                      : "a stats page's, or an ask's under way");
       } else {
         freeSnap("Hu0");
       }
@@ -713,9 +714,13 @@ void StatsLists::turnVisit(const Gates& g) {
       lineUs += freeSnap("short of the library's albums now (past the Dance tab's 4,096 B block: 18,432 albums)");
     }
     if (snap_) {
+      // (A made-up view's among them: a console Hv or Hu under uiSx<n>.
+      // Its write() clears the mark, so the real snapshot replaces it; the
+      // pages read it once the view ends: Ui::statsSnapshot().)
       const int64_t p0 = esp_timer_get_time();
-      Serial.printf("[listen] %s: the snapshot held at 0x%08lx (%lu B of the Dance tab's block): rewritten whole\n",
-                    name(), static_cast<ul>(reinterpret_cast<uintptr_t>(snap_)), static_cast<ul>(need));
+      Serial.printf("[listen] %s: the snapshot held at 0x%08lx (%lu B of the Dance tab's block): rewritten whole%s\n",
+                    name(), static_cast<ul>(reinterpret_cast<uintptr_t>(snap_)), static_cast<ul>(need),
+                    snap_->madeUp() ? " (a made-up view's, uiSx: this ask's real one replaces it)" : "");
       lineUs += esp_timer_get_time() - p0;
     } else {
       const size_t f0 = psramFreeBytes();
@@ -1417,17 +1422,21 @@ void StatsLists::landVisit(const Gates& g) {
       count = snap_->notPlayedCount();
       if (!counted) note = " (the snapshot's key isn't the index's: not written)";
     }
-  } else if (snap_ && snap_->resolved()) {
+  } else if (snap_ && snap_->resolved() && !snap_->madeUp()) {
     const int64_t n0 = esp_timer_get_time();
     counted = sv::notPlayed(a.map, idx, snap_);
     a.notPlayedUs = static_cast<uint32_t>(esp_timer_get_time() - n0);
     count = snap_->notPlayedCount();
     if (!counted) note = " (the held snapshot's key isn't the index's: its count not written)";
   } else if (!(flags_ & kFromUi)) {
+    // (Over a made-up view's, uiSx's, nothing real is written into it: a
+    // console Hn's count from the walk's bits, as with none held. A page's
+    // lean ask never comes under a view: the pages ask nothing then.)
     const LibraryIndex::Span az = idx.albumsAZ();
     for (uint32_t i = 0; i < az.count; ++i) count += a.map.albumPlayed(az[i]) ? 0 : 1;
     counted = true;
-    note = " (no snapshot held: counted from the walk's bits)";
+    note = snap_ && snap_->madeUp() ? " (a made-up view's held: counted from the walk's bits, not written)"
+                                    : " (no snapshot held: counted from the walk's bits)";
   } else {
     note = " (no snapshot held any more: dropped)";
   }
@@ -1640,8 +1649,9 @@ void StatsLists::release(const char* why) {
 }
 
 // S3b's made-up views (9.3's uiSx<n>, look only: StatsLists.h). The
-// selector, the console and the pages' guards are S12's (D16: nothing asks
-// while one is on); this is the write and its release.
+// selector, the console and the pages' guards are the Ui's (S12; D16:
+// nothing asks while one is on, and its rises write it again); this is the
+// write and its release.
 bool StatsLists::madeUp(uint8_t n, const LibraryIndex* index) {
   const unsigned view = n;
   if (n == 0) {
@@ -1888,6 +1898,10 @@ uint32_t StatsLists::freeSnap(const char* why) {
   if (!snap_) return 0;
   const size_t n = snapshotBytes();
   void* p = snap_;
+  // (A made-up view's, uiSx<n>, released here as any other: the pages'
+  // falls, the fence, and loop()'s the stats off, the card, another key.
+  // Its view's next rise writes it again: S3b's S12.)
+  const bool madeUpOne = snap_->madeUp();
   // (The pointer dropped: the block is the Dance tab's, lent, never the
   // stats' to free.)
   snap_ = nullptr;
@@ -1896,9 +1910,10 @@ uint32_t StatsLists::freeSnap(const char* why) {
   // phase moves with it.)
   ++version_;
   const int64_t p0 = esp_timer_get_time();
-  Serial.printf("[listen] the stats pages' snapshot released (%lu B at 0x%08lx, the Dance tab's block: nothing "
+  Serial.printf("[listen] the stats pages' %ssnapshot released (%lu B at 0x%08lx, the Dance tab's block: nothing "
                 "freed): %s\n",
-                static_cast<ul>(n), static_cast<ul>(reinterpret_cast<uintptr_t>(p)), why);
+                madeUpOne ? "made-up (uiSx) " : "", static_cast<ul>(n),
+                static_cast<ul>(reinterpret_cast<uintptr_t>(p)), why);
   return static_cast<uint32_t>(esp_timer_get_time() - p0);
 }
 
@@ -1925,14 +1940,18 @@ __attribute__((noinline)) bool StatsLists::printSnapshot(const Gates& g, const c
     timeText(s.time(), asked, sizeof(asked));
     dayText(s.today(), today, sizeof(today));
     dayText(s.sinceDay(), since, sizeof(since));
-    Serial.printf("[listen] %s: the snapshot %lu B at 0x%08lx (its block %lu B; %s, %s, %s): key %016llx, %lu tracks, "
-                  "%lu albums%s; asked %s (today %s, the live round %lu); counting since %s; Most played's window %s; "
-                  "version %lu\n",
+    // (A made-up view's says so: its figures are a recipe's, nothing ranked
+    // or read, never the card's plays: 9.3's uiSx<n>, S3b's S12. The line
+    // stays inside kHkPieceRoom with the label.)
+    Serial.printf("[listen] %s: the snapshot %lu B at 0x%08lx (its block %lu B; %s, %s, %s%s): key %016llx, %lu "
+                  "tracks, %lu albums%s; asked %s (today %s, the live round %lu); counting since %s; Most played's "
+                  "window %s; version %lu\n",
                   who, static_cast<ul>(s.bytes()), at, static_cast<ul>(snapshotBytes()), sv::gradeName(s.grade()),
                   s.dated() ? "dated" : "undated", s.resolved() ? "landed" : "NOT landed",
-                  static_cast<ull>(s.buildStamp()), static_cast<ul>(s.trackCount()), static_cast<ul>(s.albums()),
-                  g.index && !mine ? " (NOT this index's)" : "", asked, today, static_cast<ul>(s.liveRound()), since,
-                  windowName(s.window()), static_cast<ul>(s.version()));
+                  s.madeUp() ? "; MADE UP by uiSx, look only: not the card's plays" : "",
+                  static_cast<ull>(s.buildStamp()), static_cast<ul>(s.trackCount()),
+                  static_cast<ul>(s.albums()), g.index && !mine ? " (NOT this index's)" : "", asked, today,
+                  static_cast<ul>(s.liveRound()), since, windowName(s.window()), static_cast<ul>(s.version()));
     Serial.printf("[listen] %s: rows (of every row offered): most played 7 days %lu (%lu), 30 days %lu (%lu), All "
                   "time %lu (%lu); new finds %lu (%lu); old favourites %lu (%lu); recently played %lu (%lu)\n",
                   who, static_cast<ul>(s.rows(sr::kMost7)), static_cast<ul>(s.total(sr::kMost7)),

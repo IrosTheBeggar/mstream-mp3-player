@@ -53,7 +53,9 @@
 //     life") and the asks its rising edge makes (none for Off, No card,
 //     Empty or a made-up view).
 //   - The made-up views 0-9 (9.3's uiSx<n>): each one's lifetime and
-//     phase, and the made-up snapshot it writes (statsvisit::writeMadeUp()).
+//     phase, and the made-up snapshot it writes (statsvisit::writeMadeUp());
+//     the console's argument, the snapshot the pages read under one, the
+//     held condition's rise with one on, and the acts it refuses (S12).
 // No allocation, no state: a draw or an act reads it anew.
 namespace statsview {
 
@@ -186,7 +188,7 @@ S phaseLine(Phase p);
 // The held condition's rising edge (D1, D3): asks a visit unless the stats
 // are off, the card is out (ask() would only drop it: No card), nothing is
 // played (Empty asks nothing), or a made-up view is on (l.madeUp: look
-// only, D16).
+// only, D16; its rise writes the view's snapshot again instead: riseOf()).
 bool asksOnEdge(const Lifetime& l);
 // The rise with the card out asks nothing (above), and StatsLists records
 // No card only for an ask asked or a snapshot held (its loop()'s card-gone
@@ -693,9 +695,16 @@ constexpr bool weekHeaderMoved(uint16_t drawnText, uint16_t nowText) {
 constexpr bool statusLineOn(uint8_t kind) { return kind != kKindWeek; }
 
 // ---------------------------------------------------------------------------
-// The made-up views (9.3's uiSx<n>, look only; S12 wires them): 1 a full
-// card, 2 nothing played, 3 no clock, 4 day 5 of counting, 5 folding, 6 no
-// card, 7 waiting, 8 no room, 9 unread; 0 the card's own (none).
+// The made-up views (9.3's uiSx<n>, look only; S3b's S12): 1 a full card, 2
+// nothing played, 3 no clock, 4 day 5 of counting, 5 folding, 6 no card, 7
+// waiting, 8 no room, 9 unread; 0 the card's own (none). The Ui keeps the
+// view on in a byte of RAM (no NVS): while it is, its accessors hand the
+// pages the view's lifetime and phase (madeUpState()) and only the view's
+// own snapshot (viewServes()), nothing asks (Lifetime::madeUp: D16), every
+// act is refused (actRefused(): the look-only toast, as uil<n>'s), and each
+// rise of the held condition writes the view's snapshot again (riseOf()):
+// the usual releases free it as any other (StatsLists::loop()'s too: the
+// stats off, the card away or held, another index's key).
 // ---------------------------------------------------------------------------
 constexpr uint8_t kMadeUpViews = 10;
 struct MadeUpView {
@@ -706,11 +715,57 @@ struct MadeUpView {
 };
 // View `n` (1-9) over the live index's key; false for 0 and past 9.
 bool madeUpView(uint8_t n, uint64_t buildStamp, uint32_t trackCount, uint32_t albums, MadeUpView* out);
+// View `n`'s lifetime and phase alone (either out null: not wanted), as
+// madeUpView() gives them, without its snapshot's recipe (a few hundred
+// bytes, never on the pages' draws): what Ui::statsLifetime() and
+// statsPhase() hand the pages while the view is on. False for 0 and past 9.
+bool madeUpState(uint8_t n, Lifetime* life, PhaseInfo* phase);
+// The views that write a snapshot (1, 3 and 4): into the Dance tab's block,
+// lent (statshold::borrow(): refused while that tab is up, so uiSx<n> says
+// so there and sets nothing).
+bool madeUpWrites(uint8_t n);
 // uiSx<n>'s answer from a host with no play log (UiHost::statsMadeUp()'s
 // default, app/PlayHistory's with none), which serves nothing and so writes
 // no snapshot: true for 0 (the end) and the views with none (2, 5-9); false
 // for those with one (1, 3, 4: not written) and past 9 (no such view). One
 // rule, so the two hosts read alike.
 bool madeUpNoLog(uint8_t n);
+// The console's words for a view (English, whatever the UI's language):
+// "the card's own", "a full card", "nothing played", "no clock", "day 5 of
+// counting", "folding", "no card", "waiting", "no room", "unread"; "?" past
+// 9.
+const char* madeUpName(uint8_t n);
+// uiSx<n>'s argument after uiS: "x" and one digit (0-9), nothing after it.
+// False: anything else ("x" alone, "x10", "xa").
+bool madeUpArg(const char* a, uint8_t* n);
+// The snapshot the pages read (Ui::statsSnapshot(), after D6's key): under
+// a made-up view only the view's own (madeUp()), with none only a real one.
+// So a made-up snapshot never passes for the card's, and a real one never
+// stands under a view's made-up lifetime: a console ask under a view (Hv,
+// Hu) rewrites the view's block whole, and its write() clears the mark (a
+// real ask replaces it), which the pages read once uiSx0 ends the view.
+inline bool viewServes(const Snapshot& s, bool viewOn) { return s.madeUp() == viewOn; }
+// The held condition's rise (D1, D3, D16): with a made-up view on (1-9),
+// the view's snapshot written again (MadeUp: whatever freed it since, a
+// dark, a tab, a Back to Artists, the card, the stats off), never an ask;
+// else the visit's ask when asksOnEdge(), or nothing (Off, the card out,
+// nothing played).
+enum class Rise : uint8_t { None, Ask, MadeUp };
+Rise riseOf(const Lifetime& l, uint8_t view);
+// What a touch on a stats page does, as a made-up view takes it (look only,
+// as uil<n>'s synthetic library: refused, the look-only toast):
+//   - Queue: Play, Play next, + Queue (a ranked row's bar, the top bar, a
+//     sheet's choices, Not played yet's album's sheet);
+//   - AutoDj: "Auto DJ from here" (a ranked row's sheet);
+//   - ShuffleAll: the empty hub's Shuffle all (7.5);
+//   - Ask: Try again (the hub's row, a shelf's, Week's button);
+//   - Window: Most played's tray, the window shown (its byte in the
+//     snapshot's header, D7): look only, never refused.
+// A push opens a page (a hub row, an album, the entry row, the rail and the
+// jump grid): no act. An album page pushed from Not played yet is the
+// card's own album, its acts the card's. A disabled row's buzz and toast,
+// and a sheet's opening, are look only.
+enum class Act : uint8_t { Queue, AutoDj, ShuffleAll, Ask, Window };
+constexpr bool actRefused(Act a, bool madeUpOn) { return madeUpOn && a != Act::Window; }
 
 }  // namespace statsview

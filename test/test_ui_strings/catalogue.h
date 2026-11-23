@@ -670,6 +670,8 @@ inline const Entry kEntries[] = {
      {{Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}}},
     {uistr::S::stats_empty_card, "stats.empty_card", false, "Your stats stay on this card", "", Font::Small, Font::None, 304, 1, Layout::Line, 0, -1, false, false, false, 0, 0,
      {{Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}}},
+    {uistr::S::stats_made_up, "stats.made_up", false, "Made-up stats: look only", "", Font::Body, Font::None, 284, 1, Layout::Toast, 284, -1, false, false, true, 128, 0,
+     {{Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}}},
     {uistr::S::card_another, "card.another", false, "Another card: restarting", "", Font::Body, Font::None, 284, 1, Layout::Toast, 284, -1, false, false, false, 128, 0,
      {{Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}}},
     {uistr::S::card_back, "card.back", false, "Card back: restarting", "", Font::Body, Font::None, 284, 1, Layout::Toast, 284, -1, false, false, false, 128, 0,

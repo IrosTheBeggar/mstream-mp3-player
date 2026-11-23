@@ -489,6 +489,9 @@ public:
   // ---- the listening stats (LibraryStats.cpp) ----
   // It shows a stats page (the hub, a shelf, Last 7 days).
   bool statsShown() const { return statsview::statsKind(static_cast<uint8_t>(kind_)); }
+  // ... or the Artists root, whose entry row reads the lifetime (7.3): what
+  // a made-up view put on or ended enters again (Ui's uiSx<n>).
+  bool statsReads() const { return statsShown() || (root() && segment() == LibrarySegment::Artists); }
   // The stats' news (StatsLists' version moved: a phase, a landing, a
   // release), once a pass from Ui::loop() while a stats page shows: the hub
   // restages its rows in place (one a pass). True: attach the page again at

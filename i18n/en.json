@@ -3613,6 +3613,18 @@
       "const": "uitext::kEmptyLineW"
     }
   },
+  "stats.made_up": "Made-up stats: look only",
+  "@stats.made_up": {
+    "context": "Toast when Play, Play next, + Queue, Auto DJ from here, Shuffle all or Try again is tapped on a listening stats page while a made-up test view is on (console command uiSx<n>, docs/LISTENING-STATS.md 9.3): the figures are invented, so nothing is played or asked. As library.synthetic.",
+    "room": {
+      "font": "Body",
+      "px": 284,
+      "layout": "toast",
+      "two_line_px": 284
+    },
+    "translate": "dev",
+    "bytes": 128
+  },
   "card.another": "Another card: restarting",
   "@card.another": {
     "context": "Toast before the player restarts because another microSD card was put in.",

@@ -717,6 +717,8 @@ void LibraryPage::onEmptyAction(int i) {
   // days', Try again (7.7: the visit asked again); the root's are the
   // card's (Try again, Format...) or the music's (Try again).
   if (kind_ == PageKind::StatsHub) {
+    // (View 2's empty hub, a made-up view: look only, uiSx<n>.)
+    if (ui_.statsLookOnly(statsview::Act::ShuffleAll, "Shuffle all")) return;
     ui_.shuffleAll();
     return;
   }
@@ -982,6 +984,10 @@ void LibraryPage::act(const IdView& span, int32_t start, int action, const char*
 }
 
 void LibraryPage::onRowAction(const RowRef& r, int action) {
+  // A stats page's Play, Play next, + Queue (a ranked row's bar, the top
+  // bar, a sheet's choices, Not played yet's album's sheet) under a made-up
+  // view: look only (uiSx<n>, as uil<n>'s library), the toast says so.
+  if (statsShown() && ui_.statsLookOnly(statsview::Act::Queue, "Play, Play next or + Queue")) return;
   LibraryIndex::Span span;
   const char* name = "";
   if (container(r, &span, &name)) {
@@ -1102,6 +1108,8 @@ void LibraryPage::autoDjFromHere(uint32_t track) {
     ui_.toast(tr(S::library_synthetic), false);
     return;
   }
+  // (A stats shelf's ranked row under a made-up view: look only, uiSx<n>.)
+  if (statsShown() && ui_.statsLookOnly(statsview::Act::AutoDj, "Auto DJ from here")) return;
   if (ui_.state().libraryFenced) {
     ui_.toast(tr(S::library_updating_wait), false);
     return;

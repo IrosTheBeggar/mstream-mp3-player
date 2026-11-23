@@ -238,10 +238,15 @@ public:
   // alone), true. False: no such view (past 9: nothing done); for 1, 3 and 4
   // no index ready (behind the fence), no loan (the Dance tab up, past
   // kBound, no block) or the write refused, each said, with nothing held
-  // (the release above). Nothing asks: the pages' guard (D16; S12, with the
-  // selector and the console). The releases with no navigation (loop(): the
-  // stats off, the card, the key) and the fence's and the end's apply to it
-  // as to any snapshot.
+  // (the release above). Nothing asks: the pages' guard (D16; ui::Ui's
+  // selector, its uiSx<n>, which calls this while the held condition is up
+  // and at each of its rises). The releases with no navigation (loop(): the
+  // stats off, the card away or held, another index's key) and the falls',
+  // the fence's and the end's apply to it as to any snapshot, on purpose: a
+  // view is held exactly while the pages are, and lends the Dance tab's
+  // block as a visit does (its view's pages read Pending, nothing due, until
+  // the next rise writes it again). Hk and a console visit's lines label it
+  // (MADE UP); a console Hv or Hu over it rewrites it whole, a real one.
   bool madeUp(uint8_t n, const LibraryIndex* index);
 
   // ---- the loop (app/PlayHistory, main.cpp) ----

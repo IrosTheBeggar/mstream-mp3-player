@@ -282,6 +282,7 @@ enum class S : uint16_t {
   stats_empty_rule,  // Plays count from 30 s or half a track
   stats_empty_rule_short,  // Plays count from 30 s
   stats_empty_card,  // Your stats stay on this card
+  stats_made_up,  // Made-up stats: look only
   card_another,  // Another card: restarting
   card_back,  // Card back: restarting
   queue_cap_full,  // No played track can make way: the queue holds {0} tracks
@@ -755,7 +756,7 @@ enum class S : uint16_t {
   month_nov,  // Nov
   month_dec,  // Dec
 };
-inline constexpr unsigned kStrings = 746;
+inline constexpr unsigned kStrings = 747;
 
 // The languages, English first: the mobile app's ten (one without a
 // catalogue yet draws English), and the pseudo-locale where UISTR_PSEUDO
