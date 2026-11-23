@@ -331,7 +331,9 @@ struct ShelfLook {
 //   - Closed (RAM): New finds and Old favourites with no clock (stats.
 //     needs_dates) or under 30 counting days (stats.warming), Not played
 //     yet dated under 30 days (stats.warming), or served with no clock and
-//     DAYS' span under 30 (stats.needs_dates: D14);
+//     DAYS' span under 30 (stats.needs_dates: D14); stats.warming's line is
+//     statstext::warmingLine() of opensDay() in Body kListLineW (its day
+//     filled, its short form where the long one is wider);
 //   - Served: the snapshot's rows, the top bar with any; none landed:
 //     stats.shelf_empty (D12). Not played yet with no bits (the visit took
 //     Lists, or its notPlayed() was refused): its own state by the phase,

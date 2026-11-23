@@ -176,21 +176,22 @@ size_t topThreeLine(const textfit::Font& f, int maxW, const char* const* titles,
 }
 
 uint32_t hubCount(const sv::Snapshot& s, sr::List l) {
-  if (l >= sr::kLists) return 0;
-  const uint32_t total = s.total(l);
-  return total < sr::kCaps[l] ? total : sr::kCaps[l];
+  // 4.2 as decided: the ranker's count, not the shelf's cap.
+  return l < sr::kLists ? s.total(l) : 0;
 }
 
 size_t newFindsLine(const textfit::Font& f, int maxW, uint32_t n, char* out, size_t size) {
   if (!out || size == 0) return 0;
-  const size_t len = uistr::trnf(out, size, S::stats_new_finds_sub, n, n);
+  const size_t len = uistr::trnf(out, size, S::stats_new_finds_sub, n, uistr::grouped(n));
   if (textfit::drawnWidth(f, out) <= maxW) return len;
-  return uistr::trnf(out, size, S::stats_new_finds_sub_short, n, n);
+  return uistr::trnf(out, size, S::stats_new_finds_sub_short, n, uistr::grouped(n));
 }
 
-size_t oldFavouritesLine(uint32_t n, char* out, size_t size) {
+size_t oldFavouritesLine(const textfit::Font& f, int maxW, uint32_t n, char* out, size_t size) {
   if (!out || size == 0) return 0;
-  return uistr::trnf(out, size, S::stats_old_favourites_sub, n, n);
+  const size_t len = uistr::trnf(out, size, S::stats_old_favourites_sub, n, uistr::grouped(n));
+  if (textfit::drawnWidth(f, out) <= maxW) return len;
+  return uistr::trnf(out, size, S::library_tracks_n, n, uistr::grouped(n));
 }
 
 size_t notPlayedLine(uint32_t albums, uint16_t sinceDay, char* out, size_t size) {
@@ -295,13 +296,16 @@ size_t rowLine(const textfit::Font& f, int maxW, sr::List list, const sv::Row& r
   // two leave the artist kMinNameW px; else the count alone (the artist is
   // the row's other name, the count its figure: both stay). German's and
   // Spanish's plays beside "found by shuffle" leave it 28 and 15 px at 22
-  // plays (test_ui_library).
+  // plays (test_ui_library). With no artist the pair has the whole line,
+  // and gives way when it is wider: nameAndParts() keeps the parts uncut,
+  // and the draw's cut would take the count (7.6: never cut).
   auto withExtra = [&](const char* first, const char* second) {
     size_t at = append(parts, sizeof(parts), 0, first);
     at = append(parts, sizeof(parts), at, kDot);
     append(parts, sizeof(parts), at, second);
     const bool named = artist && artist[0];
-    if (named && maxW - textfit::drawnWidth(f, kDot) - textfit::drawnWidth(f, parts) < kMinNameW)
+    const int w = textfit::drawnWidth(f, parts);
+    if (named ? maxW - textfit::drawnWidth(f, kDot) - w < kMinNameW : w > maxW)
       uistr::copy(parts, sizeof(parts), plays);
   };
   switch (list) {

@@ -5174,15 +5174,44 @@ void test_stats_entry_line_fits() {
 // list's lone line (Body 300); the reasons under Try again, and as Last 7
 // days' empty state's line (Small 304); the card back's (the owner's call
 // 3); the No card line; Try again as a row's title (Body 232); a shelf's
-// lone lines; the hub's empty state (7.5), its rule's long form where it
-// fits.
+// lone lines, a closed shelf's in its first month among them ("Opens 31
+// May, after a month of plays" is over 300 px in English: its short form
+// there, taken exactly where the long one is wider, every month's widest
+// day); the hub's empty state (7.5), its rule's long form where it fits.
 void test_stats_phase_lines_fit() {
   using namespace uitext;
   const Vlw body(kVlwSans16), small(kVlwSans13), title(kVlwSansBold22);
-  const textfit::Font f = viewOf(small);
+  const textfit::Font f = viewOf(small), fBody = viewOf(body);
+  const std::vector<uint16_t> days = statsDays();
+  std::string report;
   for (uistr::Lang l : kAllLangs) {
     if (!uistr::hasCatalogue(l)) continue;
     uistr::setLang(l);
+    // A shelf reached closed in the first month: stats.warming in Body 300,
+    // else its short form.
+    int shorts = 0, widest = 0;
+    for (const uint16_t d : days) {
+      char line[160], day[32], whole[160], brief[160];
+      statstext::warmingLine(fBody, kListLineW, d, line, sizeof(line));
+      fits(body, line, kListLineW);
+      statsview::dayMonthText(d, day, sizeof(day));
+      uistr::trf(whole, sizeof(whole), S::stats_warming, day);
+      uistr::trf(brief, sizeof(brief), S::stats_warming_short, day);
+      const int w = body.width(whole);
+      widest = std::max(widest, w);
+      TEST_ASSERT_EQUAL_STRING_MESSAGE(w <= kListLineW ? whole : brief, line, whole);
+      shorts += w > kListLineW;
+    }
+    char m[128];
+    snprintf(m, sizeof(m), "%s: a closed shelf's \"Opens\" line short on %d of %d days (the long up to %d px); ",
+             uistr::tag(l), shorts, static_cast<int>(days.size()), widest);
+    report += m;
+    if (l == uistr::Lang::En) {
+      // 31 May (day 150): the long form over the list's line, as found.
+      char line[160];
+      statstext::warmingLine(fBody, kListLineW, 150, line, sizeof(line));
+      TEST_ASSERT_EQUAL_STRING("Opens on 31 May", line);
+    }
     for (S id : {S::stats_counting, S::stats_waiting, S::stats_no_room, S::stats_unread}) {
       fits(small, tr(id), statstext::kHubLineW);
       fits(body, tr(id), kListLineW);
@@ -5199,6 +5228,7 @@ void test_stats_phase_lines_fit() {
     fits(small, tr(statstext::emptyRule(f, kEmptyLineW)), kEmptyLineW);
     fits(small, tr(S::stats_empty_card), kEmptyLineW);
   }
+  TEST_MESSAGE(report.c_str());
   uistr::setLang(uistr::Lang::En);
   TEST_ASSERT_EQUAL(static_cast<int>(S::stats_empty_rule), static_cast<int>(statstext::emptyRule(f, kEmptyLineW)));
 }
@@ -5206,8 +5236,10 @@ void test_stats_phase_lines_fit() {
 // The hub's rows (7.4): their titles (Body 232) and lines (Small 232): Last
 // 7 days' time to 168 h 59 min and plays to 9,999 in each plural form; Most
 // played's top three, whole when short, cut with "…" when not; New finds'
-// count in its long form or its short one, to the shelf's 50; Old
-// favourites' to 200 (hubCount(): past its cap, English's own is 236 px);
+// and Old favourites' counts to 99,999 (hubCount(): the snapshot's total,
+// past the shelves' caps too: 4.2 as decided), each in its long form where
+// it fits and only there, else New finds' short form and Old favourites'
+// count alone ("1,000 tracks": English's long form is 240 px there);
 // Not played yet's albums since every month's widest day, and the day alone;
 // Recently played's title cut and its time whole. The disabled rows'
 // reasons and the status row's lines in 250 (D13), "Opens 6 Dec" long or
@@ -5216,7 +5248,7 @@ void test_stats_hub_lines_fit() {
   const Vlw body(kVlwSans16), small(kVlwSans13);
   const textfit::Font f = viewOf(small);
   const std::vector<uint16_t> days = statsDays();
-  const uint32_t counts[] = {1, 2, 3, 5, 21, 22, 25, 50, 118, 200, 216, 999, 1000, 9999, 19417};
+  const uint32_t counts[] = {1, 2, 3, 5, 21, 22, 25, 50, 118, 200, 216, 999, 1000, 9999, 19417, 65534, 99999};
   std::string report;
   for (uistr::Lang l : kAllLangs) {
     if (!uistr::hasCatalogue(l)) continue;
@@ -5247,20 +5279,32 @@ void test_stats_hub_lines_fit() {
                                "\xE3\x83\xA1\xE3\x81\x9F\xE3\x81\xA1\xE3\x81\xAE\xE6\xAD\x8C"};  // 北の海のカモメたちの歌
     statstext::topThreeLine(f, statstext::kHubLineW, cjkTitles, 3, b, sizeof(b));
     fits(small, b, statstext::kHubLineW);
-    // New finds and Old favourites, to their shelves' caps (hubCount()).
-    int shortFrom = 0;
+    // New finds and Old favourites, every count (hubCount() isn't capped):
+    // the long form exactly where it fits.
+    int shortFrom = 0, aloneFrom = 0, aloneW = 0;
     for (const uint32_t n : counts) {
-      if (n <= statsrank::kCaps[statsrank::kNewFinds]) {
-        statstext::newFindsLine(f, statstext::kHubLineW, n, b, sizeof(b));
-        fits(small, b, statstext::kHubLineW);
-        char whole[160];
-        uistr::trnf(whole, sizeof(whole), S::stats_new_finds_sub, n, n);
-        if (std::strcmp(whole, b) != 0 && !shortFrom) shortFrom = static_cast<int>(n);
+      char whole[160], brief[160];
+      statstext::newFindsLine(f, statstext::kHubLineW, n, b, sizeof(b));
+      fits(small, b, statstext::kHubLineW);
+      uistr::trnf(whole, sizeof(whole), S::stats_new_finds_sub, n, uistr::grouped(n));
+      uistr::trnf(brief, sizeof(brief), S::stats_new_finds_sub_short, n, uistr::grouped(n));
+      TEST_ASSERT_EQUAL_STRING_MESSAGE(small.width(whole) <= statstext::kHubLineW ? whole : brief, b, whole);
+      if (std::strcmp(whole, b) != 0 && !shortFrom) shortFrom = static_cast<int>(n);
+      statstext::oldFavouritesLine(f, statstext::kHubLineW, n, b, sizeof(b));
+      fits(small, b, statstext::kHubLineW);
+      uistr::trnf(whole, sizeof(whole), S::stats_old_favourites_sub, n, uistr::grouped(n));
+      uistr::trnf(brief, sizeof(brief), S::library_tracks_n, n, uistr::grouped(n));
+      TEST_ASSERT_EQUAL_STRING_MESSAGE(small.width(whole) <= statstext::kHubLineW ? whole : brief, b, whole);
+      if (std::strcmp(whole, b) != 0 && !aloneFrom) {
+        aloneFrom = static_cast<int>(n);
+        aloneW = small.width(whole);
       }
-      if (n <= statsrank::kCaps[statsrank::kOldFavourites]) {
-        statstext::oldFavouritesLine(n, b, sizeof(b));
-        fits(small, b, statstext::kHubLineW);
-      }
+    }
+    if (l == uistr::Lang::En) {
+      // English: the long forms to 999 and 200 at least; Old favourites'
+      // the count alone from 1,000 (240 px in 232).
+      TEST_ASSERT_TRUE(shortFrom == 0 || shortFrom > 999);
+      TEST_ASSERT_EQUAL_INT(1000, aloneFrom);
     }
     // Not played yet.
     for (const uint16_t d : days) {
@@ -5293,9 +5337,11 @@ void test_stats_hub_lines_fit() {
     fits(small, tr(S::stats_needs_dates), statstext::kReasonW);
     statstext::toastText(S::toast_stats_needs_dates, 0, b, sizeof(b));
     toastFits(body, small, b);
-    if (shortFrom) {
-      char m[96];
-      snprintf(m, sizeof(m), "%s: New finds' short form from %d; ", uistr::tag(l), shortFrom);
+    if (shortFrom || aloneFrom) {
+      char m[160];
+      snprintf(m, sizeof(m),
+               "%s: New finds' short form from %d, Old favourites' count alone from %d (its long form %d px); ",
+               uistr::tag(l), shortFrom, aloneFrom, aloneW);
       report += m;
     }
   }
@@ -5418,7 +5464,8 @@ void test_stats_tray_labels_fit() {
 // time) whole at its end, never cut; the source or the last day beside
 // the count exactly when the pair leaves the artist kMinNameW px (German's
 // plays beside "found by shuffle" don't), so the artist is never left out
-// in any language; the artist cut with "…" only when the whole line
+// in any language; with no artist, the pair (or the count alone) within the
+// line, its count whole; the artist cut with "…" only when the whole line
 // doesn't fit.
 void test_stats_row_lines_keep_their_counts() {
   const Vlw small(kVlwSans13);
@@ -5447,6 +5494,15 @@ void test_stats_row_lines_keep_their_counts() {
       const size_t lead = std::strlen("A") + std::strlen(librarytext::kDot);
       const char* parts = std::strlen(named) > lead ? named + lead : "";
       uistr::trnf(plays, sizeof(plays), S::stats_plays_n, row.count, uistr::grouped(row.count));
+      // The line with no artist (the parts alone, never cut) fits whole, so
+      // the draw's cut never takes its count: the count at the end (Old
+      // favourites': first, the last day after it).
+      fits(small, pair, statstext::kRowLineW);
+      if (list == statsrank::kOldFavourites) {
+        TEST_ASSERT_EQUAL_INT_MESSAGE(0, std::strncmp(pair, plays, std::strlen(plays)), pair);
+      } else if (list != statsrank::kRecent) {
+        TEST_ASSERT_TRUE_MESSAGE(statsEndsWith(pair, plays), pair);
+      }
       if (list != statsrank::kRecent) {
         // The count whole; the extra part (who found it, the last day)
         // beside it only when the pair leaves the artist kMinNameW, else

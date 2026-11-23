@@ -1560,12 +1560,29 @@ void test_the_forms_of_the_lines() {
   TEST_ASSERT_EQUAL_STRING("since 1 Sep", b);
   TEST_ASSERT_EQUAL_UINT32(0, st::sinceOnlyLine(sf::kUnsetDay, b, sizeof(b)));
   TEST_ASSERT_EQUAL_STRING("", b);
-  // Old favourites.
-  st::oldFavouritesLine(38, b, sizeof(b));
+  // Old favourites: the long form where it fits 232 (35 characters: 210 px
+  // at 6, 280 at 8), else the count alone; one track; a count grouped.
+  st::oldFavouritesLine(f, st::kHubLineW, 38, b, sizeof(b));
   TEST_ASSERT_EQUAL_STRING("38 tracks, played often, not lately", b);
-  st::oldFavouritesLine(1, b, sizeof(b));
+  st::oldFavouritesLine(f, st::kHubLineW, 1, b, sizeof(b));
   TEST_ASSERT_EQUAL_STRING("1 track, played often, not lately", b);
-  // Their counts: the snapshot's total, at most the shelf's cap (50, 200).
+  px = 8;
+  st::oldFavouritesLine(f, st::kHubLineW, 38, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("38 tracks", b);
+  px = 6;
+  st::oldFavouritesLine(f, 210, 38, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("38 tracks, played often, not lately", b);
+  st::oldFavouritesLine(f, 209, 38, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("38 tracks", b);
+  st::oldFavouritesLine(f, 400, 1204, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("1,204 tracks, played often, not lately", b);
+  st::oldFavouritesLine(f, st::kHubLineW, 1204, b, sizeof(b));  // 38 characters: 228 px
+  TEST_ASSERT_EQUAL_STRING("1,204 tracks, played often, not lately", b);
+  st::oldFavouritesLine(f, st::kHubLineW, 12040, b, sizeof(b));  // 39: 234
+  TEST_ASSERT_EQUAL_STRING("12,040 tracks", b);
+  // Their counts: the snapshot's total (4.2 as decided: every row offered,
+  // less the orphans dropped), past the shelf's cap too (50, 200): the
+  // hub says how many there are, the shelf shows its cap.
   {
     sv::MadeUp m = fullCard();
     Snap a;
@@ -1574,19 +1591,23 @@ void test_the_forms_of_the_lines() {
     TEST_ASSERT_EQUAL_UINT32(a->total(sr::kOldFavourites), st::hubCount(*a.s(), sr::kOldFavourites));
     TEST_ASSERT_TRUE(a->total(sr::kNewFinds) > 0 && a->total(sr::kOldFavourites) > 0);
     m.totals[sr::kNewFinds] = 50;
-    m.totals[sr::kOldFavourites] = 1000;
+    m.totals[sr::kOldFavourites] = 200;
     Snap c;
     put(c, m);
     TEST_ASSERT_EQUAL_UINT32(50, st::hubCount(*c.s(), sr::kNewFinds));
     TEST_ASSERT_EQUAL_UINT32(200, st::hubCount(*c.s(), sr::kOldFavourites));
-    m.totals[sr::kNewFinds] = 51;
+    m.totals[sr::kNewFinds] = 80;
+    m.totals[sr::kOldFavourites] = 1000;
     Snap d;
     put(d, m);
-    TEST_ASSERT_EQUAL_UINT32(50, st::hubCount(*d.s(), sr::kNewFinds));
+    TEST_ASSERT_EQUAL_UINT32(80, st::hubCount(*d.s(), sr::kNewFinds));
+    TEST_ASSERT_EQUAL_UINT32(1000, st::hubCount(*d.s(), sr::kOldFavourites));
+    TEST_ASSERT_EQUAL_UINT32(80, d->total(sr::kNewFinds));
+    TEST_ASSERT_EQUAL_UINT32(1000, d->total(sr::kOldFavourites));
     TEST_ASSERT_EQUAL_UINT32(0, st::hubCount(*d.s(), sr::kLists));
   }
   // New finds: the long form where it fits 232 (32 characters: 192 px at 6,
-  // 256 at 8), else the short one; one track.
+  // 256 at 8), else the short one; one track; a count grouped.
   st::newFindsLine(f, st::kHubLineW, 41, b, sizeof(b));
   TEST_ASSERT_EQUAL_STRING("41 tracks first heard in 30 days", b);
   px = 8;
@@ -1595,11 +1616,15 @@ void test_the_forms_of_the_lines() {
   px = 6;
   st::newFindsLine(f, st::kHubLineW, 1, b, sizeof(b));
   TEST_ASSERT_EQUAL_STRING("1 track first heard in 30 days", b);
+  st::newFindsLine(f, st::kHubLineW, 1204, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("1,204 tracks first heard in 30 days", b);
   px = 232 / 32;  // 7: 224 px, fits; one more character doesn't
   st::newFindsLine(f, 224, 41, b, sizeof(b));
   TEST_ASSERT_EQUAL_STRING("41 tracks first heard in 30 days", b);
   st::newFindsLine(f, 223, 41, b, sizeof(b));
   TEST_ASSERT_EQUAL_STRING("41 new in 30 days", b);
+  st::newFindsLine(f, 223, 1204, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("1,204 new in 30 days", b);
   // A first-month row: "Opens 6 Dec, after a month of plays" (35
   // characters) in 250, else its short form; the toasts.
   px = 7;  // 245 px
@@ -1763,7 +1788,11 @@ void test_a_ranked_row_keeps_its_count() {
   // would leave the artist under kMinNameW: at 8 px "found by Auto DJ ·
   // 9,999 plays" and the dot are 264 px (none left), the plays alone 112;
   // at 9 px "9,999 plays · last 14 Sep" and the dot 252 (12 left). With no
-  // artist, the pair whole.
+  // artist, the pair whole while it fits the line, else the count alone
+  // (the parts are never cut, so a pair wider than the line would lose the
+  // count to the draw's cut): "found by Auto DJ · 9,999 plays" is 30
+  // characters, 240 px at 8, 270 at 9; "9,999 plays · last 14 Sep" 25, 225
+  // at 9, 275 at 11.
   px = 8;
   r.src = sf::kAutoDj;
   r.count = 9;
@@ -1774,13 +1803,26 @@ void test_a_ranked_row_keeps_its_count() {
   TEST_ASSERT_EQUAL_STRING("Sefa Ilmar" DOT "9,999 plays", b);
   st::rowLine(f, st::kRowLineW, sr::kNewFinds, r, "", false, 0, b, sizeof(b));
   TEST_ASSERT_EQUAL_STRING("found by Auto DJ" DOT "9,999 plays", b);
+  st::rowLine(f, 240, sr::kNewFinds, r, "", false, 0, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("found by Auto DJ" DOT "9,999 plays", b);
+  st::rowLine(f, 239, sr::kNewFinds, r, "", false, 0, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("9,999 plays", b);
+  st::rowLine(f, 239, sr::kNewFinds, r, nullptr, false, 0, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("9,999 plays", b);
   px = 9;
+  st::rowLine(f, st::kRowLineW, sr::kNewFinds, r, "", false, 0, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("9,999 plays", b);
   r.count = 9;
   st::rowLine(f, st::kRowLineW, sr::kOldFavourites, r, "Halvard Moss", false, 0, b, sizeof(b));
   TEST_ASSERT_TRUE(endsWith(b, DOT "9 plays" DOT "last 14 Sep"));
   r.count = 9999;
   st::rowLine(f, st::kRowLineW, sr::kOldFavourites, r, "Halvard Moss", false, 0, b, sizeof(b));
   TEST_ASSERT_EQUAL_STRING("Halvard Moss" DOT "9,999 plays", b);
+  st::rowLine(f, st::kRowLineW, sr::kOldFavourites, r, "", false, 0, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("9,999 plays" DOT "last 14 Sep", b);
+  px = 11;
+  st::rowLine(f, st::kRowLineW, sr::kOldFavourites, r, "", false, 0, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("9,999 plays", b);
   px = 6;
   // No artist (the files right under /music): the parts alone.
   r.count = 12;

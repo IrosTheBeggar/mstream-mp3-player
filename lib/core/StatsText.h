@@ -22,7 +22,8 @@
 //   - The hub's lines (7.4): the header's lifetime line, Last 7 days' time
 //     and plays, Most played's top three titles (cut with "…" as any
 //     names), New finds' count (its short form when the long one doesn't
-//     fit), Old favourites', Not played yet's albums since the first day
+//     fit), Old favourites' (the count alone when it doesn't), both the
+//     snapshot's totals (4.2), Not played yet's albums since the first day
 //     (or that day alone), Recently played's newest title and how long ago;
 //     a disabled row's "Opens 6 Dec" (its short form) and the toasts.
 //   - The shelves (7.6): their header lines, the tray's labels, and a
@@ -119,19 +120,21 @@ size_t weekLine(uint64_t listenedMs, uint32_t plays, char* out, size_t size);
 size_t topThreeLine(const textfit::Font& f, int maxW, const char* const* titles, uint32_t n, char* out,
                     size_t size);
 // The count New finds' and Old favourites' lines give (rows 3-4): the
-// snapshot's total() (4.2 as decided: every row offered, less the orphans
-// dropped), at most the shelf's cap (statsrank::kCaps: 50, 200), as the
-// catalogue words and measures them ("the shelf's, up to 50": i18n/en.json's
-// worst). Past it the line overflows ("1000 tracks, played often, not
-// lately" is 236 px in English's 232), and the shelf shows its cap anyway.
+// snapshot's total() (4.2 as decided: every row offered to the list, less
+// the orphans the copy-out dropped), not the shelf's cap. Past the cap the
+// shelf shows its 50 or 200 rows, and the hub still says how many tracks
+// there are (it can over-count by orphans past the kept rows, as 4.2 says).
+// 0 for no list.
 uint32_t hubCount(const statsvisit::Snapshot& s, statsrank::List l);
 // New finds: stats.new_finds_sub ("41 tracks first heard in 30 days") when
 // it fits `maxW` px of `f`, else stats.new_finds_sub_short ("41 new in 30
-// days"). `n`: hubCount().
+// days"). `n`: hubCount(), grouped ("1,204").
 size_t newFindsLine(const textfit::Font& f, int maxW, uint32_t n, char* out, size_t size);
 // Old favourites: stats.old_favourites_sub ("38 tracks, played often, not
-// lately").
-size_t oldFavouritesLine(uint32_t n, char* out, size_t size);
+// lately") when it fits `maxW` px of `f`, else library.tracks_n alone
+// ("1,204 tracks": the row's title says which). `n`: hubCount(), grouped.
+// English's long form is 240 px in 232 at 1,000 tracks (999 fits).
+size_t oldFavouritesLine(const textfit::Font& f, int maxW, uint32_t n, char* out, size_t size);
 // Not played yet: stats.since of library.albums_n and the first day ("612
 // albums since 1 Sep"); with no first day the albums alone.
 size_t notPlayedLine(uint32_t albums, uint16_t sinceDay, char* out, size_t size);
@@ -146,6 +149,12 @@ size_t recentLine(const textfit::Font& f, int maxW, const char* title, bool time
 // A row disabled in the first month (StatsView's Line::Warming): stats.
 // warming of the day it opens ("Opens 6 Dec, after a month of plays") when
 // it fits `maxW` px of `f`, else stats.warming_short ("Opens on 6 Dec").
+// Two rooms: the hub's disabled row, Small kReasonW; and a shelf reached
+// closed in the first month (StatsView's ShelfLook, Closed with stats.
+// warming: through uiS1, or a remount onto a card in its first month), its
+// lone line, Body uitext::kListLineW. English's long form is over 300 px
+// there for some days ("Opens 31 May, after a month of plays": 302), so a
+// shelf's line comes from here too, never from tr(page.line).
 size_t warmingLine(const textfit::Font& f, int maxW, uint16_t opensDay, char* out, size_t size);
 // A disabled row's toast (4.5; StatsView's HubItem::toast):
 // toast.stats_needs_dates ("Needs dates: Plug in to the MP3 Player tab"),
@@ -184,7 +193,9 @@ size_t nameAndParts(const textfit::Font& f, int maxW, const char* name, const ch
 //   - Old favourites: its plays and its last day ("Halvard Moss · 9 plays ·
 //     last 14 Sep");
 //     (each of these two: the plays alone when the pair would leave the
-//     artist less than kMinNameW px: "Sefa Ilmar · 22 Wiedergaben");
+//     artist less than kMinNameW px: "Sefa Ilmar · 22 Wiedergaben"; with
+//     no artist, when the pair alone is wider than `maxW`, so the count is
+//     never the part cut);
 //   - Recently played: how long ago, when `timed` (StatsView's RecentItem:
 //     a dated row of a dated snapshot) and under a day ("Lumen Ferry · 25
 //     min ago"), else the artist alone;

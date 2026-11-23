@@ -2079,7 +2079,7 @@
     "other": "{0} tracks"
   },
   "@library.tracks_n": {
-    "context": "A count of tracks: an album's row and header (\"2001 · 14 tracks\"), the Output tab's Library row when 'Library: N tracks' doesn't fit, About's library.",
+    "context": "A count of tracks: an album's row and header (\"2001 · 14 tracks\"), the Output tab's Library row when 'Library: N tracks' doesn't fit, About's library, the line of the listening stats' Old favourites row when stats.old_favourites_sub doesn't fit (Small, 232 px).",
     "room": [
       {
         "font": "Small",
@@ -3142,7 +3142,7 @@
     "other": "{0} tracks first heard in 30 days"
   },
   "@stats.new_finds_sub": {
-    "context": "The line of the hub's New finds row (docs/LISTENING-STATS.md 7.4): how many tracks were first heard in the last 30 days (the shelf's, up to 50). Small, 232 px, drawn only when it fits: else stats.new_finds_sub_short.",
+    "context": "The line of the hub's New finds row (docs/LISTENING-STATS.md 7.4): how many tracks were first heard in the last 30 days (all of them, not only the shelf's 50: 4.2). Small, 232 px, drawn only when it fits: else stats.new_finds_sub_short.",
     "room": {
       "font": "Small",
       "px": 232,
@@ -3150,9 +3150,9 @@
     },
     "placeholders": {
       "0": {
-        "means": "the tracks (up to 50)",
-        "type": "digits",
-        "worst": 50
+        "means": "the tracks",
+        "type": "grouped",
+        "worst": 99999
       }
     },
     "count": "0"
@@ -3169,9 +3169,9 @@
     },
     "placeholders": {
       "0": {
-        "means": "the tracks (up to 50)",
-        "type": "digits",
-        "worst": 50
+        "means": "the tracks",
+        "type": "grouped",
+        "worst": 99999
       }
     },
     "count": "0"
@@ -3195,16 +3195,17 @@
     "other": "{0} tracks, played often, not lately"
   },
   "@stats.old_favourites_sub": {
-    "context": "The line of the hub's Old favourites row (docs/LISTENING-STATS.md 7.4): how many tracks the shelf holds (up to 200). Small, 232 px.",
+    "context": "The line of the hub's Old favourites row (docs/LISTENING-STATS.md 7.4): how many tracks were played often but not lately (all of them, not only the shelf's 200: 4.2). Small, 232 px, drawn only when it fits: else the count alone, library.tracks_n (\"1,204 tracks\").",
     "room": {
       "font": "Small",
-      "px": 232
+      "px": 232,
+      "optional": true
     },
     "placeholders": {
       "0": {
-        "means": "the tracks (up to 200)",
-        "type": "digits",
-        "worst": 200
+        "means": "the tracks",
+        "type": "grouped",
+        "worst": 99999
       }
     },
     "count": "0"
@@ -3277,12 +3278,20 @@
   },
   "stats.warming": "Opens {0}, after a month of plays",
   "@stats.warming": {
-    "context": "Why a hub row is disabled in the stats' first month (docs/LISTENING-STATS.md 4.4 First month: New finds, Old favourites, Not played yet): the day it opens, 30 days after the stats began. The row's line, Small, 250 px, drawn only when it fits: else stats.warming_short.",
-    "room": {
-      "font": "Small",
-      "px": 250,
-      "optional": true
-    },
+    "context": "Why a hub row is disabled in the stats' first month (docs/LISTENING-STATS.md 4.4 First month: New finds, Old favourites, Not played yet): the day it opens, 30 days after the stats began. The row's line, Small, 250 px; and the shelf's lone line when it is reached closed (Body, the list's width less 20); each drawn only when it fits: else stats.warming_short.",
+    "room": [
+      {
+        "font": "Small",
+        "px": 250,
+        "optional": true
+      },
+      {
+        "font": "Body",
+        "px": 300,
+        "const": "uitext::kListLineW",
+        "optional": true
+      }
+    ],
     "placeholders": {
       "0": {
         "means": "the day the row opens (format.day_month)",
@@ -3293,11 +3302,16 @@
   },
   "stats.warming_short": "Opens on {0}",
   "@stats.warming_short": {
-    "context": "stats.warming's short form (the disabled row's line when that doesn't fit: Small, 250 px), and the rest of toast.stats_needs_month after its ': ' (Body, else Small, 284 px).",
+    "context": "stats.warming's short form (the disabled row's line when that doesn't fit: Small, 250 px; a closed shelf's lone line: Body, 300 px), and the rest of toast.stats_needs_month after its ': ' (Body, else Small, 284 px).",
     "room": [
       {
         "font": "Small",
         "px": 250
+      },
+      {
+        "font": "Body",
+        "px": 300,
+        "const": "uitext::kListLineW"
       },
       {
         "font": "Body",
