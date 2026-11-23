@@ -1644,6 +1644,25 @@ void ListView::onEvent(const InputEvent& e) {
     case T::Tap: {
       scroll_.release(e.ms, 0.0f);
       const int32_t item = pressedItem_;
+      if (item >= 0 && slots_ && layout_.item(static_cast<uint32_t>(item)).kind == ListLayout::Kind::TopRow) {
+        // The source's lead row (Most played's tray, LISTENING-STATS.md
+        // 7.6): a cell's tap draws it again with another window picked
+        // (refreshTopRow()), so the lift's own push of the old picture
+        // would be thrown away in the same pass (7.10: one tray refresh a
+        // tap). The press is lifted unpushed; the row is pushed here only
+        // when the tap didn't, nor left it owed to a recount (stageLead_).
+        pressedItem_ = -1;
+        pressedButton_ = -1;
+        for (int i = 0; i < kSlots; ++i) {
+          if (slots_[i].item == item) slots_[i].item = -1;
+        }
+        tapItem(item, e);
+        if (!slots_) break;  // (detached by the tap: nothing of it on screen)
+        bool drawn = stageLead_;
+        for (int i = 0; i < kSlots; ++i) drawn = drawn || slots_[i].item == item;
+        if (!drawn) pushItemInPlace(static_cast<uint32_t>(item));
+        break;
+      }
       setPressed(-1, -1);
       if (item >= 0) {
         tapItem(item, e);

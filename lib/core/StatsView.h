@@ -541,7 +541,8 @@ ShelfItem shelfItem(const ShelfLook& k, const Snapshot* snap, uint32_t row);
 // bar, a hold its track's sheet ("Auto DJ from here" first when it
 // applies); Album, a tick and the album, a hold its sheet; TryAgain, a tick
 // and the ask, no hold; Section and None, nothing (no press, no tick, no
-// hold: the list still scrolls from them). None is inert.
+// hold: the list still scrolls from them). Neither is inert: a tap on one
+// gives no buzz and no toast (onInertTap() is the hub's disabled rows').
 Control shelfControlOf(ShelfRow k);
 // The list row holding `track` (kShowPlaying's row: from Now Playing, or
 // the rows' arrival at the place kept for it): the first of the shelf's
@@ -583,6 +584,23 @@ bool trayMoved(uint8_t drawnShape, uint8_t nowShape, bool textsMoved);
 constexpr bool shelfHeaderMoved(uint8_t drawnShape, uint8_t nowShape) {
   return ((drawnShape ^ nowShape) & kShelfWindow) != 0;
 }
+// The tray alone moved (its cells: a day that brings it or makes two cells
+// three; the 30-day label's kind with them), the look, the window shown
+// and the texts as drawn: every row is the one it was. Its restage keeps
+// the bar open and a finger's press, and owes the rows nothing of their
+// own (ListView::recountStaged()'s expanded, keepPresses, changedRow past
+// them). (A tray that comes or goes still moves every item under it by
+// one: ListView stages items at the place they had.)
+constexpr bool trayAlone(uint8_t drawnShape, uint8_t nowShape, bool textsMoved) {
+  return !textsMoved && drawnShape != nowShape &&
+         ((drawnShape ^ nowShape) & static_cast<uint8_t>(~(kShelfCells | kShelfShort))) == 0;
+}
+// D7: Most played's window into the snapshot's header (the hub's next push
+// and a bare uiS0 open on it), owed whenever the shelf is served showing
+// another window than the snapshot's: at enter(), and at a landing with
+// rows or without ("Nothing in this period.": a new ask's loan opened on
+// All time, its page on 7 days).
+bool windowOwed(const ShelfLook& k, const Snapshot* snap);
 // The console's uiS<shelf>[w] (9.3): a shelf 0-4 (Most played, New finds,
 // Old favourites, Not played yet, Recently played), Most played's window
 // after it (0 seven days, 1 thirty, 2 All time); `windowGiven` false with

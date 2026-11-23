@@ -2932,6 +2932,86 @@ void test_a_shelf_s_touch_place_and_shape() {
     TEST_ASSERT_FALSE_MESSAGE(shelfArg(bad, &sh, &w, &given), bad);
 }
 
+// D7's window written back whenever Most played is served showing another
+// (a landing with no rows in its window too: S10's review), and a restage
+// for the tray alone (a new UTC day: its rows kept, its bar open).
+void test_most_played_s_window_and_the_tray_alone() {
+  Snap full;
+  put(full, fullCard());
+  TEST_ASSERT_EQUAL_UINT8(sv::kAllTime, full->window());  // (a new loan's: All time)
+  const Lifetime l = dated();
+  const uint32_t week = shelfId(Shelf::MostPlayed, sv::k7Days), all = shelfId(Shelf::MostPlayed, sv::kAllTime);
+  ShelfLook k = shelfLook(week, l, kReady, full.s());
+  TEST_ASSERT_EQUAL(Look::Served, k.page.look);
+  TEST_ASSERT_TRUE(k.rows > 0);
+  TEST_ASSERT_TRUE(windowOwed(k, full.s()));
+  TEST_ASSERT_FALSE(windowOwed(shelfLook(all, l, kReady, full.s()), full.s()));  // (the snapshot's own)
+  TEST_ASSERT_FALSE(windowOwed(k, nullptr));                                    // (nothing served)
+  // The window with no plays: served, no rows ("Nothing in this period."),
+  // so no arrival; the write is owed all the same (the hub's next push).
+  sv::MadeUp quiet = fullCard();
+  quiet.rows[sr::kMost7] = 0;
+  Snap qs;
+  put(qs, quiet);
+  k = shelfLook(week, l, kReady, qs.s());
+  TEST_ASSERT_EQUAL(Look::Served, k.page.look);
+  TEST_ASSERT_EQUAL_UINT32(0, k.rows);
+  TEST_ASSERT_TRUE(k.drawLine);
+  TEST_ASSERT_FALSE(shelfArrives(Look::Pending, k.page.look, k.rows));
+  TEST_ASSERT_TRUE(windowOwed(k, qs.s()));
+  qs.s()->setWindow(sv::k7Days);  // (written: none owed after)
+  TEST_ASSERT_FALSE(windowOwed(k, qs.s()));
+  // Pending, the card out, the stats off: no window shown, none owed.
+  TEST_ASSERT_FALSE(windowOwed(shelfLook(week, l, phase(Phase::Working), nullptr), nullptr));
+  Lifetime out = dated();
+  out.cardIn = false;
+  TEST_ASSERT_FALSE(windowOwed(shelfLook(week, out, phase(Phase::NoCard, Outcome::CardAway), full.s()), full.s()));
+  Lifetime off = dated();
+  off.on = false;
+  TEST_ASSERT_FALSE(windowOwed(shelfLook(week, off, kReady, full.s()), full.s()));
+  // Another shelf never writes it (its window reads All time).
+  full.s()->setWindow(sv::k7Days);
+  for (uint32_t si = 1; si < kShelves; ++si)
+    TEST_ASSERT_FALSE(windowOwed(shelfLook(shelfId(static_cast<Shelf>(si)), l, kReady, full.s()), full.s()));
+  // A kept 30 days the tray doesn't offer (day 20: two cells) shows All
+  // time, written back.
+  TEST_ASSERT_TRUE(windowOwed(shelfLook(shelfId(Shelf::MostPlayed, sv::k30Days), dated(20), kReady, full.s()),
+                              full.s()));
+  full.s()->setWindow(sv::kAllTime);
+
+  // The tray alone: a day that makes two cells three, or brings the tray
+  // (day 7), with the rows' texts as drawn.
+  auto shapeOf = [](uint32_t id, const Lifetime& life, const sv::Snapshot* snap) {
+    return shelfShape(shelfLook(id, life, kReady, snap), trayOf(life, snap));
+  };
+  auto textOf = [](uint32_t id, const Lifetime& life, const sv::Snapshot* snap) {
+    return lookText(shelfLook(id, life, kReady, snap).page, snap);
+  };
+  TEST_ASSERT_EQUAL_UINT16(textOf(all, dated(29), full.s()), textOf(all, dated(30), full.s()));
+  TEST_ASSERT_TRUE(trayAlone(shapeOf(all, dated(29), full.s()), shapeOf(all, dated(30), full.s()), false));
+  TEST_ASSERT_TRUE(trayAlone(shapeOf(all, dated(6), full.s()), shapeOf(all, dated(7), full.s()), false));
+  TEST_ASSERT_FALSE(trayAlone(shapeOf(all, dated(29), full.s()), shapeOf(all, dated(30), full.s()), true));
+  TEST_ASSERT_FALSE(trayAlone(shapeOf(all, dated(30), full.s()), shapeOf(all, dated(30), full.s()), false));
+  // RCNT capped: the 30-day cell's "16 days" comes with the third cell.
+  sv::MadeUp capped = fullCard();
+  capped.rcntFirstDay = static_cast<uint16_t>(kToday - 15);
+  capped.rcntShort = true;
+  Snap cs;
+  put(cs, capped);
+  const uint8_t two = shapeOf(all, dated(29), cs.s()), three = shapeOf(all, dated(30), cs.s());
+  TEST_ASSERT_EQUAL_UINT8(0, two & kShelfShort);
+  TEST_ASSERT_EQUAL_UINT8(kShelfShort, three & kShelfShort);
+  TEST_ASSERT_TRUE(trayAlone(two, three, false));
+  // Not alone: a tray tap (the window), a landing (the look), a kept 7
+  // days pushed on day 6 that day 7's tray now offers (its window moves:
+  // other rows).
+  TEST_ASSERT_FALSE(trayAlone(shapeOf(all, l, full.s()), shapeOf(week, l, full.s()), false));
+  TEST_ASSERT_FALSE(trayAlone(shelfShape(shelfLook(all, l, phase(Phase::Working), nullptr), trayOf(l, nullptr)),
+                              shapeOf(all, l, full.s()), false));
+  TEST_ASSERT_EQUAL_UINT8(sv::kAllTime << 5, shapeOf(week, dated(6), full.s()) & kShelfWindow);
+  TEST_ASSERT_FALSE(trayAlone(shapeOf(week, dated(6), full.s()), shapeOf(week, dated(7), full.s()), false));
+}
+
 // Recently played's shelf at a new minute (7.10): the first row on screen
 // whose "25 min ago" moved.
 void test_recently_played_at_a_new_minute() {
@@ -2991,6 +3071,7 @@ int main(int, char**) {
   RUN_TEST(test_the_entry_row_at_the_fold_s_end);
   RUN_TEST(test_a_shelf_s_rows);
   RUN_TEST(test_a_shelf_s_touch_place_and_shape);
+  RUN_TEST(test_most_played_s_window_and_the_tray_alone);
   RUN_TEST(test_recently_played_at_a_new_minute);
   return UNITY_END();
 }

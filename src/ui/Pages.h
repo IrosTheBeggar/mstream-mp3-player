@@ -540,8 +540,10 @@ private:
   // there. `name`: what the toast calls a whole container. The ids as the
   // queue's view reads them (IdView.h): a Library list's u32 array
   // (IdView::of() of a span), or a stats shelf's u16 ids in place in the
-  // visit's snapshot (7.6: nothing copied or carved).
-  void act(IdView ids, int32_t start, int action, const char* name);
+  // visit's snapshot (7.6: nothing copied or carved). By reference: its
+  // arguments then go in registers, as main's span did (a 12-byte view by
+  // value put `name` on the caller's stack, 32 B more under every act).
+  void act(const IdView& ids, int32_t start, int action, const char* name);
   // What a container row (or, kind None, the page itself) plays, and its name.
   bool container(const RowRef& r, LibraryIndex::Span* span, const char** name) const;
   void onRowAction(const RowRef& r, int action);
@@ -630,6 +632,11 @@ private:
   // snapshot's list, read anew now (D6: its key the live index's, every id
   // a track of it; a ranked row still the track it was).
   void statsAct(const RowRef& r, int action);
+  // statsAct()'s reading: the view over the shelf's list and its title, or
+  // false (the double buzz and a [ui] line: nothing acted on). Not inlined:
+  // the lifetime and the look it reads stay out of the frame that runs
+  // act() and playNow()'s start.
+  __attribute__((noinline)) bool statsActIds(const RowRef& r, IdView* ids, const char** name);
   // statsFollow()'s for a shelf: its rows arriving at the place kept for
   // them (listlayout::arrival(), kShowPlaying resolved, D7's window
   // written back), or restaged where it stands; the tray and the header

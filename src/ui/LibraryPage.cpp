@@ -858,7 +858,7 @@ int LibraryPage::actions(int32_t row, const char* labels[3]) {
   return 3;
 }
 
-void LibraryPage::act(IdView span, int32_t start, int action, const char* name) {
+void LibraryPage::act(const IdView& span, int32_t start, int action, const char* name) {
   if (!real()) {
     ui_.toast(tr(S::library_synthetic), false);
     return;

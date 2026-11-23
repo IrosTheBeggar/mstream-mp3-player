@@ -180,10 +180,9 @@ void LibraryPage::statsEntering() {
   // Most played served: the window it shows is the snapshot's from here
   // (D7, as at a landing: the hub's next push opens on it; a shelf pushed
   // with a window of its own, from the console or Now Playing, keeps it).
-  const statsvisit::Snapshot* snap = ui_.statsSnapshot();
-  if (kind_ == PageKind::StatsShelf && snap && sv::shelfOf(id_) == sv::Shelf::MostPlayed) {
-    const uint8_t w = shelfNow(l).window;
-    if (snap->window() != w) ui_.statsSetWindow(w);
+  if (kind_ == PageKind::StatsShelf && sv::shelfOf(id_) == sv::Shelf::MostPlayed) {
+    const sv::ShelfLook k = shelfNow(l);
+    if (sv::windowOwed(k, ui_.statsSnapshot())) ui_.statsSetWindow(k.window);
   }
 }
 
@@ -798,7 +797,7 @@ bool LibraryPage::pending() {
   return kind_ == PageKind::StatsShelf && sv::shelfPending(sv::shelfOf(id_), ui_.statsSnapshot());
 }
 
-void LibraryPage::statsAct(const RowRef& r, int action) {
+__attribute__((noinline)) bool LibraryPage::statsActIds(const RowRef& r, IdView* ids, const char** name) {
   sv::Lifetime l;
   ui_.statsLifetime(l);
   const sv::ShelfLook k = shelfNow(l);
@@ -817,14 +816,26 @@ void LibraryPage::statsAct(const RowRef& r, int action) {
                   !snap || !i ? "no snapshot served over this index" : !listed ? "no ranked rows served" :
                                                                                 "the row isn't the track it was");
     ui_.input().missBuzz();
-    return;
+    return false;
   }
   // The queue's view over the list's ids in place (7.6: nothing copied or
   // carved; the queue copies them, and only the Dance tab coming up takes
   // the block back, which no act does).
-  const IdView ids = IdView::u16(snap->ids(k.list), snap->rows(k.list), statsvisit::kStrides[k.list]);
+  *ids = IdView::u16(snap->ids(k.list), snap->rows(k.list), statsvisit::kStrides[k.list]);
+  *name = tr(sv::shelfTitle(k.shelf));
+  return true;
+}
+
+void LibraryPage::statsAct(const RowRef& r, int action) {
+  // The view and the shelf's name only, in this frame across act() and
+  // playNow()'s start: what was read to make them (the lifetime, the look)
+  // is in statsActIds()'s, gone by then (main's album Play is onRowAction
+  // then act(); a shelf's adds this frame alone).
+  IdView ids;
+  const char* name = "";
+  if (!statsActIds(r, &ids, &name)) return;
   if (r.kind == RowKind::None) {
-    act(ids, -1, action, tr(sv::shelfTitle(k.shelf)));  // the top bar: the whole shelf, named by its title
+    act(ids, -1, action, name);  // the top bar: the whole shelf, named by its title
   } else if (action == 0) {
     act(ids, static_cast<int32_t>(r.index), 0, "");  // Play: the shelf from it
   } else {
@@ -881,8 +892,11 @@ void LibraryPage::drawLeadRow(ListView::Row& r) {
 // page's id and its ref (kept across the dark and a Back); the tray and the
 // header drawn again in its pass; the window's rows staged in one a pass
 // where the list stands, a bar folded (S2's rule for a tray tap). No ask.
+// The lift pushed nothing (ListView's Tap on a lead row: this push is the
+// tray's one, 7.10), so the [ui] line's ms is the pass's pushes.
 void LibraryPage::onLeadRowTap(int x, bool rightEdge) {
   if (kind_ != PageKind::StatsShelf) return;
+  const uint32_t t0 = micros();
   sv::Lifetime l;
   ui_.statsLifetime(l);
   const sv::ShelfLook k = shelfNow(l);
@@ -891,7 +905,6 @@ void LibraryPage::onLeadRowTap(int x, bool rightEdge) {
   if (cell < 0) return;
   const uint8_t w = t.window[cell];
   if (w == k.window) return;  // (the window shown: its tick said the tap was heard)
-  const uint32_t t0 = micros();
   ui_.statsSetWindow(w);
   id_ = sv::shelfId(sv::Shelf::MostPlayed, w);
   if (ref_) ref_->id = id_;
@@ -919,14 +932,16 @@ void LibraryPage::shelfFollow(uint32_t drawn, uint32_t sig, const sv::Lifetime& 
   // does).
   if (sv::shelfHeaderMoved(was, now) && ui_.pageShowing()) repaintHeader();
   const sv::ShelfLook k = shelfNow(l);
+  // D7: the window shown is the snapshot's from here (a new ask's loan
+  // opened on All time), at a landing with rows or with none in the window
+  // ("Nothing in this period.": no arrival, but the hub's next push still
+  // opens on what the page shows).
+  if (sv::windowOwed(k, ui_.statsSnapshot())) ui_.statsSetWindow(k.window);
   const bool lead = sv::trayMoved(was, now, textsMoved);
   minute_ = static_cast<uint16_t>(l.nowMin);  // (Recently played's times drawn with the rest)
   int32_t target = -1;
   const bool arrives = sv::shelfArrives(static_cast<sv::Look>(was & sv::kShelfLook), k.page.look, k.rows);
   if (arrives && ref_) {
-    // D7: the window shown is the snapshot's from here (a new ask's loan
-    // opened on All time).
-    if (k.shelf == sv::Shelf::MostPlayed) ui_.statsSetWindow(k.window);
     // The place kept in the ref while the rows were pending (7.2), clamped
     // to them; no bar reopened across a new ask; kShowPlaying, the playing
     // row with one of context above it, as enter() puts it.
@@ -944,14 +959,26 @@ void LibraryPage::shelfFollow(uint32_t drawn, uint32_t sig, const sv::Lifetime& 
       }
     }
   }
+  // The tray alone moved (a new UTC day: two cells three, or the tray
+  // coming on day 7; S10's departure 3, at once rather than 7.10's next
+  // enter()): every row is the one it was, so the bar stays open, a press
+  // stays on an item still where it was, and no row is owed for itself
+  // (changedRow past them). A tray that comes still moves the items under
+  // it down by one, staged one a pass (ListView stages each item at the
+  // place it had: listlayout::staging()).
+  const bool alone = sv::trayAlone(was, now, textsMoved);
   Serial.printf("[ui] stats: %s drawn again in place (%s): %s, %lu rows%s%s\n",
                 pageKindName(static_cast<uint8_t>(kind_)), why, sv::lookName(k.page.look),
                 static_cast<unsigned long>(k.rows), arrives ? ", arriving at the place kept" : "",
-                lead ? ", the tray too" : "");
-  // One stale item a pass at a still pass (7.2, 7.10): every row new (0), a
-  // bar folded (-1: across a new ask none comes back), the tray only when
-  // its picture moved.
-  list.recountStaged(target, -1, 0, lead);
+                alone ? ", the tray alone" : lead ? ", the tray too" : "");
+  // One stale item a pass at a still pass (7.2, 7.10). Else: every row new
+  // (0), a bar folded (-1: across a new ask none comes back), the tray only
+  // when its picture moved.
+  if (alone) {
+    list.recountStaged(-1, list.expanded(), k.rows, lead, true);
+  } else {
+    list.recountStaged(target, -1, 0, lead);
+  }
 }
 
 void LibraryPage::recentMinute(const sv::Lifetime& l, uint32_t was) {

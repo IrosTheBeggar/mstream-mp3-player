@@ -727,7 +727,7 @@ Control shelfControlOf(ShelfRow k) {
       c.holds = true;
       break;
     case ShelfRow::TryAgain: c.pressable = true; break;
-    default: break;  // (Section, None: nothing; a stale row inert, never acted on)
+    default: break;  // (Section, None: nothing, and not inert: no buzz, no toast; a stale row never acted on)
   }
   return c;
 }
@@ -770,6 +770,10 @@ bool trayMoved(uint8_t drawnShape, uint8_t nowShape, bool textsMoved) {
   if (!before || !after) return false;  // (coming or going: the item itself changes, staged as any)
   if ((drawnShape ^ nowShape) & (kShelfCells | kShelfWindow | kShelfShort)) return true;
   return (nowShape & kShelfShort) && textsMoved;  // ("16 days" to "15 days": a new ask's)
+}
+
+bool windowOwed(const ShelfLook& k, const Snapshot* snap) {
+  return snap && k.shelf == Shelf::MostPlayed && k.page.look == Look::Served && snap->window() != k.window;
 }
 
 bool shelfArg(const char* a, Shelf* shelf, uint8_t* window, bool* windowGiven) {

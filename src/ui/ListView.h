@@ -162,9 +162,11 @@ public:
     // paints it as drawTopRow() does that one (over a row's press look, the
     // divider drawn after; a cell of its own lit instead is the source's,
     // as the filters' cross is), and a tap on it goes to onLeadRowTap(),
-    // after the tap tick. It scrolls with the list and presses whole (no
-    // buttons, no hold, no checkbox); with no data rows under it, the empty
-    // line shows below it (the line only).
+    // after the tap tick. Its lift pushes nothing first: a tap that moves
+    // its picture draws it again (refreshTopRow()), else the list pushes
+    // it unpressed after the tap (one push a tap, 7.10). It scrolls with
+    // the list and presses whole (no buttons, no hold, no checkbox); with
+    // no data rows under it, the empty line shows below it (the line only).
     virtual bool leadRow() { return false; }
     virtual void drawLeadRow(Row& r) { (void)r; }
     virtual void onLeadRowTap(int x, bool rightEdge) {
