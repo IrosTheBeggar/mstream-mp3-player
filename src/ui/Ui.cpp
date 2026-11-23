@@ -3102,7 +3102,8 @@ void Ui::command(const char* a) {
                    "ignore / follow it, uiv! time it again), uif<ms> the frame clock's period; uiB the list's bench, "
                    "uiBv the sprites' text checked against M5GFX's, uiBf0 / uiBf1 their fast text off / on; uiS the "
                    "listening stats' pages (no wake: a dark screen stays dark), uiSh their hub (as the entry row's "
-                   "tap; the push's ms)");
+                   "tap; the push's ms), uiS<shelf>[w] a shelf over it (0-4: Most played, its window w 0-2, New "
+                   "finds, Old favourites, Not played yet, Recently played)");
     return;
   }
   printState();
@@ -3262,8 +3263,47 @@ void Ui::statsCommand(const char* a) {
                   (micros() - t0) / 1000.0f);
     return;
   }
+  statsview::Shelf shelf = statsview::Shelf::MostPlayed;
+  uint8_t window = statsvisit::kAllTime;
+  bool windowGiven = false;
+  if (statsview::shelfArg(a, &shelf, &window, &windowGiven)) {
+    // uiS<shelf>[w]: a shelf, as the hub's row pushes it (from the hub
+    // shown); from elsewhere the Library tab on Artists with the hub and
+    // the shelf above it (showLibrary()), so Back reaches the hub. Most
+    // played on its window, else the snapshot's (the hub's push: D7).
+    statsview::Lifetime l;
+    statsLifetime(l);
+    const LibraryIndex* i = library_.index();
+    if (!statsview::hubReachable(l, i && i->ready(), browse_ != nullptr)) {
+      Serial.printf("[ui] uiS%s: the shelf isn't reachable now (%s)\n", a,
+                    browse_                      ? "the Library browses a synthetic library: uil0 first"
+                    : !i || !i->ready()          ? "no index: the library is updating"
+                                                 : "the stats are off this session");
+      return;
+    }
+    if (!windowGiven) {
+      const statsvisit::Snapshot* s = statsSnapshot();
+      window = s ? s->window() : statsvisit::kAllTime;
+    }
+    const NavModel::PageRef pages[2] = {ref(PageKind::StatsHub, 0),
+                                        ref(PageKind::StatsShelf, statsview::shelfId(shelf, window))};
+    const bool atHub = nav_.tab() == NavModel::Tab::Library && nav_.depth() == 2 &&
+                       nav_.top().kind == static_cast<uint8_t>(PageKind::StatsHub);
+    const uint32_t t0 = micros();
+    if (atHub) {
+      push(pages[1]);
+    } else {
+      showLibrary(LibrarySegment::Artists, pages, 2);
+    }
+    Serial.printf("[ui] uiS%s: %s %lu %s in %.1f ms (its first frame drawn)\n", a, pageKindName(pages[1].kind),
+                  static_cast<unsigned long>(pages[1].id), atHub ? "pushed from the hub" : "shown over the hub",
+                  (micros() - t0) / 1000.0f);
+    return;
+  }
   Serial.println("[ui] uiS: the listening stats' pages (no wake: a dark screen stays dark); uiSh their hub (as the "
-                 "entry row's tap, the push's ms)");
+                 "entry row's tap, the push's ms); uiS<shelf>[w] a shelf over the hub (0 Most played, its window "
+                 "w: 0 7 days, 1 30 days, 2 All time; 1 New finds, 2 Old favourites, 3 Not played yet, 4 Recently "
+                 "played; the push's ms)");
 }
 
 }  // namespace ui

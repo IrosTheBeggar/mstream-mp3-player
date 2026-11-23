@@ -244,7 +244,8 @@ public:
   void printState() const;     // ui
   // ui<n>: tab n; uib back; uic the coach cards; uiL<tag> the language
   // (uiL the list, uiL- forget it and the tips); uiP the first boot's picker;
-  // uiS the stats pages' state (a dark screen left dark), uiSh their hub.
+  // uiS the stats pages' state (a dark screen left dark), uiSh their hub,
+  // uiS<shelf>[w] a shelf.
   void command(const char* a);
 
   // ---- the language ----
@@ -442,6 +443,9 @@ public:
   // A page's ask (a Try again, an ask due: D9 as replaced): none under a
   // made-up view (look only, D16). True: queued.
   bool statsAsk(statsview::UiAsk a);
+  // Most played's window into the held snapshot's header byte (UiHost::
+  // statsSetWindow(): the UI's one write to it, D7; nothing held, nothing).
+  void statsSetWindow(uint8_t window) { host_.statsSetWindow(window); }
   // The held condition as last evaluated (statsview::onStatsPages()): the
   // snapshot is held exactly while it is true.
   bool statsHeld() const { return statsHeld_; }
@@ -562,8 +566,9 @@ private:
   // counted on the empty hub, the card back, the wake's own ask) is the
   // layout the wake's whole draw uses (7.10: "as the free left it").
   void statsNewsPass(const char* why);
-  // uiS (no wake: the dark's state can be read) and uiSh (the hub, as the
-  // entry row's tap; its push's ms).
+  // uiS (no wake: the dark's state can be read), uiSh (the hub, as the
+  // entry row's tap; its push's ms) and uiS<shelf>[w] (a shelf over the
+  // hub: statsview::shelfArg(); its push's ms).
   void statsPrint();
   void statsCommand(const char* a);
 

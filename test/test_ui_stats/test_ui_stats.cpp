@@ -90,6 +90,18 @@
 //   "The card is back", nothing due; a phase the host moved is its own);
 //   the shape's bit 7 left for the header's line; the empty state to No
 //   card's line drawn whole (hubDrawsWhole()).
+// And the shelves as the page draws, touches and acts on them (S3b's S10):
+// - each shelf's rows from a made-up snapshot: ranked rows at their
+//   snapshot rows (the act's view reads the same ids), Recently played's
+//   headings and rows, Not played yet's albums A-Z, the Try again row (Not
+//   played yet's its lean ask), none pending; the row that holds a track
+//   (kShowPlaying's); an id the index hasn't never drawn or acted on (D6);
+// - each row kind's touch (a table: ranked and album rows hold), when the
+//   rows are pending (D5, Not played yet's lean ask among it) and when they
+//   arrive; the shape (look, the tray's cells, the window, "16 days"): when
+//   the tray and the header are drawn again; the console's uiS<shelf>[w];
+// - Recently played at a new minute: the first row on screen whose "25 min
+//   ago" moved.
 // Run: pio test -e native -f test_ui_stats
 #include <unity.h>
 
@@ -102,6 +114,7 @@
 #include <vector>
 
 #include "FilterGrid.h"
+#include "IdView.h"
 #include "NavModel.h"
 #include "StatsFold.h"
 #include "StatsRank.h"
@@ -2650,6 +2663,301 @@ void test_the_entry_row_at_the_fold_s_end() {
   TEST_ASSERT_FALSE(entryDue(l, true, false, 1));  // (never at an enter(): absent then)
 }
 
+// ---------------------------------------------------------------------------
+// A shelf as ui's LibraryPage draws, touches and acts on it (S3b's S10)
+// ---------------------------------------------------------------------------
+namespace {
+
+// A list's row's id written over (a test's own: an id the index hasn't).
+void putId(Snap& b, sr::List l, uint32_t row, uint16_t id) {
+  uint8_t* p = reinterpret_cast<uint8_t*>(b.m.data()) + sv::offsetOf(l, kAlbums) +
+               static_cast<size_t>(row) * sv::kStrides[l];
+  p[0] = static_cast<uint8_t>(id);
+  p[1] = static_cast<uint8_t>(id >> 8);
+}
+
+}  // namespace
+
+// Each shelf's rows as the page reads them at a draw and an act: ranked
+// rows by the snapshot's list (their ids the queue's view reads), Recently
+// played's headings and rows, Not played yet's albums, the Try again row;
+// an id the live index hasn't is never one (D6).
+void test_a_shelf_s_rows() {
+  Snap full;
+  put(full, fullCard());
+  const sv::Snapshot& s = *full.s();
+  // Most played's three windows, New finds, Old favourites: rank order.
+  const uint32_t ranked[] = {shelfId(Shelf::MostPlayed, sv::k7Days), shelfId(Shelf::MostPlayed, sv::k30Days),
+                             shelfId(Shelf::MostPlayed, sv::kAllTime), shelfId(Shelf::NewFinds),
+                             shelfId(Shelf::OldFavourites)};
+  for (uint32_t id : ranked) {
+    const ShelfLook k = shelfLook(id, dated(), kReady, &s);
+    TEST_ASSERT_TRUE(k.rows > 0);
+    const IdView v = IdView::u16(s.ids(k.list), s.rows(k.list), sv::kStrides[k.list]);
+    TEST_ASSERT_EQUAL_UINT32(k.rows, v.count);
+    for (uint32_t r = 0; r < k.rows; ++r) {
+      const ShelfItem it = shelfItem(k, &s, r);
+      TEST_ASSERT_EQUAL(ShelfRow::Ranked, it.kind);
+      TEST_ASSERT_EQUAL(k.list, it.list);
+      TEST_ASSERT_EQUAL_UINT32(r, it.at);
+      TEST_ASSERT_EQUAL_UINT32(s.rowAt(k.list, r).id, it.id);
+      TEST_ASSERT_EQUAL_UINT32(v[r], it.id);  // the act's view reads the row's id
+      TEST_ASSERT_TRUE(it.id < kTracks);
+      TEST_ASSERT_EQUAL_INT32(static_cast<int32_t>(r), shelfRowOf(k, &s, it.id, 0));
+    }
+    TEST_ASSERT_EQUAL(ShelfRow::None, shelfItem(k, &s, k.rows).kind);  // past the rows
+    TEST_ASSERT_TRUE(idsServed(s, k.list, kTracks));
+    TEST_ASSERT_FALSE(idsServed(s, k.list, s.rowAt(k.list, 0).id));  // (an index too small for its first)
+  }
+  // Recently played: its headings (no control) and its rows, each at its
+  // snapshot row (Play plays the list from there).
+  ShelfLook k = shelfLook(shelfId(Shelf::Recent), dated(), kReady, &s);
+  uint32_t headings = 0, rows = 0;
+  for (uint32_t r = 0; r < k.rows; ++r) {
+    const ShelfItem it = shelfItem(k, &s, r);
+    const RecentItem want = recentAt(s, r);
+    if (want.heading) {
+      TEST_ASSERT_EQUAL(ShelfRow::Section, it.kind);
+      ++headings;
+      continue;
+    }
+    TEST_ASSERT_EQUAL(ShelfRow::Ranked, it.kind);
+    TEST_ASSERT_EQUAL(sr::kRecent, it.list);
+    TEST_ASSERT_EQUAL_UINT32(want.row, it.at);
+    TEST_ASSERT_EQUAL(want.timed, it.recent.timed);
+    TEST_ASSERT_EQUAL_UINT32(s.rowAt(sr::kRecent, it.at).id, it.id);
+    TEST_ASSERT_EQUAL_INT32(static_cast<int32_t>(r), shelfRowOf(k, &s, it.id, 0));
+    ++rows;
+  }
+  TEST_ASSERT_EQUAL_UINT32(s.rows(sr::kRecent), rows);
+  TEST_ASSERT_TRUE(headings >= 2);  // (Today, a day or more, Earlier)
+  // Not played yet: the k-th album not played, A-Z.
+  k = shelfLook(shelfId(Shelf::NotPlayed), dated(), kReady, &s);
+  TEST_ASSERT_EQUAL_UINT32(s.notPlayedCount(), k.rows);
+  uint32_t last = 0;
+  for (uint32_t r = 0; r < k.rows; ++r) {
+    const ShelfItem it = shelfItem(k, &s, r);
+    TEST_ASSERT_EQUAL(ShelfRow::Album, it.kind);
+    TEST_ASSERT_EQUAL_UINT32(r, it.at);
+    TEST_ASSERT_EQUAL_UINT32(s.albumAt(r), it.id);
+    TEST_ASSERT_TRUE(it.id < kAlbums);
+    TEST_ASSERT_TRUE(r == 0 || it.id > last);  // (albumsAZ()'s order: the rail's)
+    last = it.id;
+  }
+  TEST_ASSERT_EQUAL_INT32(4, shelfRowOf(k, &s, 0, s.albumAt(4)));
+  TEST_ASSERT_EQUAL_INT32(-1, shelfRowOf(k, &s, 0, 1));  // (view 1 leaves every third: 1 was played)
+  // A track no list holds: no row.
+  k = shelfLook(shelfId(Shelf::MostPlayed, sv::k7Days), dated(), kReady, &s);
+  bool held = true;
+  uint32_t outside = 0;
+  for (; outside < kTracks && held; ++outside) {
+    held = false;
+    for (uint32_t r = 0; r < k.rows; ++r) held = held || s.rowAt(k.list, r).id == outside;
+    if (!held) break;
+  }
+  TEST_ASSERT_EQUAL_INT32(-1, shelfRowOf(k, &s, outside, 0));
+
+  // The Try again row (No room: first under the tray), and Not played yet's
+  // own (its lean ask); nothing else, no row for what plays.
+  k = shelfLook(shelfId(Shelf::MostPlayed), dated(), phase(Phase::NoRoom, Outcome::NoRoom), nullptr);
+  TEST_ASSERT_TRUE(k.tray);
+  TEST_ASSERT_EQUAL_UINT32(1, k.rows);
+  TEST_ASSERT_EQUAL(ShelfRow::TryAgain, shelfItem(k, nullptr, 0).kind);
+  TEST_ASSERT_EQUAL(static_cast<int>(S::stats_no_room), static_cast<int>(shelfItem(k, nullptr, 0).text));
+  TEST_ASSERT_EQUAL(ShelfRow::None, shelfItem(k, nullptr, 1).kind);
+  TEST_ASSERT_EQUAL_INT32(-1, shelfRowOf(k, nullptr, 5, 0));
+  sv::MadeUp lists = fullCard();  // (the Lists grade: no bits)
+  lists.grade = sv::Grade::Lists;
+  lists.notPlayedEvery = 0;
+  Snap ls;
+  put(ls, lists);
+  k = shelfLook(shelfId(Shelf::NotPlayed), dated(), kReady, ls.s());
+  TEST_ASSERT_EQUAL(UiAsk::NotPlayed, k.ask);
+  TEST_ASSERT_EQUAL(ShelfRow::TryAgain, shelfItem(k, ls.s(), 0).kind);
+  TEST_ASSERT_EQUAL(static_cast<int>(S::stats_no_room), static_cast<int>(shelfItem(k, ls.s(), 0).text));
+  // The card back (the owner's call 3): its reason "The card is back".
+  k = shelfLook(shelfId(Shelf::OldFavourites), dated(), phase(Phase::NoCard, Outcome::CardAway), nullptr);
+  TEST_ASSERT_EQUAL(ShelfRow::TryAgain, shelfItem(k, nullptr, 0).kind);
+  TEST_ASSERT_EQUAL(static_cast<int>(S::stats_card_back), static_cast<int>(shelfItem(k, nullptr, 0).text));
+  // Pending, the No card line: no rows at all.
+  for (const PhaseInfo& p : {phase(Phase::Working), phase(Phase::Waiting)}) {
+    k = shelfLook(shelfId(Shelf::Recent), dated(), p, nullptr);
+    TEST_ASSERT_EQUAL_UINT32(0, k.rows);
+    TEST_ASSERT_EQUAL(ShelfRow::None, shelfItem(k, nullptr, 0).kind);
+  }
+
+  // D6: a row whose id the index hasn't reads None, and the list acts on
+  // nothing (Most played All time's row 3 made 65,000, past 19,417 tracks).
+  Snap bad;
+  put(bad, fullCard());
+  putId(bad, sr::kMostAll, 3, 65000);
+  k = shelfLook(shelfId(Shelf::MostPlayed), dated(), kReady, bad.s());
+  TEST_ASSERT_EQUAL(ShelfRow::Ranked, shelfItem(k, bad.s(), 2).kind);
+  TEST_ASSERT_EQUAL(ShelfRow::None, shelfItem(k, bad.s(), 3).kind);
+  TEST_ASSERT_FALSE(idsServed(*bad.s(), sr::kMostAll, kTracks));
+  TEST_ASSERT_TRUE(idsServed(*bad.s(), sr::kMost7, kTracks));
+  // An empty list acts on nothing either (its top bar isn't there).
+  sv::MadeUp none = fullCard();
+  none.rows[sr::kMost7] = 0;
+  Snap ns;
+  put(ns, none);
+  TEST_ASSERT_FALSE(idsServed(*ns.s(), sr::kMost7, kTracks));
+}
+
+// How each shelf row takes a touch (crit's per-kind table: 7.6), and when
+// its rows are pending, arrive, and the tray or header is drawn again.
+void test_a_shelf_s_touch_place_and_shape() {
+  struct Want {
+    ShelfRow k;
+    bool pressable, inert, holds;
+  };
+  const Want table[] = {{ShelfRow::Ranked, true, false, true},
+                        {ShelfRow::Album, true, false, true},
+                        {ShelfRow::TryAgain, true, false, false},
+                        {ShelfRow::Section, false, false, false},
+                        {ShelfRow::None, false, false, false}};
+  for (const Want& w : table) {
+    const Control c = shelfControlOf(w.k);
+    TEST_ASSERT_EQUAL_MESSAGE(w.pressable, c.pressable, shelfRowName(w.k));
+    TEST_ASSERT_EQUAL_MESSAGE(w.inert, c.inert, shelfRowName(w.k));
+    TEST_ASSERT_EQUAL_MESSAGE(w.holds, c.holds, shelfRowName(w.k));
+  }
+  TEST_ASSERT_EQUAL_STRING("Try again", shelfRowName(ShelfRow::TryAgain));
+
+  // Pending (D5): nothing served, or Not played yet with no bits.
+  Snap full;
+  put(full, fullCard());
+  sv::MadeUp lists = fullCard();
+  lists.grade = sv::Grade::Lists;
+  lists.notPlayedEvery = 0;
+  Snap ls;
+  put(ls, lists);
+  for (uint32_t si = 0; si < kShelves; ++si) {
+    const Shelf sh = static_cast<Shelf>(si);
+    TEST_ASSERT_TRUE(shelfPending(sh, nullptr));
+    TEST_ASSERT_FALSE(shelfPending(sh, full.s()));
+    TEST_ASSERT_EQUAL(sh == Shelf::NotPlayed, shelfPending(sh, ls.s()));
+  }
+  // The arrival: drawn without the snapshot's rows, served with rows now.
+  TEST_ASSERT_TRUE(shelfArrives(Look::Pending, Look::Served, 12));
+  TEST_ASSERT_TRUE(shelfArrives(Look::Retry, Look::Served, 1));  // (Try again, then the landing)
+  TEST_ASSERT_TRUE(shelfArrives(Look::NoCard, Look::Served, 3));
+  TEST_ASSERT_FALSE(shelfArrives(Look::Pending, Look::Served, 0));  // "Nothing in this period."
+  TEST_ASSERT_FALSE(shelfArrives(Look::Served, Look::Served, 12));  // a new ask's rows: restaged in place
+  TEST_ASSERT_FALSE(shelfArrives(Look::Pending, Look::Retry, 1));
+
+  // The shape: look, cells, window, the short 30-day label.
+  const Lifetime l = dated();
+  const uint32_t most = shelfId(Shelf::MostPlayed);
+  auto shapeOf = [](uint32_t id, const Lifetime& life, const PhaseInfo& p, const sv::Snapshot* snap) {
+    return shelfShape(shelfLook(id, life, p, snap), trayOf(life, snap));
+  };
+  const uint8_t pending = shapeOf(most, l, phase(Phase::Working), nullptr);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Look::Pending), pending & kShelfLook);
+  TEST_ASSERT_EQUAL_UINT8(2u << 3, pending & kShelfCells);
+  TEST_ASSERT_EQUAL_UINT8(sv::kAllTime << 5, pending & kShelfWindow);
+  TEST_ASSERT_EQUAL_UINT8(0, pending & kShelfShort);
+  const uint8_t served = shapeOf(most, l, kReady, full.s());
+  TEST_ASSERT_FALSE(trayMoved(pending, served, true));  // a landing, RCNT whole: the tray as drawn
+  TEST_ASSERT_FALSE(shelfHeaderMoved(pending, served));
+  // A landing whose RCNT is capped: "16 days" on the 30-day cell.
+  sv::MadeUp capped = fullCard();
+  capped.rcntFirstDay = static_cast<uint16_t>(kToday - 15);
+  capped.rcntShort = true;
+  Snap cs;
+  put(cs, capped);
+  const uint8_t shortServed = shapeOf(most, l, kReady, cs.s());
+  TEST_ASSERT_EQUAL_UINT8(kShelfShort, shortServed & kShelfShort);
+  TEST_ASSERT_TRUE(trayMoved(pending, shortServed, true));
+  TEST_ASSERT_TRUE(trayMoved(shortServed, shortServed, true));    // "16 days" to a new ask's "15 days"
+  TEST_ASSERT_FALSE(trayMoved(shortServed, shortServed, false));  // the same
+  // A tray tap: the window, so the tray and the header.
+  const uint8_t week = shapeOf(shelfId(Shelf::MostPlayed, sv::k7Days), l, kReady, full.s());
+  TEST_ASSERT_TRUE(trayMoved(served, week, false));
+  TEST_ASSERT_TRUE(shelfHeaderMoved(served, week));
+  // A day that makes two cells three; none under 7 days (no tray: the item
+  // comes or goes, staged as any).
+  TEST_ASSERT_TRUE(trayMoved(shapeOf(most, dated(29), kReady, full.s()), shapeOf(most, dated(30), kReady, full.s()),
+                             false));
+  TEST_ASSERT_EQUAL_UINT8(0, shapeOf(most, dated(6), kReady, full.s()) & kShelfCells);
+  TEST_ASSERT_FALSE(
+      trayMoved(shapeOf(most, dated(6), kReady, full.s()), shapeOf(most, dated(7), kReady, full.s()), true));
+  // The card out: no tray over the No card line.
+  Lifetime out = dated();
+  out.cardIn = false;
+  const uint8_t noCard = shapeOf(most, out, phase(Phase::NoCard, Outcome::CardAway), nullptr);
+  TEST_ASSERT_EQUAL_UINT8(0, noCard & kShelfCells);
+  TEST_ASSERT_FALSE(trayMoved(served, noCard, true));
+  // Other shelves: no tray, All time, their look alone.
+  for (uint32_t si = 1; si < kShelves; ++si) {
+    const uint8_t sh = shapeOf(shelfId(static_cast<Shelf>(si)), l, kReady, full.s());
+    TEST_ASSERT_EQUAL_UINT8(0, sh & (kShelfCells | kShelfShort));
+    TEST_ASSERT_EQUAL_UINT8(sv::kAllTime << 5, sh & kShelfWindow);
+  }
+  // Every look, cells, window and label its own shape.
+  std::vector<uint8_t> seen;
+  for (uint32_t w = 0; w <= sv::kAllTime; ++w)
+    for (uint32_t c = 0; c < 3; ++c)
+      for (uint32_t lk = 0; lk < 7; ++lk)
+        for (uint32_t sh = 0; sh < 2; ++sh) {
+          if (sh && c != 2) continue;
+          ShelfLook k;
+          k.page.look = static_cast<Look>(lk);
+          k.tray = c > 0;
+          k.window = static_cast<uint8_t>(w);
+          Tray t;
+          t.cells = c == 2 ? 3 : c == 1 ? 2 : 0;
+          t.days30 = sh ? 16 : 30;
+          const uint8_t got = shelfShape(k, t);
+          TEST_ASSERT_TRUE(std::find(seen.begin(), seen.end(), got) == seen.end());
+          seen.push_back(got);
+        }
+
+  // The console's uiS<shelf>[w].
+  Shelf sh = Shelf::Recent;
+  uint8_t w = 9;
+  bool given = true;
+  TEST_ASSERT_TRUE(shelfArg("0", &sh, &w, &given));
+  TEST_ASSERT_EQUAL(Shelf::MostPlayed, sh);
+  TEST_ASSERT_FALSE(given);
+  TEST_ASSERT_TRUE(shelfArg("01", &sh, &w, &given));
+  TEST_ASSERT_EQUAL_UINT8(sv::k30Days, w);
+  TEST_ASSERT_TRUE(given);
+  TEST_ASSERT_TRUE(shelfArg("4", &sh, &w, &given));
+  TEST_ASSERT_EQUAL(Shelf::Recent, sh);
+  TEST_ASSERT_FALSE(given);
+  TEST_ASSERT_TRUE(shelfArg("3", &sh, &w, &given));
+  TEST_ASSERT_EQUAL(Shelf::NotPlayed, sh);
+  for (const char* bad : {"", "5", "9", "03", "12", "021", "0x", "h", "w"})
+    TEST_ASSERT_FALSE_MESSAGE(shelfArg(bad, &sh, &w, &given), bad);
+}
+
+// Recently played's shelf at a new minute (7.10): the first row on screen
+// whose "25 min ago" moved.
+void test_recently_played_at_a_new_minute() {
+  namespace st = statstext;
+  Snap full;
+  put(full, fullCard());  // rows 25 min, then every 97 min before now (21:40 on day 313)
+  const sv::Snapshot& s = *full.s();
+  const uint32_t now = dated().nowMin;
+  TEST_ASSERT_TRUE(recentAt(s, 0).heading);
+  // A minute later: row 0's "25 min ago" moves (list row 1, under Today).
+  TEST_ASSERT_EQUAL_UINT32(1, st::recentMoved(s, 0, 4, now - 1, now));
+  // Below it, hours: "2 h ago" holds for a minute; 3 minutes back crosses
+  // 2 h (122 min ago now, 119 then).
+  TEST_ASSERT_EQUAL_UINT32(st::kNoneMoved, st::recentMoved(s, 2, 5, now - 1, now));
+  TEST_ASSERT_EQUAL_UINT32(2, st::recentMoved(s, 2, 5, now - 3, now));
+  // Nothing moved: the same minute; an undated snapshot (no times).
+  TEST_ASSERT_EQUAL_UINT32(st::kNoneMoved, st::recentMoved(s, 0, 4, now, now));
+  MadeUpView v3;
+  TEST_ASSERT_TRUE(madeUpView(3, kStamp, kTracks, kAlbums, &v3));
+  Snap u;
+  put(u, v3.spec);
+  TEST_ASSERT_EQUAL_UINT32(st::kNoneMoved, st::recentMoved(*u.s(), 0, 5, now - 30, now));
+  // Past the list: none.
+  TEST_ASSERT_EQUAL_UINT32(st::kNoneMoved, st::recentMoved(s, 500, 504, now - 1, now));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_the_states_of_the_lifetime);
@@ -2681,5 +2989,8 @@ int main(int, char**) {
   RUN_TEST(test_the_hub_s_lines);
   RUN_TEST(test_a_new_minute);
   RUN_TEST(test_the_entry_row_at_the_fold_s_end);
+  RUN_TEST(test_a_shelf_s_rows);
+  RUN_TEST(test_a_shelf_s_touch_place_and_shape);
+  RUN_TEST(test_recently_played_at_a_new_minute);
   return UNITY_END();
 }

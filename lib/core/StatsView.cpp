@@ -668,6 +668,127 @@ uint32_t recentListRow(const Snapshot& s, uint32_t snapRow) {
 }
 
 // ---------------------------------------------------------------------------
+// A shelf as LibraryPage draws, touches and acts on it
+// ---------------------------------------------------------------------------
+const char* shelfRowName(ShelfRow k) {
+  switch (k) {
+    case ShelfRow::Ranked: return "ranked";
+    case ShelfRow::Section: return "section";
+    case ShelfRow::Album: return "album";
+    case ShelfRow::TryAgain: return "Try again";
+    default: return "none";
+  }
+}
+
+ShelfItem shelfItem(const ShelfLook& k, const Snapshot* snap, uint32_t row) {
+  ShelfItem it;
+  if (row >= k.rows) return it;
+  if (k.tryAgain) {
+    it.kind = ShelfRow::TryAgain;
+    it.text = k.page.line;
+    return it;
+  }
+  if (k.page.look != Look::Served || !snap) return it;
+  if (k.shelf == Shelf::NotPlayed) {
+    // The k-th album not played, its place in albumsAZ() (the bits' order:
+    // A-Z, so the rail and the jump grid follow).
+    const uint32_t place = snap->albumAt(row);
+    if (place == sv::kNoAlbum || place >= snap->albums()) return it;
+    it.kind = ShelfRow::Album;
+    it.at = row;
+    it.id = place;
+    return it;
+  }
+  uint32_t at = row;
+  if (k.shelf == Shelf::Recent) {
+    it.recent = recentAt(*snap, row);
+    if (it.recent.heading) {
+      it.kind = ShelfRow::Section;
+      return it;
+    }
+    at = it.recent.row;
+  }
+  if (at >= snap->rows(k.list)) return it;
+  const uint32_t id = snap->rowAt(k.list, at).id;
+  if (id >= snap->trackCount()) return it;  // (D6: never a resolved row's)
+  it.kind = ShelfRow::Ranked;
+  it.list = k.list;
+  it.at = at;
+  it.id = id;
+  return it;
+}
+
+Control shelfControlOf(ShelfRow k) {
+  Control c;
+  switch (k) {
+    case ShelfRow::Ranked:
+    case ShelfRow::Album:
+      c.pressable = true;
+      c.holds = true;
+      break;
+    case ShelfRow::TryAgain: c.pressable = true; break;
+    default: break;  // (Section, None: nothing; a stale row inert, never acted on)
+  }
+  return c;
+}
+
+int32_t shelfRowOf(const ShelfLook& k, const Snapshot* snap, uint32_t track, uint32_t albumPlace) {
+  if (k.page.look != Look::Served || k.tryAgain || !snap || k.rows == 0) return -1;
+  if (k.shelf == Shelf::NotPlayed) {
+    // Its album's row (at most the albums not played, once a push).
+    for (uint32_t r = 0; r < k.rows; ++r)
+      if (snap->albumAt(r) == albumPlace) return static_cast<int32_t>(r);
+    return -1;
+  }
+  const uint32_t n = snap->rows(k.list);
+  for (uint32_t i = 0; i < n; ++i) {
+    if (snap->rowAt(k.list, i).id != track) continue;
+    return static_cast<int32_t>(k.shelf == Shelf::Recent ? recentListRow(*snap, i) : i);
+  }
+  return -1;
+}
+
+bool idsServed(const Snapshot& s, sr::List l, uint32_t trackCount) {
+  const uint32_t n = s.rows(l);
+  if (n == 0 || !s.ids(l)) return false;
+  for (uint32_t i = 0; i < n; ++i)
+    if (s.rowAt(l, i).id >= trackCount) return false;
+  return true;
+}
+
+bool shelfPending(Shelf s, const Snapshot* snap) { return !snap || (s == Shelf::NotPlayed && !snap->hasNotPlayed()); }
+
+uint8_t shelfShape(const ShelfLook& k, const Tray& t) {
+  const uint8_t cells = k.tray ? (t.cells == 3 ? 2 : t.cells == 2 ? 1 : 0) : 0;
+  const bool shortCell = cells == 2 && t.days30 < 30;
+  return static_cast<uint8_t>((static_cast<uint8_t>(k.page.look) & kShelfLook) | cells << 3 |
+                              (k.window & 3u) << 5 | (shortCell ? kShelfShort : 0u));
+}
+
+bool trayMoved(uint8_t drawnShape, uint8_t nowShape, bool textsMoved) {
+  const bool before = (drawnShape & kShelfCells) != 0, after = (nowShape & kShelfCells) != 0;
+  if (!before || !after) return false;  // (coming or going: the item itself changes, staged as any)
+  if ((drawnShape ^ nowShape) & (kShelfCells | kShelfWindow | kShelfShort)) return true;
+  return (nowShape & kShelfShort) && textsMoved;  // ("16 days" to "15 days": a new ask's)
+}
+
+bool shelfArg(const char* a, Shelf* shelf, uint8_t* window, bool* windowGiven) {
+  if (!a || a[0] < '0' || a[0] >= static_cast<char>('0' + kShelves)) return false;
+  const Shelf s = static_cast<Shelf>(a[0] - '0');
+  uint8_t w = sv::kAllTime;
+  bool given = false;
+  if (a[1]) {
+    if (s != Shelf::MostPlayed || a[1] < '0' || a[1] > static_cast<char>('0' + sv::kAllTime) || a[2]) return false;
+    w = static_cast<uint8_t>(a[1] - '0');
+    given = true;
+  }
+  *shelf = s;
+  *window = w;
+  *windowGiven = given;
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // Last 7 days
 // ---------------------------------------------------------------------------
 WeekLook weekLook(const Lifetime& l, const PhaseInfo& p, const Snapshot* snap) {

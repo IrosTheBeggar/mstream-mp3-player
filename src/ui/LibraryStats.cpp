@@ -8,11 +8,17 @@
 // are lib/core's (statsview, statstext), host-tested in test_ui_stats; this
 // reads the host through Ui's accessors (the lifetime, the phase, the
 // snapshot) at each draw and act, and keeps nothing of them but the shape
-// it drew and the minute. The shelves' rows and Last 7 days' body come with
-// S10 and S11: until then they draw their header and their look's line.
+// it drew and the minute. The shelves (7.6, S10): their rows from the
+// snapshot (ranked tracks, Recently played's headings, Not played yet's
+// albums), Most played's tray, their acts through the queue's id view, and
+// their rows' arrival at the place kept for them. Last 7 days' body comes
+// with S11: until then it draws its header and its look's line.
 #include <cstdio>
 #include <cstring>
 
+#include "IdView.h"
+#include "LibraryText.h"
+#include "ListLayout.h"
 #include "StatsRank.h"
 #include "StatsText.h"
 #include "StatsView.h"
@@ -143,10 +149,14 @@ uint32_t LibraryPage::statsSigNow(const sv::Lifetime& l, sv::PageLook* look) con
       shape = static_cast<uint8_t>(sv::hubShape(h) | (sv::hubSubDue(l) ? sv::kShapeSub : 0u));
       break;
     }
-    case PageKind::StatsShelf:
-      k = sv::shelfLook(id_, l, p, snap).page;
-      shape = static_cast<uint8_t>(k.look);
+    case PageKind::StatsShelf: {
+      // (Its tray too: its cells, the window picked, a "16 days" label; and
+      // the header's line with the window.)
+      const sv::ShelfLook s = sv::shelfLook(id_, l, p, snap);
+      k = s.page;
+      shape = sv::shelfShape(s, sv::trayOf(l, snap));
       break;
+    }
     default:
       k = sv::weekLook(l, p, snap).page;
       shape = static_cast<uint8_t>(k.look);
@@ -167,6 +177,14 @@ void LibraryPage::statsEntering() {
   // replaced), once the held condition is up. The edge's own ask, just
   // made, reads Working already: none due then.
   if (look.askDue && ui_.statsHeld()) ui_.statsAsk(sv::UiAsk::Visit);
+  // Most played served: the window it shows is the snapshot's from here
+  // (D7, as at a landing: the hub's next push opens on it; a shelf pushed
+  // with a window of its own, from the console or Now Playing, keeps it).
+  const statsvisit::Snapshot* snap = ui_.statsSnapshot();
+  if (kind_ == PageKind::StatsShelf && snap && sv::shelfOf(id_) == sv::Shelf::MostPlayed) {
+    const uint8_t w = shelfNow(l).window;
+    if (snap->window() != w) ui_.statsSetWindow(w);
+  }
 }
 
 void LibraryPage::statsFollow(const sv::Lifetime& l, const char* why) {
@@ -181,6 +199,10 @@ void LibraryPage::statsFollow(const sv::Lifetime& l, const char* why) {
   const uint32_t drawn = statsSigDrawn();
   if (sig == drawn) return;  // (nothing it draws moved: a landing's second version move, Idle to Working)
   keepSig(sig);
+  if (kind_ == PageKind::StatsShelf) {
+    shelfFollow(drawn, sig, l, why);  // (its shape's bits are its own: shelfShape())
+    return;
+  }
   const uint32_t moved = sig ^ drawn;
   constexpr uint32_t kSub = static_cast<uint32_t>(sv::kShapeSub) << 16;
   // The hub's header line came or went (the boot fold's end, a play counted
@@ -195,8 +217,8 @@ void LibraryPage::statsFollow(const sv::Lifetime& l, const char* why) {
                 sv::lookName(look.look));
   // One stale row a pass at a still pass (7.2, 7.10): the place kept (-1:
   // where it stands), no bar put back (-1: across a new ask none is, 7.2),
-  // every row new (0), no lead item (the hub has none; a shelf's tray is
-  // S10's). Under a modal or in the dark the page is drawn whole when it
+  // every row new (0), no lead item (the hub has none; a shelf's tray:
+  // shelfFollow()). Under a modal or in the dark the page is drawn whole when it
   // shows again. A text alone moved (the shape the same: each row still the
   // kind it was, the Try again row there or not as before): a finger on a
   // row keeps its press, its tap the row it was (a tap across a landing's
@@ -215,11 +237,13 @@ void LibraryPage::statsFollow(const sv::Lifetime& l, const char* why) {
 }
 
 bool LibraryPage::statsNews(const char* why) {
-  // A page that drew the snapshot's rows (a shelf's: S10) has none now:
-  // attached again at 0 rows, by the Ui (what reads the snapshot closed
-  // first). The hub and Week read the snapshot at each draw: drawn again.
+  // A page that drew the snapshot's rows (a shelf served: its tracks, its
+  // albums) has none now: attached again at 0 rows, by the Ui (what reads
+  // the snapshot closed first: its sheet, the jump grid). (A Try again row
+  // isn't the snapshot's: restaged as any.) The hub and Week read the
+  // snapshot at each draw: drawn again.
   if (kind_ == PageKind::StatsShelf && ui_.list().source() == this && ui_.list().layout().rows() > 0 &&
-      !ui_.statsSnapshot()) {
+      static_cast<sv::Look>(statsShape_ & sv::kShelfLook) == sv::Look::Served && !ui_.statsSnapshot()) {
     return true;
   }
   sv::Lifetime l;
@@ -249,11 +273,16 @@ void LibraryPage::statsUpdate() {
   statsFollow(l, "its look moved");
   if (statsSigDrawn() != drawn) return;
   // A new minute (7.10): Recently played's "25 min ago" on row 6, when its
-  // text moved, at a still pass.
+  // text moved, at a still pass; on its own shelf, its rows on screen.
   const uint16_t now = static_cast<uint16_t>(l.nowMin);
-  if (kind_ != PageKind::StatsHub || now == minute_ || ui_.list().animating()) return;
+  if (now == minute_ || ui_.list().animating()) return;
   const uint32_t was = sv::minuteFrom(minute_, l.nowMin);
   minute_ = now;
+  if (kind_ == PageKind::StatsShelf) {
+    recentMinute(l, was);
+    return;
+  }
+  if (kind_ != PageKind::StatsHub) return;
   const statsvisit::Snapshot* snap = ui_.statsSnapshot();
   const sv::HubLook h = hubNow(l);
   const uint32_t row = static_cast<uint32_t>(sv::HubRow::Recent);
@@ -292,16 +321,34 @@ void LibraryPage::statsFrame() {
       return;
     }
   }
+  if (kind_ == PageKind::StatsShelf) {
+    // A shelf's item: the tray, the top bar, a bar, or a row by its kind
+    // as the snapshot has it now (a rank, a heading, an album, Try again).
+    const ListLayout::Item it = ui_.list().layout().item(c.item);
+    if (it.kind == ListLayout::Kind::Row) {
+      Serial.printf("[ui] stats: %s: row %u (%s) staged in place\n", name, static_cast<unsigned>(it.row + 1),
+                    sv::shelfRowName(shelfItemAt(static_cast<uint32_t>(it.row)).kind));
+    } else {
+      Serial.printf("[ui] stats: %s: %s staged in place\n", name,
+                    it.kind == ListLayout::Kind::TopRow    ? "the tray"
+                    : it.kind == ListLayout::Kind::TopBar  ? "the top bar"
+                                                           : "a row's bar");
+    }
+    return;
+  }
   Serial.printf("[ui] stats: %s: item %u staged in place\n", name, static_cast<unsigned>(c.item));
 }
 
 // ---- the list ----
 
 uint32_t LibraryPage::statsRows() {
-  if (kind_ != PageKind::StatsHub) return 0;  // (a shelf's rows: S10; Week has none, its body: S11)
   sv::Lifetime l;
   ui_.statsLifetime(l);
-  return hubNow(l).rows;
+  switch (kind_) {
+    case PageKind::StatsHub: return hubNow(l).rows;
+    case PageKind::StatsShelf: return shelfNow(l).rows;  // (its tracks, its headings, its albums; Try again)
+    default: return 0;                                   // (Week has none, its body: S11)
+  }
 }
 
 size_t LibraryPage::statsTitle(uint16_t id, char* out, size_t size, void* ctx) {
@@ -324,7 +371,7 @@ size_t LibraryPage::hubLineOf(const sv::HubItem& it, const sv::Lifetime& l, cons
 // and reason DIM, no chevron), the status row (the clock AMBER, its two
 // Small lines), Try again (no icon, no chevron: it opens no page).
 void LibraryPage::drawStatsRow(ListView::Row& r) {
-  if (kind_ != PageKind::StatsHub) return;  // (a shelf's rows: S10)
+  if (kind_ != PageKind::StatsHub) return;  // (a shelf's rows: drawShelfRow())
   sv::Lifetime l;
   ui_.statsLifetime(l);
   sv::PhaseInfo p;
@@ -387,8 +434,18 @@ Header LibraryPage::statsHeader() const {
       if (sv::hubSubDue(l)) st::hubSub(l.listenedMs, l.sinceDay, headerSub_, sizeof(headerSub_));
       break;
     }
-    case PageKind::StatsShelf: h.title = tr(sv::shelfTitle(sv::shelfOf(id_))); break;  // (its window's line: S10)
-    default: h.title = tr(S::stats_last7); break;                                      // (its days: S11)
+    case PageKind::StatsShelf: {
+      // Its line under the title (subBelow, 7.6: it stays once the tray
+      // scrolls away): Most played's window ("last 7 days", "since 1
+      // Sep"), the others' own; none on Recently played.
+      const sv::Shelf s = sv::shelfOf(id_);
+      h.title = tr(sv::shelfTitle(s));
+      sv::Lifetime l;
+      ui_.statsLifetime(l);
+      st::shelfSub(s, shelfNow(l).window, l.sinceDay, headerSub_, sizeof(headerSub_));
+      break;
+    }
+    default: h.title = tr(S::stats_last7); break;  // (its days: S11)
   }
   if (crumb()) {
     h.right = tr(S::library_crumb);
@@ -400,7 +457,27 @@ Header LibraryPage::statsHeader() const {
 }
 
 ListView::Tap LibraryPage::statsTap(uint32_t row) {
-  if (kind_ != PageKind::StatsHub) return ListView::Tap::Handled;  // (a shelf's rows: S10)
+  if (kind_ == PageKind::StatsShelf) {
+    // A shelf's row (7.6): a track's bar (Play plays the shelf from it), an
+    // album (it asks nothing), Try again's ask (Not played yet's: its lean
+    // ask); a heading is no control (pressable()).
+    const RowRef rr = statsRowAt(row);
+    switch (rr.kind) {
+      case RowKind::Ranked: return ListView::Tap::Expand;
+      case RowKind::Album: ui_.push(page(PageKind::Album, rr.id)); return ListView::Tap::Handled;
+      case RowKind::StatsTryAgain: {
+        sv::Lifetime l;
+        ui_.statsLifetime(l);
+        const sv::ShelfLook k = shelfNow(l);
+        Serial.printf("[ui] stats: Try again (\"%s\"): %s\n", tr(k.page.line),
+                      k.ask == sv::UiAsk::NotPlayed ? "Not played yet's lean ask" : "the visit's ask");
+        ui_.statsAsk(k.ask);
+        return ListView::Tap::Handled;
+      }
+      default: return ListView::Tap::Handled;
+    }
+  }
+  if (kind_ != PageKind::StatsHub) return ListView::Tap::Handled;  // (Week has no rows)
   sv::Lifetime l;
   ui_.statsLifetime(l);
   const sv::HubLook h = hubNow(l);
@@ -428,7 +505,10 @@ ListView::Tap LibraryPage::statsTap(uint32_t row) {
 }
 
 sv::Control LibraryPage::statsControl(uint32_t row) {
-  if (kind_ != PageKind::StatsHub) return sv::Control{};  // (a shelf's rows: S10)
+  // A shelf's rows by their kind (statsview::shelfControlOf(): its tracks
+  // and albums hold, its headings are no control).
+  if (kind_ == PageKind::StatsShelf) return sv::shelfControlOf(shelfItemAt(row).kind);
+  if (kind_ != PageKind::StatsHub) return sv::Control{};
   sv::Lifetime l;
   ui_.statsLifetime(l);
   const sv::HubLook h = hubNow(l);
@@ -537,10 +617,18 @@ void LibraryPage::printStats() {
                 static_cast<unsigned long>(statsRows()), static_cast<unsigned long>(attached ? list.layout().itemCount() : 0),
                 static_cast<long>(attached ? list.offset() : 0), static_cast<long>(attached ? list.expanded() : -1),
                 attached && list.stagingOnly() ? ", rows still staged" : "");
-  if (kind_ != PageKind::StatsHub) {
+  // (Each page's part in a frame of its own, not stacked on this one: a
+  // shelf's lines go through the same text chain as its rows.)
+  if (kind_ == PageKind::StatsShelf) {
+    printShelf(l);
+  } else if (kind_ == PageKind::StatsHub) {
+    printHub(l);
+  } else {
     Serial.printf("[ui] stats:   its line: \"%s\"\n", statsEmptyText());
-    return;
   }
+}
+
+__attribute__((noinline)) void LibraryPage::printHub(const sv::Lifetime& l) {
   const statsvisit::Snapshot* snap = ui_.statsSnapshot();
   const sv::HubLook h = hubNow(l);
   if (h.rows == 0) {
@@ -555,6 +643,412 @@ void LibraryPage::printStats() {
     Serial.printf("[ui] stats:   %lu %s, %s: \"%s\"\n", static_cast<unsigned long>(i + 1),
                   kHubRowNames[it.kind == sv::RowKind::TryAgain ? sv::kHubRows : static_cast<uint32_t>(it.row)],
                   rowKindName(it.kind), line);
+  }
+}
+
+// ---- a shelf (7.6) ----
+
+namespace {
+
+// The console's names for the windows (in English, whatever the UI's
+// language).
+const char* const kWindowNames[3] = {"7 days", "30 days", "All time"};
+
+const char* windowName(uint8_t w) { return w <= statsvisit::kAllTime ? kWindowNames[w] : "?"; }
+
+}  // namespace
+
+sv::ShelfLook LibraryPage::shelfNow(const sv::Lifetime& l) const {
+  sv::PhaseInfo p;
+  ui_.statsPhase(p);
+  return sv::shelfLook(id_, l, p, ui_.statsSnapshot());
+}
+
+sv::ShelfItem LibraryPage::shelfItemAt(uint32_t row, uint32_t* nowMin) const {
+  sv::Lifetime l;
+  ui_.statsLifetime(l);
+  if (nowMin) *nowMin = l.nowMin;
+  sv::PhaseInfo p;
+  ui_.statsPhase(p);
+  const statsvisit::Snapshot* snap = ui_.statsSnapshot();
+  return sv::shelfItem(sv::shelfLook(id_, l, p, snap), snap, row);
+}
+
+LibraryPage::RowRef LibraryPage::statsRowAt(uint32_t row) const {
+  RowRef r;
+  const sv::ShelfItem it = shelfItemAt(row);
+  switch (it.kind) {
+    case sv::ShelfRow::Ranked:
+      r.kind = RowKind::Ranked;
+      r.id = it.id;     // (a track of the live index: the snapshot's key is its, D6)
+      r.index = it.at;  // (its row in the snapshot's list: where a Play starts)
+      break;
+    case sv::ShelfRow::Section:
+      r.kind = RowKind::Section;
+      r.index = row;
+      break;
+    case sv::ShelfRow::TryAgain: r.kind = RowKind::StatsTryAgain; break;
+    case sv::ShelfRow::Album: {
+      // Its place in albumsAZ(): an album of the live index (the snapshot's
+      // albums are its).
+      const LibraryIndex* i = index();
+      const LibraryIndex::Span az = i ? i->albumsAZ() : LibraryIndex::Span{};
+      if (it.id >= az.count) break;
+      r.kind = RowKind::Album;
+      r.id = az[it.id];
+      r.index = it.at;
+      break;
+    }
+    default: break;
+  }
+  return r;
+}
+
+// A shelf's own rows (7.6): a ranked track (its rank "01" Small DIM at x 30,
+// none on Recently played; the playing one's EQ glyph there, its title Bold
+// violet; its line "artist cut, count kept" in what the edge leaves, 264 px
+// beside the scrollbar), Recently played's heading as a "Disc 2" divider,
+// Try again as the hub's. Not played yet's album is the Library's own row:
+// `r` handed back for drawLibraryRow() (else nullptr).
+ListView::Row* LibraryPage::drawShelfRow(ListView::Row& r) {
+  uint32_t nowMin = 0;
+  const sv::ShelfItem it = shelfItemAt(r.row, &nowMin);
+  switch (it.kind) {
+    case sv::ShelfRow::Album: return &r;  // (drawLibraryRow(): its cover, its artist line and year)
+    case sv::ShelfRow::Section: {
+      // "Today", "Sun 8 Nov", "This session": Bold violet at x 12, y 25,
+      // its line under it (a divider, not a control).
+      char t[64];
+      st::sectionText(it.recent, t, sizeof(t));
+      const int x = r.x + uitext::kDiscTextX;
+      Fonts::instance().draw(r.c, Font::Bold, t, x, 25, uitext::kDiscTextW, accent::Library, r.bg);
+      r.c.fillRect(x, 39, r.right - 8 - x, 1, col::DIV);
+      return nullptr;
+    }
+    case sv::ShelfRow::TryAgain: {
+      // empty.try_again over its reason, from x 54 as the hub's (7.4): no
+      // icon, no chevron (it opens no page).
+      const char* title = tr(S::empty_try_again);
+      const char* reason = tr(it.text);
+      ListView::lines(r, kTextX, r.right - 26, title, strlen(title), reason, strlen(reason), col::TXT);
+      return nullptr;
+    }
+    case sv::ShelfRow::Ranked: break;
+    default: return nullptr;  // (none: past the rows, or an id the index hasn't, D6)
+  }
+  const LibraryIndex* i = index();
+  const statsvisit::Snapshot* snap = ui_.statsSnapshot();
+  if (!i || !snap) return nullptr;
+  const bool now = playTrack_ != LibraryIndex::kNone && it.id == playTrack_;
+  const int x = now                               ? ListView::playing(r, accent::Library)
+                : it.list == statsrank::kRecent ? r.x + 40
+                                                  : ListView::number(r, it.at + 1, col::DIM);
+  char title[96];
+  const size_t len = titleOf(it.id, title, sizeof(title));
+  char line[160];
+  st::rowLine(Fonts::instance().fit(Font::Small), r.right - 8 - x, it.list, snap->rowAt(it.list, it.at),
+              librarytext::trackArtist(*i, it.id), it.recent.timed, nowMin, line, sizeof(line));
+  ListView::lines(r, x, r.right - 8, title, len, line, strlen(line), now ? accent::Library : col::TXT,
+                  now ? Font::Bold : Font::Body);
+  return nullptr;
+}
+
+// The container's bar (7.6): with rows landed, but on Not played yet (its
+// rows are albums) and over Try again.
+bool LibraryPage::statsTopBar() {
+  if (kind_ != PageKind::StatsShelf) return false;  // (the hub, Week: none)
+  sv::Lifetime l;
+  ui_.statsLifetime(l);
+  return shelfNow(l).topBar;
+}
+
+// Not played yet's albums are A-Z (the bits' order, albumsAZ()'s): the rail
+// over 30 of them, and the jump grid (its letters from railName(): the
+// albums' sort names, as the Albums root's).
+uint32_t LibraryPage::statsRailRows() {
+  if (sv::shelfOf(id_) != sv::Shelf::NotPlayed) return 0;
+  sv::Lifetime l;
+  ui_.statsLifetime(l);
+  const sv::ShelfLook k = shelfNow(l);
+  return k.page.look == sv::Look::Served && !k.tryAgain ? k.rows : 0;
+}
+
+int32_t LibraryPage::statsPlayingRow() const {
+  if (kind_ != PageKind::StatsShelf || playTrack_ == LibraryIndex::kNone) return -1;
+  sv::Lifetime l;
+  ui_.statsLifetime(l);
+  const sv::ShelfLook k = shelfNow(l);
+  // Not played yet: its album's place in albumsAZ() (once a push, at most
+  // the index's albums).
+  uint32_t place = statsvisit::kNoAlbum;
+  const LibraryIndex* i = index();
+  if (k.shelf == sv::Shelf::NotPlayed && i) {
+    const LibraryIndex::Span az = i->albumsAZ();
+    for (uint32_t p = 0; p < az.count; ++p) {
+      if (az[p] == playAlbum_) {
+        place = p;
+        break;
+      }
+    }
+  }
+  return sv::shelfRowOf(k, ui_.statsSnapshot(), playTrack_, place);
+}
+
+bool LibraryPage::pending() {
+  return kind_ == PageKind::StatsShelf && sv::shelfPending(sv::shelfOf(id_), ui_.statsSnapshot());
+}
+
+void LibraryPage::statsAct(const RowRef& r, int action) {
+  sv::Lifetime l;
+  ui_.statsLifetime(l);
+  const sv::ShelfLook k = shelfNow(l);
+  const statsvisit::Snapshot* snap = ui_.statsSnapshot();
+  const LibraryIndex* i = index();
+  // Read now (D6): a snapshot served over the live index, the shelf's
+  // ranked list, every id a track of it; a ranked row still the track it
+  // was (a bar or a sheet never stays across a new ask: 7.2, so this is a
+  // guard, said if it ever trips).
+  const bool listed = snap && i && k.page.look == sv::Look::Served && !k.tryAgain && k.shelf != sv::Shelf::NotPlayed &&
+                      sv::idsServed(*snap, k.list, i->trackCount());
+  const bool same = r.kind != RowKind::Ranked ||
+                    (listed && r.index < snap->rows(k.list) && snap->rowAt(k.list, r.index).id == r.id);
+  if (!listed || !same) {
+    Serial.printf("[ui] stats: %s: nothing acted on (%s)\n", tr(sv::shelfTitle(k.shelf)),
+                  !snap || !i ? "no snapshot served over this index" : !listed ? "no ranked rows served" :
+                                                                                "the row isn't the track it was");
+    ui_.input().missBuzz();
+    return;
+  }
+  // The queue's view over the list's ids in place (7.6: nothing copied or
+  // carved; the queue copies them, and only the Dance tab coming up takes
+  // the block back, which no act does).
+  const IdView ids = IdView::u16(snap->ids(k.list), snap->rows(k.list), statsvisit::kStrides[k.list]);
+  if (r.kind == RowKind::None) {
+    act(ids, -1, action, tr(sv::shelfTitle(k.shelf)));  // the top bar: the whole shelf, named by its title
+  } else if (action == 0) {
+    act(ids, static_cast<int32_t>(r.index), 0, "");  // Play: the shelf from it
+  } else {
+    uint32_t one = r.id;
+    act(IdView::of(&one, 1), -1, action, "");
+  }
+}
+
+// ---- Most played's tray (7.6, 7.9) ----
+
+bool LibraryPage::leadRow() {
+  if (kind_ != PageKind::StatsShelf) return false;
+  sv::Lifetime l;
+  ui_.statsLifetime(l);
+  return shelfNow(l).tray;
+}
+
+// A CARD tray at (6, 7), 300 x 28; its cells' labels Bold (Small where Bold
+// doesn't fit) centred on y 21, the picked one on a BTN_HI plate in TXT, the
+// others DIM. A finger on a cell lights that cell alone (ROW_SEL), the
+// tray's ground refilled, as the Filters row lights its cross.
+void LibraryPage::drawLeadRow(ListView::Row& r) {
+  if (kind_ != PageKind::StatsShelf) return;
+  sv::Lifetime l;
+  ui_.statsLifetime(l);
+  const sv::ShelfLook k = shelfNow(l);
+  const sv::Tray t = sv::trayOf(l, ui_.statsSnapshot());
+  if (!k.tray || t.cells == 0) return;
+  const int down = r.pressed ? sv::trayCellAt(t, r.pressX, r.pressX >= kW - 1) : -1;
+  if (r.pressed) {
+    r.bg = col::BG;
+    r.c.fillSprite(r.bg);
+  }
+  r.c.fillRoundRect(sv::kTrayX, sv::kTrayY, sv::kTrayW, sv::kTrayH, sv::kTrayR, col::CARD);
+  Fonts& f = Fonts::instance();
+  const int w = sv::trayCellW(t), room = w - 4;
+  for (int c = 0; c < t.cells; ++c) {
+    const int x = sv::trayCellX(t, c);
+    const bool picked = t.window[c] == k.window;
+    uint16_t bg = col::CARD;
+    if (picked || c == down) {
+      bg = c == down ? col::ROW_SEL : col::BTN_HI;
+      r.c.fillRoundRect(x, sv::kTrayPlateY, w, sv::kTrayPlateH, sv::kTrayPlateR, bg);
+    }
+    char label[48];
+    st::trayLabel(t.window[c], t.days30, label, sizeof(label));
+    f.draw(r.c, f.fitting(Font::Bold, label, room), label, x + w / 2, sv::kTrayLabelY, room,
+           picked ? col::TXT : col::DIM, bg, Fonts::Align::Centre);
+  }
+}
+
+// A cell's tap (after the tick): its window shown (7.6, 7.10). The window
+// into the snapshot's header (D7: the hub's next push opens on it), the
+// page's id and its ref (kept across the dark and a Back); the tray and the
+// header drawn again in its pass; the window's rows staged in one a pass
+// where the list stands, a bar folded (S2's rule for a tray tap). No ask.
+void LibraryPage::onLeadRowTap(int x, bool rightEdge) {
+  if (kind_ != PageKind::StatsShelf) return;
+  sv::Lifetime l;
+  ui_.statsLifetime(l);
+  const sv::ShelfLook k = shelfNow(l);
+  const sv::Tray t = sv::trayOf(l, ui_.statsSnapshot());
+  const int cell = k.tray ? sv::trayCellAt(t, x, rightEdge) : -1;
+  if (cell < 0) return;
+  const uint8_t w = t.window[cell];
+  if (w == k.window) return;  // (the window shown: its tick said the tap was heard)
+  const uint32_t t0 = micros();
+  ui_.statsSetWindow(w);
+  id_ = sv::shelfId(sv::Shelf::MostPlayed, w);
+  if (ref_) ref_->id = id_;
+  ListView& list = ui_.list();
+  list.refreshTopRow();
+  repaintHeader();
+  const uint32_t t1 = micros();
+  keepSig(statsSigNow(l));  // (this tap's picture: not the next pass's to restage)
+  list.recountStaged(-1, -1, 0, false);
+  Serial.printf("[ui] stats: Most played, the tray: %s (was %s): the tray and the header in %.1f ms, %lu rows to "
+                "stage one a pass\n",
+                windowName(w), windowName(k.window), (t1 - t0) / 1000.0f,
+                static_cast<unsigned long>(list.layout().rows()));
+}
+
+// ---- a shelf following what it reads ----
+
+void LibraryPage::shelfFollow(uint32_t drawn, uint32_t sig, const sv::Lifetime& l, const char* why) {
+  ListView& list = ui_.list();
+  if (list.source() != this) return;  // (not attached: drawn whole at its next enter())
+  const uint8_t was = static_cast<uint8_t>(drawn >> 16), now = static_cast<uint8_t>(sig >> 16);
+  const bool textsMoved = ((drawn ^ sig) & 0xFFFFu) != 0;
+  // Most played's window line (a landing's D7, a day that drops a kept 30
+  // days): the header again while the page shows (else drawn whole when it
+  // does).
+  if (sv::shelfHeaderMoved(was, now) && ui_.pageShowing()) repaintHeader();
+  const sv::ShelfLook k = shelfNow(l);
+  const bool lead = sv::trayMoved(was, now, textsMoved);
+  minute_ = static_cast<uint16_t>(l.nowMin);  // (Recently played's times drawn with the rest)
+  int32_t target = -1;
+  const bool arrives = sv::shelfArrives(static_cast<sv::Look>(was & sv::kShelfLook), k.page.look, k.rows);
+  if (arrives && ref_) {
+    // D7: the window shown is the snapshot's from here (a new ask's loan
+    // opened on All time).
+    if (k.shelf == sv::Shelf::MostPlayed) ui_.statsSetWindow(k.window);
+    // The place kept in the ref while the rows were pending (7.2), clamped
+    // to them; no bar reopened across a new ask; kShowPlaying, the playing
+    // row with one of context above it, as enter() puts it.
+    ListLayout to;
+    to.set(k.rows, k.topBar, k.tray);
+    const listlayout::Place place =
+        listlayout::arrival(ref_->scrollPx, ref_->expanded, k.rows, to.leads(), false, list.height());
+    target = place.offset;
+    if (target == kShowPlaying) {
+      target = 0;
+      const int32_t row = playingRow();
+      if (row >= 0) {
+        const uint32_t item = to.itemOfRow(static_cast<uint32_t>(row));
+        if (to.reveal(item, 0, list.height()) != 0) target = (static_cast<int32_t>(item) - 1) * ListLayout::kPitch;
+      }
+    }
+  }
+  Serial.printf("[ui] stats: %s drawn again in place (%s): %s, %lu rows%s%s\n",
+                pageKindName(static_cast<uint8_t>(kind_)), why, sv::lookName(k.page.look),
+                static_cast<unsigned long>(k.rows), arrives ? ", arriving at the place kept" : "",
+                lead ? ", the tray too" : "");
+  // One stale item a pass at a still pass (7.2, 7.10): every row new (0), a
+  // bar folded (-1: across a new ask none comes back), the tray only when
+  // its picture moved.
+  list.recountStaged(target, -1, 0, lead);
+}
+
+void LibraryPage::recentMinute(const sv::Lifetime& l, uint32_t was) {
+  if (sv::shelfOf(id_) != sv::Shelf::Recent) return;
+  const statsvisit::Snapshot* snap = ui_.statsSnapshot();
+  ListView& list = ui_.list();
+  uint32_t first = 0, last = 0;
+  if (!snap || list.source() != this || !list.visibleRows(&first, &last)) return;
+  const sv::ShelfLook k = shelfNow(l);
+  if (k.page.look != sv::Look::Served || k.tryAgain) return;
+  const uint32_t row = st::recentMoved(*snap, first, last, was, l.nowMin);
+  if (row == st::kNoneMoved) return;
+  // From that row down, in place, one a pass: the same rows (a press kept),
+  // a bar where it is.
+  list.recountStaged(-1, list.expanded(), row, false, true);
+}
+
+// uiS on a shelf: its look, the tray, the header's line, its rows (a
+// checksum of every one's id and figures, so two uiS can be compared: run
+// 3b-6), and the rows on screen as drawn.
+__attribute__((noinline)) void LibraryPage::printShelf(const sv::Lifetime& l) {
+  const sv::ShelfLook k = shelfNow(l);
+  const statsvisit::Snapshot* snap = ui_.statsSnapshot();
+  char text[160];
+  st::shelfSub(k.shelf, k.window, l.sinceDay, text, sizeof(text));
+  Serial.printf("[ui] stats:   %s, window %s, the header's line \"%s\"; %lu rows%s%s%s%s\n",
+                kHubRowNames[static_cast<uint32_t>(k.shelf) + 1], windowName(k.window), text,
+                static_cast<unsigned long>(k.rows), k.tray ? ", the tray" : "", k.topBar ? ", the top bar" : "",
+                k.tryAgain ? ", Try again" : "", pending() ? " (pending: its place kept in its ref)" : "");
+  if (k.tray) {
+    const sv::Tray t = sv::trayOf(l, snap);
+    for (int c = 0; c < t.cells; ++c) {
+      st::trayLabel(t.window[c], t.days30, text, sizeof(text));
+      Serial.printf("[ui] stats:     the tray's cell %d, %s: \"%s\"%s\n", c + 1, windowName(t.window[c]), text,
+                    t.window[c] == k.window ? " (picked)" : "");
+    }
+  }
+  if (k.rows == 0 || k.drawLine) {
+    Serial.printf("[ui] stats:   its line: \"%s\"\n", statsEmptyText());
+    return;
+  }
+  if (snap && !k.tryAgain) {
+    uint32_t hash = 2166136261u;
+    auto mix = [&hash](uint32_t v) { hash = (hash ^ v) * 16777619u; };
+    if (k.shelf == sv::Shelf::NotPlayed) {
+      for (uint32_t r = 0; r < k.rows; ++r) mix(snap->albumAt(r));
+    } else {
+      for (uint32_t r = 0; r < snap->rows(k.list); ++r) {
+        const statsvisit::Row row = snap->rowAt(k.list, r);
+        mix(row.id);
+        mix(row.count);
+        mix(row.lastDay);
+        mix(row.when);
+      }
+    }
+    Serial.printf("[ui] stats:   the snapshot's version %lu; its %s's ids and figures 0x%08lX\n",
+                  static_cast<unsigned long>(snap->version()),
+                  k.shelf == sv::Shelf::NotPlayed ? "albums" : "rows", static_cast<unsigned long>(hash));
+  }
+  ListView& list = ui_.list();
+  uint32_t first = 0, last = 0;
+  if (list.source() != this || !list.visibleRows(&first, &last)) return;
+  const LibraryIndex* i = index();
+  for (uint32_t r = first; r <= last; ++r) {
+    uint32_t nowMin = 0;
+    const sv::ShelfItem it = shelfItemAt(r, &nowMin);
+    char title[64] = "";
+    text[0] = 0;
+    switch (it.kind) {
+      case sv::ShelfRow::Ranked:
+        titleOf(it.id, title, sizeof(title));
+        if (snap && i) {
+          st::rowLine(Fonts::instance().fit(Font::Small), st::kRowLineW, it.list, snap->rowAt(it.list, it.at),
+                      librarytext::trackArtist(*i, it.id), it.recent.timed, nowMin, text, sizeof(text));
+        }
+        Serial.printf("[ui] stats:     %lu, track %lu (rank %lu): \"%s\", \"%s\"\n", static_cast<unsigned long>(r + 1),
+                      static_cast<unsigned long>(it.id), static_cast<unsigned long>(it.at + 1), title, text);
+        break;
+      case sv::ShelfRow::Section:
+        st::sectionText(it.recent, title, sizeof(title));
+        Serial.printf("[ui] stats:     %lu, the heading \"%s\"\n", static_cast<unsigned long>(r + 1), title);
+        break;
+      case sv::ShelfRow::Album: {
+        const LibraryIndex::Span az = i ? i->albumsAZ() : LibraryIndex::Span{};
+        Serial.printf("[ui] stats:     %lu, album %lu: \"%s\"\n", static_cast<unsigned long>(r + 1),
+                      static_cast<unsigned long>(it.id < az.count ? az[it.id] : 0),
+                      it.id < az.count ? librarytext::albumShown(*i, az[it.id]) : "");
+        break;
+      }
+      case sv::ShelfRow::TryAgain:
+        Serial.printf("[ui] stats:     %lu, Try again: \"%s\"\n", static_cast<unsigned long>(r + 1), tr(it.text));
+        break;
+      default:
+        Serial.printf("[ui] stats:     %lu, nothing (%s)\n", static_cast<unsigned long>(r + 1),
+                      sv::shelfRowName(it.kind));
+        break;
+    }
   }
 }
 

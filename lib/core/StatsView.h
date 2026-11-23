@@ -41,7 +41,10 @@
 //     mark (rcntShort()), trayCellAt() with filtergrid::skew(), the kept
 //     window's fallback, Not played yet's own state (its bits, its lean
 //     ask), and Recently played's sections (the map between the list's rows
-//     and the snapshot's).
+//     and the snapshot's); each row as a page draws, touches and acts on it
+//     (shelfItem(), shelfControlOf(), idsServed()), the row holding a
+//     track, when its rows are pending and when they arrive, the shape it
+//     polls (its tray's among it), and the console's uiS<shelf>[w] (S10).
 //   - Last 7 days (7.7): its look, and its figures from the snapshot's 7
 //     days (the total, the plays, the bars to 44 px, the big day, Auto DJ's
 //     rate).
@@ -489,6 +492,103 @@ struct RecentItem {
 uint32_t recentCount(const Snapshot& s);  // the list's rows: the snapshot's and the headings
 RecentItem recentAt(const Snapshot& s, uint32_t listRow);  // past the end: a heading-less default
 uint32_t recentListRow(const Snapshot& s, uint32_t snapRow);  // the list row of a snapshot row
+
+// ---------------------------------------------------------------------------
+// A shelf as ui's LibraryPage draws, touches and acts on it (7.6, 7.10;
+// S3b's S10). Read anew at each draw and act from the look and the
+// snapshot served (D6: Ui::statsSnapshot() serves only one keyed on the
+// live index), never kept.
+// ---------------------------------------------------------------------------
+// What a shelf's list row is:
+//   - Ranked: a track of the snapshot's list (Most played's window, New
+//     finds, Old favourites, Recently played): its rank, title and line,
+//     its inline bar, its sheet;
+//   - Section: one of Recently played's headings ("Today", "Sun 8 Nov",
+//     "This session"), drawn as a "Disc 2" divider: no control;
+//   - Album: one of Not played yet's albums, A-Z (statsvisit::albumAt()):
+//     the root's Albums row, its tap the album, its hold its sheet;
+//   - TryAgain: the one row of a shelf whose ask came to nothing (first
+//     under Most played's tray): its title, its reason, the ask;
+//   - None: past the rows, or an id the live index hasn't (D6: never drawn
+//     or acted on).
+enum class ShelfRow : uint8_t { None, Ranked, Section, Album, TryAgain };
+const char* shelfRowName(ShelfRow k);  // "none", "ranked", "section", "album", "Try again"
+struct ShelfItem {
+  ShelfRow kind = ShelfRow::None;
+  statsrank::List list = statsrank::kLists;  // Ranked: the snapshot's list
+  // Ranked: its row in the snapshot's list (the rank less 1; the place a
+  // Play plays the shelf from); Album: k, its place among the albums not
+  // played.
+  uint32_t at = 0;
+  // Ranked: its track id (under the snapshot's trackCount, the live
+  // index's); Album: its place in albumsAZ() (under the snapshot's albums).
+  uint32_t id = 0;
+  // Recently played's: its section, and whether its "25 min ago" is due (a
+  // heading's text; a row's time).
+  RecentItem recent;
+  // TryAgain: its reason (the look's line: stats.no_room, stats.unread,
+  // stats.waiting, stats.card_back), drawn under empty.try_again as the
+  // hub's (7.4).
+  S text = S::stats_counting;
+};
+// Row `row` of a shelf whose look is `k` (k.rows of them). Served, its
+// lists landed (resolve()), so every id is a track of the snapshot's key;
+// an id past its trackCount (never: a write's) or an album past its albums
+// reads None.
+ShelfItem shelfItem(const ShelfLook& k, const Snapshot* snap, uint32_t row);
+// How a shelf row takes a touch (7.6; ListView::Source's pressable(),
+// inert() and holds(), a table by its kind): Ranked, a tick and its inline
+// bar, a hold its track's sheet ("Auto DJ from here" first when it
+// applies); Album, a tick and the album, a hold its sheet; TryAgain, a tick
+// and the ask, no hold; Section and None, nothing (no press, no tick, no
+// hold: the list still scrolls from them). None is inert.
+Control shelfControlOf(ShelfRow k);
+// The list row holding `track` (kShowPlaying's row: from Now Playing, or
+// the rows' arrival at the place kept for it): the first of the shelf's
+// ranked rows with that id (Recently played's list row, past its
+// headings), or on Not played yet the row of its album (`albumPlace`: the
+// album's place in albumsAZ(), the bits' order); -1 for none.
+int32_t shelfRowOf(const ShelfLook& k, const Snapshot* snap, uint32_t track, uint32_t albumPlace);
+// The ids a shelf acts on (its Play, Play next, + Queue, its top bar, its
+// sheet: the queue's id view over the snapshot, 7.6): every one of the
+// list's rows a track of an index of `trackCount` tracks (D6). One loop,
+// at most 216 rows, at the act.
+bool idsServed(const Snapshot& s, statsrank::List l, uint32_t trackCount);
+// Its rows aren't here yet (ListView::Source::pending(), 7.2, D5): nothing
+// served, or Not played yet with no bits (its own state, its lean ask's
+// landing to come). The page's place stays in its ref meanwhile.
+bool shelfPending(Shelf s, const Snapshot* snap);
+// The rows arrive (7.2: the place kept in the ref put back by
+// listlayout::arrival(), kShowPlaying resolved): drawn without the
+// snapshot's rows (Pending, Try again, the No card line), served with rows
+// now. (A shelf drawn served and served again moved with a new ask's rows:
+// a restage where it stands.)
+constexpr bool shelfArrives(Look drawn, Look now, uint32_t rows) {
+  return drawn != Look::Served && now == Look::Served && rows > 0;
+}
+// What a shelf draws, as a byte (the hub's hubShape()): its look (bits
+// 0-2), the tray's cells (3-4: none, two, three), the window shown (5-6:
+// Most played's, its header's line too), and the 30-day cell reading the
+// days RCNT holds (bit 7: "16 days" from a capped RCNT, the snapshot's).
+// With lookText()'s texts it says whether the page's picture moved.
+uint8_t shelfShape(const ShelfLook& k, const Tray& t);
+constexpr uint8_t kShelfLook = 0x07, kShelfCells = 0x18, kShelfWindow = 0x60, kShelfShort = 0x80;
+// The tray drawn again in place (ListView::recountStaged()'s leadChanged,
+// 7.6: a landing's "16 days", a day that makes two cells three): there
+// before and after, and its cells, the window picked or the 30-day label's
+// kind moved, or a short label's days with a new ask's texts.
+bool trayMoved(uint8_t drawnShape, uint8_t nowShape, bool textsMoved);
+// The header's line moved (Most played's window: "last 7 days", "since 1
+// Sep").
+constexpr bool shelfHeaderMoved(uint8_t drawnShape, uint8_t nowShape) {
+  return ((drawnShape ^ nowShape) & kShelfWindow) != 0;
+}
+// The console's uiS<shelf>[w] (9.3): a shelf 0-4 (Most played, New finds,
+// Old favourites, Not played yet, Recently played), Most played's window
+// after it (0 seven days, 1 thirty, 2 All time); `windowGiven` false with
+// none (the hub's push: the snapshot's). False: no such shelf, a window
+// past 2, or one on another shelf.
+bool shelfArg(const char* a, Shelf* shelf, uint8_t* window, bool* windowGiven);
 
 // ---------------------------------------------------------------------------
 // Last 7 days (7.7)

@@ -402,6 +402,15 @@ private:
 // its rows' shape (the card back among them) and a new minute (row 6's "25
 // min ago") draw it again in place, one row a pass. The snapshot is held
 // while the stats pages show (Ui's held condition), not by the page.
+// The shelves (7.6): Most played (its tray of windows over its rows), New
+// finds, Old favourites, Recently played (its rows under their days'
+// headings), each a ranked list of the snapshot's tracks with a top bar;
+// Not played yet, its albums A-Z with covers and the rail. A ranked row's
+// tap opens its bar (Play plays the shelf from it), its hold the track's
+// sheet; they act through the queue's id view over the snapshot (nothing
+// copied). Before the ask lands a shelf has no rows and the phase's line,
+// its place kept in its ref (pending()), the rows then staged in one a
+// pass where it was; a tray tap stages the window's rows the same way.
 class LibraryPage : public Page, public ListView::Source, public FilterOwner {
 public:
   explicit LibraryPage(Ui& ui);
@@ -488,14 +497,27 @@ public:
   // ListView::Source: a disabled hub row (7.2 item 2).
   bool inert(uint32_t row) override;
   void onInertTap(uint32_t row) override;
+  // ListView::Source: Most played's tray, its lead item (7.6: the picked
+  // window, a cell's tap; LibraryStats.cpp), and a shelf's rows pending
+  // (7.2: its place kept in its ref until they land).
+  bool leadRow() override;
+  void drawLeadRow(ListView::Row& r) override;
+  void onLeadRowTap(int x, bool rightEdge) override;
+  bool pending() override;
 
 private:
-  // Disc: an album's "Disc 2" divider (5.4), not a control.
-  enum class RowKind : uint8_t { None, Artist, Album, AllTracks, Track, Folder, File, Disc };
+  // Disc: an album's "Disc 2" divider (5.4), not a control. The stats
+  // shelves' (7.6): Ranked, a track of the visit's snapshot (its id, its
+  // row in the snapshot's list); Section, Recently played's heading, drawn
+  // as a Disc; StatsTryAgain, a shelf's one row when its ask came to
+  // nothing; Not played yet's albums are Album rows.
+  enum class RowKind : uint8_t { None, Artist, Album, AllTracks, Track, Folder, File, Disc, Ranked, Section,
+                                 StatsTryAgain };
   struct RowRef {
     RowKind kind = RowKind::None;
     uint32_t id = 0;     // the artist, album, folder or track; a divider's disc
-    uint32_t index = 0;  // a track's or a file's place in pageTracks() (a divider: the next track's)
+    uint32_t index = 0;  // a track's or a file's place in pageTracks() (a divider: the next track's; a
+                         // ranked row's: its row in the snapshot's list)
   };
 
   const LibraryIndex* index() const;
@@ -514,9 +536,12 @@ private:
   int32_t playingRow() const;
   bool playing(const RowRef& r) const;
   void notePlaying();
-  // Play (0) / Play next (1) / + Queue (2): `start` >= 0 plays `span`
-  // from there. `name`: what the toast calls a whole container.
-  void act(LibraryIndex::Span span, int32_t start, int action, const char* name);
+  // Play (0) / Play next (1) / + Queue (2): `start` >= 0 plays `ids` from
+  // there. `name`: what the toast calls a whole container. The ids as the
+  // queue's view reads them (IdView.h): a Library list's u32 array
+  // (IdView::of() of a span), or a stats shelf's u16 ids in place in the
+  // visit's snapshot (7.6: nothing copied or carved).
+  void act(IdView ids, int32_t start, int action, const char* name);
   // What a container row (or, kind None, the page itself) plays, and its name.
   bool container(const RowRef& r, LibraryIndex::Span* span, const char** name) const;
   void onRowAction(const RowRef& r, int action);
@@ -565,9 +590,9 @@ private:
   statsview::HubLook hubNow(const statsview::Lifetime& l) const;
   // What the stats page draws now, as its shape (the hub's
   // statsview::hubShape(), with kShapeSub when its header draws the
-  // lifetime line; a shelf's and Week's their look, until S10 and S11 draw
-  // them) in bits 16-23 and its texts (statsview::lookText()) in 0-15; and
-  // its look. statsShape_ and statsText_ keep what it drew.
+  // lifetime line; a shelf's statsview::shelfShape(); Week's its look,
+  // until S11 draws it) in bits 16-23 and its texts (statsview::lookText())
+  // in 0-15; and its look. statsShape_ and statsText_ keep what it drew.
   uint32_t statsSigNow(const statsview::Lifetime& l, statsview::PageLook* look = nullptr) const;
   uint32_t statsSigDrawn() const { return static_cast<uint32_t>(statsShape_) << 16 | statsText_; }
   void keepSig(uint32_t sig) {
@@ -575,10 +600,47 @@ private:
     statsText_ = static_cast<uint16_t>(sig);
   }
   uint32_t statsRows();
+  // The hub's rows (drawRow()'s dispatch: each in a frame of its own).
   void drawStatsRow(ListView::Row& r);
   Header statsHeader() const;
   ListView::Tap statsTap(uint32_t row);
   statsview::Control statsControl(uint32_t row);
+
+  // ---- a shelf (7.6; LibraryStats.cpp) ----
+  // Its look as it is now (the lifetime `l`, the phase and the snapshot:
+  // Ui's), and row `row` of it (statsview::shelfItem(): read anew at each
+  // draw and act, D6). Not inlined: their locals stay out of the frames
+  // that draw.
+  statsview::ShelfLook shelfNow(const statsview::Lifetime& l) const;
+  __attribute__((noinline)) statsview::ShelfItem shelfItemAt(uint32_t row, uint32_t* nowMin = nullptr) const;
+  // rowAt()'s for a shelf: a ranked row (its track, its snapshot row), a
+  // heading, an album, the Try again row.
+  __attribute__((noinline)) RowRef statsRowAt(uint32_t row) const;
+  // A shelf's row drawn (a rank, a heading, Try again); the Library's own
+  // row (Not played yet's albums) handed back for drawLibraryRow(), drawn
+  // once this frame is gone; else nullptr.
+  __attribute__((noinline)) ListView::Row* drawShelfRow(ListView::Row& r);
+  bool statsTopBar();
+  uint32_t statsRailRows();
+  // The row that holds what plays (kShowPlaying: from Now Playing, or the
+  // rows' arrival at the place kept for it); -1: none.
+  int32_t statsPlayingRow() const;
+  // A ranked row's Play, Play next and + Queue (its bar, its sheet), and
+  // the shelf's top bar (`r` None): through the queue's id view over the
+  // snapshot's list, read anew now (D6: its key the live index's, every id
+  // a track of it; a ranked row still the track it was).
+  void statsAct(const RowRef& r, int action);
+  // statsFollow()'s for a shelf: its rows arriving at the place kept for
+  // them (listlayout::arrival(), kShowPlaying resolved, D7's window
+  // written back), or restaged where it stands; the tray and the header
+  // drawn again when theirs moved.
+  void shelfFollow(uint32_t drawn, uint32_t sig, const statsview::Lifetime& l, const char* why);
+  // A new minute on Recently played: its rows on screen from the first
+  // whose "25 min ago" moved, drawn again in place one a pass.
+  void recentMinute(const statsview::Lifetime& l, uint32_t was);
+  // uiS's parts (printStats()): the hub's rows, a shelf's.
+  void printHub(const statsview::Lifetime& l);
+  void printShelf(const statsview::Lifetime& l);
   const char* statsEmptyText();
   bool statsEmptyState(EmptyState& e);
   // A hub row's line (statstext::hubLine(), the catalog's titles).
@@ -590,13 +652,15 @@ private:
   // (Here and below, in the padding: ui::Ui keeps main's 9,416 B, S3b's
   // byte-exact call. LibraryPage stays 836 B.)
   EntryRow entry_ = EntryRow::None;
-  uint16_t minute_ = 0;  // the minute row 6 was drawn at, its low 16 bits (statsview::minuteFrom())
+  // The minute the hub's row 6, or Recently played's rows, were drawn at,
+  // its low 16 bits (statsview::minuteFrom()).
+  uint16_t minute_ = 0;
   uint32_t id_ = 0;
   NavModel::PageRef* ref_ = nullptr;
   bool touchInList_ = false;
   // The stats page's shape and texts as drawn (statsview::hubShape(),
-  // lookText()): a change restages it, the news's or one no news brings
-  // (the card back: No card's line to Try again).
+  // shelfShape(), lookText()): a change restages it, the news's or one no
+  // news brings (the card back: No card's line to Try again).
   uint8_t statsShape_ = 0;
   uint16_t statsText_ = 0;
   int headerPressed_ = 0;  // Header::hit() of the finger on the header; the root: 10 + its segment

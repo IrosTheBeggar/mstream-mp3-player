@@ -87,6 +87,13 @@ size_t agoText(uint32_t nowMin, uint32_t whenMin, char* out, size_t size);
 // `nowMin` differ. Under an hour each minute does; "2 h ago" moves once an
 // hour; at 24 h the time goes (the name alone); an undated row never moves.
 bool agoMoved(uint32_t wasMin, uint32_t nowMin, uint32_t whenMin);
+// Recently played's shelf at a new minute (7.10, the same row as the hub's
+// row 6): the first of its list rows `first` to `last` (those on screen)
+// whose "25 min ago" moved since `wasMin` (agoMoved(), a timed row: a dated
+// row of a dated snapshot; never a heading), the page's rows from there
+// drawn again in place one a pass; kNoneMoved for none.
+constexpr uint32_t kNoneMoved = 0xFFFFFFFFu;
+uint32_t recentMoved(const statsvisit::Snapshot& s, uint32_t first, uint32_t last, uint32_t wasMin, uint32_t nowMin);
 
 // ---------------------------------------------------------------------------
 // Days (8.2): UTC days, 0 being 2026-01-01 (a Thursday)

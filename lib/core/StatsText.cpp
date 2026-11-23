@@ -94,6 +94,19 @@ bool agoMoved(uint32_t wasMin, uint32_t nowMin, uint32_t whenMin) {
   return std::strcmp(was, now) != 0;
 }
 
+uint32_t recentMoved(const sv::Snapshot& s, uint32_t first, uint32_t last, uint32_t wasMin, uint32_t nowMin) {
+  if (wasMin == nowMin || !s.dated()) return kNoneMoved;
+  // (At most the rows on screen, each a walk of the list's 216: once a
+  // minute.)
+  const uint32_t n = statsview::recentCount(s);
+  for (uint32_t r = first; r <= last && r < n; ++r) {
+    const statsview::RecentItem it = statsview::recentAt(s, r);
+    if (it.heading || !it.timed) continue;
+    if (agoMoved(wasMin, nowMin, s.rowAt(sr::kRecent, it.row).when)) return r;
+  }
+  return kNoneMoved;
+}
+
 // ---------------------------------------------------------------------------
 // Days
 // ---------------------------------------------------------------------------
