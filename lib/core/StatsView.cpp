@@ -195,6 +195,11 @@ size_t dayMonthText(uint16_t day, char* out, size_t size) {
 
 EntryLine entryLine(const Lifetime& l, WidthFn width, void* ctx, char* out, size_t size) {
   const State st = stateOf(l);
+  if (st == State::Off) {
+    // (A row latched while folding, the fold ended with the stats off: A20.)
+    uistr::copy(out, size, uistr::tr(S::stats_unread));
+    return EntryLine::Unread;
+  }
   if (st == State::Folding) {
     uistr::copy(out, size, uistr::tr(S::stats_counting));
     return EntryLine::Counting;
@@ -292,6 +297,73 @@ HubLook hubLook(const Lifetime& l, const PhaseInfo& p, const Snapshot* snap) {
   return h;
 }
 
+S hubTitle(const HubItem& it) {
+  if (it.kind == RowKind::Status) return S::stats_no_dates;
+  switch (it.row) {
+    case HubRow::Week: return S::stats_last7;
+    case HubRow::MostPlayed: return S::stats_most_played;
+    case HubRow::NewFinds: return S::stats_new_finds;
+    case HubRow::OldFavourites: return S::stats_old_favourites;
+    case HubRow::NotPlayed: return S::stats_not_played;
+    case HubRow::Recent: return S::stats_recent;
+    default: return S::empty_try_again;
+  }
+}
+
+Control controlOf(RowKind k) {
+  Control c;
+  switch (k) {
+    case RowKind::Open:
+    case RowKind::TryAgain: c.pressable = true; break;
+    case RowKind::Disabled: c.inert = true; break;
+    case RowKind::Status: break;
+  }
+  return c;
+}
+
+bool hubSubDue(const Lifetime& l) {
+  const State st = stateOf(l);
+  return st != State::Off && st != State::Folding && st != State::Empty;
+}
+
+bool hubReachable(const Lifetime& l, bool indexReady, bool synthetic) {
+  return stateOf(l) != State::Off && indexReady && !synthetic;
+}
+
+uint8_t hubShape(const HubLook& h) {
+  // Bits 0-2 the look (it gives the row count and the open rows' line
+  // kind); 3 the status row (no clock: rows 3-5's reason needs_dates, not
+  // Opens 6 Dec); 4 rows 3-4 disabled; 5-6 row 5 open with the look's line,
+  // since-only, or disabled. (NoCard and NoPlays have no rows: their items
+  // are the defaults, so the bits above 2 are 0.)
+  const HubItem& np = h.item[static_cast<int>(HubRow::NotPlayed)];
+  const uint8_t row5 = np.kind == RowKind::Disabled ? 2 : np.line == Line::SinceOnly ? 1 : 0;
+  return static_cast<uint8_t>(static_cast<uint8_t>(h.page.look) |
+                              (h.item[static_cast<int>(HubRow::Week)].kind == RowKind::Status ? 8u : 0u) |
+                              (h.item[static_cast<int>(HubRow::NewFinds)].kind == RowKind::Disabled ? 16u : 0u) |
+                              static_cast<uint8_t>(row5 << 5));
+}
+
+uint16_t lookText(const PageLook& k, const Snapshot* snap) {
+  uint32_t text = 0;
+  switch (k.look) {
+    case Look::Served: text = snap ? snap->version() : 0; break;
+    case Look::Off:
+    case Look::NoPlays: break;
+    default: text = static_cast<uint32_t>(k.line); break;
+  }
+  // (The catalogue's ids are under 8,192; a version 8,192 asks on is the
+  // same text again, never between two passes.)
+  static_assert(uistr::kStrings <= 0x2000, "a line's id in lookText()'s 13 bits");
+  return static_cast<uint16_t>(static_cast<uint32_t>(k.look) | (text & 0x1FFFu) << 3);
+}
+
+uint32_t minuteFrom(uint16_t low, uint32_t nowMin) {
+  uint32_t m = (nowMin & ~0xFFFFu) | low;
+  if (m > nowMin) m = m >= 0x10000u ? m - 0x10000u : 0;
+  return m;
+}
+
 // ---------------------------------------------------------------------------
 // The shelves
 // ---------------------------------------------------------------------------
@@ -314,6 +386,16 @@ bool shelfOfRow(HubRow r, Shelf* out) {
     case HubRow::NotPlayed: *out = Shelf::NotPlayed; return true;
     case HubRow::Recent: *out = Shelf::Recent; return true;
     default: return false;
+  }
+}
+
+S shelfTitle(Shelf s) {
+  switch (s) {
+    case Shelf::MostPlayed: return S::stats_most_played;
+    case Shelf::NewFinds: return S::stats_new_finds;
+    case Shelf::OldFavourites: return S::stats_old_favourites;
+    case Shelf::NotPlayed: return S::stats_not_played;
+    default: return S::stats_recent;
   }
 }
 

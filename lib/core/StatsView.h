@@ -34,7 +34,9 @@
 //     1; no plays), and its fixed bars, kEntryBars.
 //   - The hub (7.4): its six rows by state, grade and phase (open, disabled
 //     with a reason and a toast, the status row with no clock), and the Try
-//     again row after them; the empty state with nothing played.
+//     again row after them; the empty state with nothing played; how each
+//     row takes a touch, its title, the header's line, and the shape and
+//     texts a page polls to know it must draw again (S9).
 //   - The shelves (7.6): ids, the tray by counting days and the rank's RCNT
 //     mark (rcntShort()), trayCellAt() with filtergrid::skew(), the kept
 //     window's fallback, Not played yet's own state (its bits, its lean
@@ -212,13 +214,23 @@ enum class EntryLine : uint8_t {
   Empty,     // nothing played: stats.entry_empty
   Since,     // the lifetime line, stats.since: "74 h 10 min since 1 Sep"
   Time,      // the time alone (wider than kEntryRoom, or no first day)
+  Unread,    // the stats off since the row was latched: stats.unread (A20)
 };
 // A text's width in px (the firmware's Small font; the host's tests' VLW).
 using WidthFn = int (*)(const char* text, void* ctx);
 // The row's line into `out` and its kind: no plays (call 1); the lifetime
 // line when the first day is set and it fits kEntryRoom by `width`, else
-// the time alone.
+// the time alone. With the stats off, stats.unread: never at enter() (the
+// row is absent then: entryDue()), only for a row latched while the boot's
+// fold ran that ended with the stats off (stats.bin or its base unread, a
+// newer major, no memory for the fold: A20). The row stays, since taking
+// it away would move every artist by 42 px.
 EntryLine entryLine(const Lifetime& l, WidthFn width, void* ctx, char* out, size_t size);
+// The latched row's line is drawn again in place at the boot fold's end
+// (7.3, 7.10: refreshTopRow), and only then: drawn while folding (Counting)
+// and the fold over now. A later fold doesn't move it (its line is as of
+// enter()).
+constexpr bool entryFoldEnded(EntryLine drawn, bool folding) { return drawn == EntryLine::Counting && !folding; }
 // "74 h 10 min" (format.hours_minutes, the hours grouped, the minutes
 // unpadded); under an hour "45 min" (format.minutes): 4.1's times.
 size_t timeText(uint64_t ms, char* out, size_t size);
@@ -272,6 +284,59 @@ struct HubLook {
 //     RAM reasons (Opens 6 Dec, Needs dates, the status row's two lines);
 //   - Retry: a Try again row at index 6 (also with the status row in row 1).
 HubLook hubLook(const Lifetime& l, const PhaseInfo& p, const Snapshot* snap);
+// A hub row's title (7.4): its name (stats.last7 ... stats.recent); the
+// status row's stats.no_dates (Small AMBER, over stats.clock_fix); Try
+// again's empty.try_again.
+S hubTitle(const HubItem& it);
+// How a hub row takes a touch (7.4, 4.5, D13: ListView::Source's
+// pressable(), inert() and holds(), a table by its kind):
+//   - Open: pressable, a tick and its page; no hold (a long press ends as a
+//     tap);
+//   - Disabled: inert, no press look and no tick; a tap with the list still
+//     at the Down gives the double buzz and the row's toast (a touch that
+//     stopped a moving list does nothing: ListView's);
+//   - Status: nothing at all, no press, no buzz (D13, as Pages.h's
+//     Output > About's rows of text);
+//   - TryAgain: pressable, the row's tick and the ask; no hold.
+struct Control {
+  bool pressable = false;
+  bool inert = false;
+  bool holds = false;
+};
+Control controlOf(RowKind k);
+// The hub's header line under its title (7.4: the lifetime one, RAM): none
+// while the boot's fold runs (A19: HEAD partial), with nothing played (7.5:
+// the title alone) or with the stats off.
+bool hubSubDue(const Lifetime& l);
+// The hub can be shown (4.4: not with the stats off, behind the update's
+// fence, nor over uil's synthetic library): console uiSh's refusal. (The
+// card out still shows it, its No card line.)
+bool hubReachable(const Lifetime& l, bool indexReady, bool synthetic);
+// What the hub draws, as a byte: its look (which gives its row count: 0, 6,
+// or 7 with Try again; and its open rows' line kind) and each row's kind
+// and line kind as the lifetime makes them (the status row, rows 3-4
+// disabled, row 5 open, since-only or disabled). Two looks with the same
+// shape differ only in their texts (the phase's line, a reason, the data),
+// which move with the version (StatsLists' news). A page polls it each pass
+// (RAM): a change no news brings (the card back: No card's line to Try
+// again; a play counted on the empty hub; the stats off; the clock set; a
+// day that opens rows 3-5) restages it, so no row drawn later disagrees
+// with those on screen.
+uint8_t hubShape(const HubLook& h);
+// ... and the texts a look draws, as a u16, exact: the look (3 bits) and
+// its line's id (Pending's phase line, a reason, the No card line, a
+// closed shelf's), or, served, the snapshot's version (its ask's: a new
+// ask's rows and lines). Off and NoPlays draw no line: their look alone.
+// With the shape it says whether a page's picture moved: the stats' news
+// (a phase, a landing, a release) restages a page only when one of the two
+// did, so the landing's two version moves (the landing, then Ready) draw
+// it once. (The snapshot's lines read RAM's lifetime too: the minute's own
+// rule redraws row 6; the rest moves with the shape or at the next enter().)
+uint16_t lookText(const PageLook& k, const Snapshot* snap);
+// The full minute a row was drawn at from its low 16 bits (a page keeps
+// those: LibraryPage's u16), at or before `nowMin`: exact while under 65,536
+// minutes (45 days) have passed, as each pass's look does.
+uint32_t minuteFrom(uint16_t low, uint32_t nowMin);
 
 // ---------------------------------------------------------------------------
 // The shelves (7.6)
@@ -290,6 +355,8 @@ uint8_t windowOf(uint32_t id);  // Most played's (past All time: All time); the 
 bool shelfOfRow(HubRow r, Shelf* out);
 // The snapshot's list for a shelf (Not played yet: none, statsrank::kLists).
 statsrank::List listOf(Shelf s, uint8_t window);
+// A shelf's title (its header, 7.6): its hub row's.
+S shelfTitle(Shelf s);
 
 // The tray (Most played's lead item: 7.6, 7.9). Its cells, in a 300 x 28
 // CARD tray at (6, 7), 2 px in from its ends and 4 px apart: three of 96 px

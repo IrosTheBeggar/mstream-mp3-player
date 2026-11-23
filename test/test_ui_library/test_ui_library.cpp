@@ -5227,6 +5227,13 @@ void test_stats_phase_lines_fit() {
     fits(title, tr(S::stats_empty_title), kEmptyTitleW);
     fits(small, tr(statstext::emptyRule(f, kEmptyLineW)), kEmptyLineW);
     fits(small, tr(S::stats_empty_card), kEmptyLineW);
+    // The empty state's two lines joined ("rule\ncard": EmptyState::lines)
+    // whole in the page's 160-byte buffer (S9: LibraryPage's headerPath_,
+    // which the hub's header doesn't use).
+    char joined[160];
+    const int n = snprintf(joined, sizeof(joined), "%s\n%s", tr(statstext::emptyRule(f, kEmptyLineW)),
+                           tr(S::stats_empty_card));
+    TEST_ASSERT_TRUE_MESSAGE(n > 0 && static_cast<size_t>(n) < sizeof(joined), uistr::tag(l));
   }
   TEST_MESSAGE(report.c_str());
   uistr::setLang(uistr::Lang::En);

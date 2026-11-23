@@ -33,6 +33,13 @@ enum class PageKind : uint8_t {
   DeviceInfo,  // About's Device info (the board, chips, memory, uptime)
   Language,    // Output > Language: the ten languages (id kFirstBootPicker: the first boot's)
   AutoDj,      // Output > Auto DJ: its switch, settings and status (the engine design's 5.1)
+  // The listening stats' pages (docs/LISTENING-STATS.md 7.1), all three the
+  // LibraryPage's (Ui::pageFor()): the hub (id 0), a shelf (id: shelf * 4 +
+  // window, statsview::shelfId()), Last 7 days. lib/core's statsview names
+  // them 15-17 (Ui.cpp checks it).
+  StatsHub,
+  StatsShelf,
+  StatsWeek,
 };
 // PageRef::id of the Language page shown as a fresh unit's first screen
 // (no back arrow; a pick goes on to the touch check and the tips).

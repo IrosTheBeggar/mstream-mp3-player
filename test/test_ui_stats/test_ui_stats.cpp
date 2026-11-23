@@ -70,6 +70,20 @@
 //   and the stat value's segments in English, Polish, Japanese and Chinese
 //   (numbers apart from words), with their width.
 // The texts' widths in every language are test_ui_library's (S6).
+// And the hub as ui's LibraryPage draws and touches it (S3b's S9):
+// - each row kind's touch (pressable, inert, held: ListView::Source's
+//   hooks, a table), the rows' titles, a shelf's title;
+// - the header's lifetime line by state (none while folding or with
+//   nothing played), uiSh's reach;
+// - the shape and texts a page polls: they move with the rows' kinds and
+//   count (the card back, the clock, the month) and with the phase's line,
+//   a reason or a new ask's snapshot, never with an unchanged look;
+// - each row's line from a made-up snapshot through a title table (the
+//   top three, the uncapped counts, the newest title and how long ago);
+// - a new minute: when "25 min ago" moves, and the minute from its low
+//   16 bits;
+// - the latched entry row at the boot fold's end (A20: "Couldn't read the
+//   stats" with the stats off since).
 // Run: pio test -e native -f test_ui_stats
 #include <unity.h>
 
@@ -2175,6 +2189,356 @@ void test_the_stat_value_s_segments() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// S3b's S9: the hub as the page draws and touches it, the entry row's fold
+// ---------------------------------------------------------------------------
+namespace {
+
+// The host's titles: "T<id>" (the card's catalog on the device).
+size_t tableTitle(uint16_t id, char* out, size_t size, void* ctx) {
+  ++*static_cast<int*>(ctx);
+  const int n = std::snprintf(out, size, "T%u", static_cast<unsigned>(id));
+  return n < 0 ? 0 : static_cast<size_t>(n) < size ? static_cast<size_t>(n) : size - 1;
+}
+
+}  // namespace
+
+// The hub's rows by kind: pressable, inert, held (ListView::Source's three
+// hooks), and the titles each row draws.
+void test_the_hub_rows_take_a_touch() {
+  const Control open = controlOf(RowKind::Open), off = controlOf(RowKind::Disabled),
+                status = controlOf(RowKind::Status), retry = controlOf(RowKind::TryAgain);
+  // Open: a tick and its page; Try again: a tick and the ask. No holds.
+  TEST_ASSERT_TRUE(open.pressable && !open.inert && !open.holds);
+  TEST_ASSERT_TRUE(retry.pressable && !retry.inert && !retry.holds);
+  // Disabled: inert (the buzz and the toast, no press look, no tick).
+  TEST_ASSERT_TRUE(!off.pressable && off.inert && !off.holds);
+  // The status row: nothing at all (D13: no press, no buzz).
+  TEST_ASSERT_TRUE(!status.pressable && !status.inert && !status.holds);
+  // As the looks give them: no clock (the status row, rows 3-4 disabled), a
+  // Retry's row 7.
+  const HubLook nc = hubLook(noClock(), phase(Phase::NoRoom, Outcome::NoRoom), nullptr);
+  TEST_ASSERT_EQUAL_UINT32(7, nc.rows);
+  TEST_ASSERT_FALSE(controlOf(nc.item[0].kind).pressable || controlOf(nc.item[0].kind).inert);
+  TEST_ASSERT_TRUE(controlOf(nc.item[2].kind).inert && controlOf(nc.item[3].kind).inert);
+  TEST_ASSERT_TRUE(controlOf(nc.item[1].kind).pressable && controlOf(nc.item[5].kind).pressable);
+  TEST_ASSERT_TRUE(controlOf(nc.item[6].kind).pressable);
+  for (uint32_t i = 0; i < nc.rows; ++i) TEST_ASSERT_FALSE(controlOf(nc.item[i].kind).holds);
+
+  // The titles: each row's name; the status row's "No dates yet: ...";
+  // Try again's.
+  const HubLook h = hubLook(dated(), phase(Phase::Unread, Outcome::Io), nullptr);
+  const S names[] = {S::stats_last7, S::stats_most_played, S::stats_new_finds, S::stats_old_favourites,
+                     S::stats_not_played, S::stats_recent, S::empty_try_again};
+  TEST_ASSERT_EQUAL_UINT32(7, h.rows);
+  for (uint32_t i = 0; i < h.rows; ++i)
+    TEST_ASSERT_EQUAL(static_cast<int>(names[i]), static_cast<int>(hubTitle(h.item[i])));
+  TEST_ASSERT_EQUAL(static_cast<int>(S::stats_no_dates), static_cast<int>(hubTitle(nc.item[0])));
+  // A shelf's title is its hub row's.
+  for (uint32_t s = 0; s < kShelves; ++s) {
+    Shelf from;
+    TEST_ASSERT_TRUE(shelfOfRow(static_cast<HubRow>(s + 1), &from));
+    TEST_ASSERT_EQUAL(static_cast<int>(names[s + 1]), static_cast<int>(shelfTitle(from)));
+  }
+}
+
+// The header line, the hub's reach (uiSh's refusal), and the shape a page
+// polls: it moves with the rows' kinds and count, never with a text alone.
+void test_the_hub_s_sub_reach_and_shape() {
+  // The sub: from RAM, in every state but Off, Folding and Empty.
+  Lifetime l = dated();
+  TEST_ASSERT_TRUE(hubSubDue(l));
+  TEST_ASSERT_TRUE(hubSubDue(dated(5)));
+  TEST_ASSERT_TRUE(hubSubDue(noClock()));
+  l.cardIn = false;
+  TEST_ASSERT_TRUE(hubSubDue(l));  // (No card: the lifetime is RAM's)
+  l = dated();
+  l.folding = true;
+  TEST_ASSERT_FALSE(hubSubDue(l));  // A19
+  l = dated();
+  l.plays = 0;
+  TEST_ASSERT_FALSE(hubSubDue(l));  // 7.5: the title alone
+  l = dated();
+  l.on = false;
+  TEST_ASSERT_FALSE(hubSubDue(l));
+  // Reachable: not Off, an index, not the synthetic library; the card out
+  // and nothing played still show it.
+  TEST_ASSERT_TRUE(hubReachable(dated(), true, false));
+  TEST_ASSERT_FALSE(hubReachable(dated(), false, false));
+  TEST_ASSERT_FALSE(hubReachable(dated(), true, true));
+  TEST_ASSERT_FALSE(hubReachable(l, true, false));
+  l = dated();
+  l.cardIn = false;
+  TEST_ASSERT_TRUE(hubReachable(l, true, false));
+  l = dated();
+  l.plays = 0;
+  TEST_ASSERT_TRUE(hubReachable(l, true, false));
+
+  // The shape: one byte per structure.
+  Snap full, lists, nc, ss;
+  put(full, fullCard());
+  sv::MadeUp lm = fullCard();
+  lm.grade = sv::Grade::Lists;
+  lm.notPlayedEvery = 0;
+  put(lists, lm);
+  MadeUpView v3;
+  TEST_ASSERT_TRUE(madeUpView(3, kStamp, kTracks, kAlbums, &v3));
+  put(nc, v3.spec);
+  sv::MadeUp shortSpan = v3.spec;
+  shortSpan.firstDay = 290;
+  shortSpan.newestDay = 318;
+  put(ss, shortSpan);
+  Lifetime out = dated();
+  out.cardIn = false;
+  Lifetime empty = dated();
+  empty.plays = 0;
+  Lifetime off = dated();
+  off.on = false;
+  const PhaseInfo away = phase(Phase::NoCard, Outcome::CardAway, sv::kWhyCard);
+  const HubLook looks[] = {
+      hubLook(dated(), kReady, full.s()),                               // served
+      hubLook(dated(), kReady, lists.s()),                              // row 5 since-only
+      hubLook(dated(), phase(Phase::Working), nullptr),                 // pending
+      hubLook(dated(), phase(Phase::NoRoom, Outcome::NoRoom), nullptr), // Try again
+      hubLook(out, away, nullptr),                                      // the card out
+      hubLook(dated(), away, nullptr),                                  // ... back: Try again, card_back
+      hubLook(empty, phase(Phase::Idle), nullptr),                      // nothing played
+      hubLook(off, phase(Phase::Idle), nullptr),                        // off
+      hubLook(dated(5), kReady, full.s()),                              // the first month, served
+      hubLook(dated(5), phase(Phase::Working), nullptr),                // ... pending
+      hubLook(noClock(), phase(Phase::Working), nullptr),               // no clock, pending
+      hubLook(noClock(), kReady, nc.s()),                               // ... DAYS 30 on: row 5 open
+      hubLook(noClock(), kReady, ss.s()),                               // ... DAYS 29: row 5 disabled
+  };
+  const size_t n = sizeof(looks) / sizeof(looks[0]);
+  for (size_t i = 0; i < n; ++i)
+    for (size_t j = i + 1; j < n; ++j) {
+      // The card coming back moves it (No card's line to Try again), as a
+      // Retry's other reasons don't (index 3 against 5 differ by look:
+      // Retry against NoCard's; 3 and 5 are both Retry, the same shape).
+      if (i == 3 && j == 5) {
+        TEST_ASSERT_EQUAL_UINT8(hubShape(looks[i]), hubShape(looks[j]));
+        continue;
+      }
+      char msg[32];
+      std::snprintf(msg, sizeof(msg), "looks %u and %u", static_cast<unsigned>(i), static_cast<unsigned>(j));
+      TEST_ASSERT_NOT_EQUAL_MESSAGE(hubShape(looks[i]), hubShape(looks[j]), msg);
+    }
+  TEST_ASSERT_NOT_EQUAL(hubShape(looks[4]), hubShape(looks[5]));  // the card back restages
+  // A text alone doesn't move it: Working against Waiting, one Retry
+  // reason against another, a served snapshot against another's data.
+  TEST_ASSERT_EQUAL_UINT8(hubShape(hubLook(dated(), phase(Phase::Working), nullptr)),
+                          hubShape(hubLook(dated(), phase(Phase::Waiting), nullptr)));
+  TEST_ASSERT_EQUAL_UINT8(hubShape(hubLook(dated(), phase(Phase::NoRoom, Outcome::NoRoom), nullptr)),
+                          hubShape(hubLook(dated(), phase(Phase::Unread, Outcome::Io), nullptr)));
+  TEST_ASSERT_EQUAL_UINT8(hubShape(hubLook(dated(), kReady, full.s())),
+                          hubShape(hubLook(dated(), kReady, nc.s())));
+  // The day that ends the first month moves it (rows 3-5 open).
+  TEST_ASSERT_NOT_EQUAL(hubShape(hubLook(dated(29), kReady, full.s())),
+                        hubShape(hubLook(dated(30), kReady, full.s())));
+
+  // The texts: the phase's line, a reason, the No card line, a served
+  // snapshot's version; the same look and line, the same.
+  auto text = [&](const Lifetime& lt, const PhaseInfo& p, const sv::Snapshot* snap) {
+    return lookText(hubLook(lt, p, snap).page, snap);
+  };
+  const uint16_t working = text(dated(), phase(Phase::Working), nullptr);
+  TEST_ASSERT_EQUAL_UINT16(working, text(dated(), phase(Phase::Idle), nullptr));  // (Idle reads Working's line)
+  TEST_ASSERT_EQUAL_UINT16(working, text(dated(5), phase(Phase::Working), nullptr));  // (rows' kinds: the shape's)
+  TEST_ASSERT_NOT_EQUAL(working, text(dated(), phase(Phase::Waiting), nullptr));
+  const uint16_t noRoom = text(dated(), phase(Phase::NoRoom, Outcome::NoRoom), nullptr);
+  TEST_ASSERT_NOT_EQUAL(noRoom, text(dated(), phase(Phase::Unread, Outcome::Io), nullptr));
+  TEST_ASSERT_NOT_EQUAL(noRoom, text(dated(), away, nullptr));  // card_back
+  TEST_ASSERT_NOT_EQUAL(noRoom, working);
+  TEST_ASSERT_NOT_EQUAL(text(out, away, nullptr), text(dated(), away, nullptr));  // the card out, back
+  // Served: by the snapshot's version (a new ask's rows), not the phase.
+  sv::MadeUp v2 = fullCard();
+  v2.version = 2;
+  Snap next;
+  put(next, v2);
+  TEST_ASSERT_EQUAL_UINT32(1, full->version());
+  TEST_ASSERT_EQUAL_UINT32(2, next->version());
+  const uint16_t served = text(dated(), kReady, full.s());
+  TEST_ASSERT_EQUAL_UINT16(served, text(dated(), phase(Phase::Working), full.s()));  // (a lean ask under way: served)
+  TEST_ASSERT_NOT_EQUAL(served, text(dated(), kReady, next.s()));
+  TEST_ASSERT_NOT_EQUAL(served, working);
+  // Off and nothing played: their look alone, whatever the line says.
+  PageLook k;
+  k.look = Look::Off;
+  k.line = S::stats_waiting;
+  const uint16_t offText = lookText(k, nullptr);
+  k.line = S::stats_counting;
+  TEST_ASSERT_EQUAL_UINT16(offText, lookText(k, full.s()));
+  k.look = Look::NoPlays;
+  TEST_ASSERT_NOT_EQUAL(offText, lookText(k, nullptr));
+}
+
+// Each hub row's line from a made-up snapshot, the phase's line, a reason,
+// the status row's second line; nothing without a snapshot.
+void test_the_hub_s_lines() {
+  namespace st = statstext;
+  int px = 6;
+  const textfit::Font f = mono(&px);
+  Snap full;
+  put(full, fullCard());
+  const sv::Snapshot& s = *full.s();
+  const Lifetime l = dated();
+  int asked = 0;
+  char b[160], want[160];
+  HubLook h = hubLook(l, kReady, &s);
+  auto line = [&](uint32_t i) { return st::hubLine(h.item[i], l, &s, f, tableTitle, &asked, b, sizeof(b)); };
+  // Last 7 days: the frames' week.
+  line(0);
+  TEST_ASSERT_EQUAL_STRING("7 h 37 min" DOT "118 plays", b);
+  // Most played: the All time top three's titles, by the snapshot's ids.
+  asked = 0;
+  line(1);
+  std::snprintf(want, sizeof(want), "T%u" DOT "T%u" DOT "T%u", static_cast<unsigned>(s.rowAt(sr::kMostAll, 0).id),
+                static_cast<unsigned>(s.rowAt(sr::kMostAll, 1).id), static_cast<unsigned>(s.rowAt(sr::kMostAll, 2).id));
+  TEST_ASSERT_EQUAL_STRING(want, b);
+  TEST_ASSERT_EQUAL_INT(3, asked);
+  // New finds and Old favourites: the totals (the shelves' rows are 23 and
+  // 41 there, their totals the same: fullCard()'s).
+  line(2);
+  std::snprintf(want, sizeof(want), "%u tracks first heard in 30 days", static_cast<unsigned>(s.total(sr::kNewFinds)));
+  TEST_ASSERT_EQUAL_STRING(want, b);
+  line(3);
+  std::snprintf(want, sizeof(want), "%u tracks, played often, not lately",
+                static_cast<unsigned>(s.total(sr::kOldFavourites)));
+  TEST_ASSERT_EQUAL_STRING(want, b);
+  // Not played yet: its albums since the snapshot's first day.
+  line(4);
+  std::snprintf(want, sizeof(want), "%u albums since 1 Sep", static_cast<unsigned>(s.notPlayedCount()));
+  TEST_ASSERT_EQUAL_STRING(want, b);
+  // Recently played: the newest title, 25 min ago at the lifetime's now.
+  asked = 0;
+  line(5);
+  std::snprintf(want, sizeof(want), "T%u" DOT "25 min ago", static_cast<unsigned>(s.rowAt(sr::kRecent, 0).id));
+  TEST_ASSERT_EQUAL_STRING(want, b);
+  TEST_ASSERT_EQUAL_INT(1, asked);
+  // ... an hour on, "1 h ago"; the clock unset since, the title alone.
+  Lifetime later = l;
+  later.nowMin += 60;
+  st::hubLine(h.item[5], later, &s, f, tableTitle, &asked, b, sizeof(b));
+  std::snprintf(want, sizeof(want), "T%u" DOT "1 h ago", static_cast<unsigned>(s.rowAt(sr::kRecent, 0).id));
+  TEST_ASSERT_EQUAL_STRING(want, b);
+  st::hubLine(h.item[5], noClock(), &s, f, tableTitle, &asked, b, sizeof(b));
+  std::snprintf(want, sizeof(want), "T%u", static_cast<unsigned>(s.rowAt(sr::kRecent, 0).id));
+  TEST_ASSERT_EQUAL_STRING(want, b);
+  // Data with no snapshot: nothing (a draw before the landing never reads
+  // one: the look is Pending then, but the line guards it too).
+  TEST_ASSERT_EQUAL_UINT32(0, st::hubLine(h.item[0], l, nullptr, f, tableTitle, &asked, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("", b);
+  // No title function: the join of nothing.
+  st::hubLine(h.item[5], l, &s, f, nullptr, nullptr, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("25 min ago", b);
+
+  // Not played yet before its count: "since 1 Sep".
+  Snap ls;
+  sv::MadeUp lm = fullCard();
+  lm.grade = sv::Grade::Lists;
+  lm.notPlayedEvery = 0;
+  put(ls, lm);
+  h = hubLook(l, kReady, ls.s());
+  st::hubLine(h.item[4], l, ls.s(), f, tableTitle, &asked, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("since 1 Sep", b);
+  // Pending: the phase's line on every open row.
+  h = hubLook(l, phase(Phase::Waiting), nullptr);
+  for (uint32_t i = 0; i < h.rows; ++i) {
+    st::hubLine(h.item[i], l, nullptr, f, tableTitle, &asked, b, sizeof(b));
+    TEST_ASSERT_EQUAL_STRING(uistr::tr(S::stats_waiting), b);
+  }
+  // Try again's reason, and a Retry's open rows: no line.
+  h = hubLook(l, phase(Phase::NoRoom, Outcome::NoRoom), nullptr);
+  st::hubLine(h.item[6], l, nullptr, f, tableTitle, &asked, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING(uistr::tr(S::stats_no_room), b);
+  TEST_ASSERT_EQUAL_UINT32(0, st::hubLine(h.item[1], l, nullptr, f, tableTitle, &asked, b, sizeof(b)));
+  // The first month: "Opens 6 Dec, after a month of plays" in 250 (35
+  // characters: 210 px at 6), its short form at 8 px.
+  const Lifetime early = dated(5);
+  h = hubLook(early, phase(Phase::Working), nullptr);
+  st::hubLine(h.item[2], early, nullptr, f, tableTitle, &asked, b, sizeof(b));
+  char day[32];
+  dayMonthText(opensDay(early), day, sizeof(day));
+  std::snprintf(want, sizeof(want), "Opens %s, after a month of plays", day);
+  TEST_ASSERT_EQUAL_STRING(want, b);
+  px = 8;
+  st::hubLine(h.item[2], early, nullptr, f, tableTitle, &asked, b, sizeof(b));
+  std::snprintf(want, sizeof(want), "Opens on %s", day);
+  TEST_ASSERT_EQUAL_STRING(want, b);
+  px = 6;
+  // No clock: the status row's second line; the disabled rows' "Needs
+  // dates".
+  h = hubLook(noClock(), phase(Phase::Working), nullptr);
+  st::hubLine(h.item[0], noClock(), nullptr, f, tableTitle, &asked, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING(uistr::tr(S::stats_clock_fix), b);
+  st::hubLine(h.item[2], noClock(), nullptr, f, tableTitle, &asked, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING(uistr::tr(S::stats_needs_dates), b);
+  // A snapshot with no Recently played rows: none.
+  sv::MadeUp none = fullCard();
+  none.rows[sr::kRecent] = 0;
+  none.totals[sr::kRecent] = 0;
+  none.earlierRows = 0;
+  Snap e;
+  put(e, none);
+  h = hubLook(l, kReady, e.s());
+  TEST_ASSERT_EQUAL_UINT32(0, e->rows(sr::kRecent));
+  TEST_ASSERT_EQUAL_UINT32(0, st::hubLine(h.item[5], l, e.s(), f, tableTitle, &asked, b, sizeof(b)));
+}
+
+// A new minute: when a row's "25 min ago" moves, and the minute a page
+// drew at from its low 16 bits.
+void test_a_new_minute() {
+  namespace st = statstext;
+  const uint32_t when = kToday * 1440u + 600;
+  TEST_ASSERT_FALSE(st::agoMoved(when + 25, when + 25, when));
+  TEST_ASSERT_TRUE(st::agoMoved(when + 25, when + 26, when));   // 25 to 26 min
+  TEST_ASSERT_FALSE(st::agoMoved(when, when + 1, when));        // "1 min ago" both (0 s reads a minute)
+  TEST_ASSERT_TRUE(st::agoMoved(when + 59, when + 60, when));   // 59 min to 1 h
+  TEST_ASSERT_FALSE(st::agoMoved(when + 120, when + 179, when));  // 2 h all that hour
+  TEST_ASSERT_TRUE(st::agoMoved(when + 179, when + 180, when));
+  TEST_ASSERT_TRUE(st::agoMoved(when + 1439, when + 1440, when));  // 23 h to none
+  TEST_ASSERT_FALSE(st::agoMoved(when + 1440, when + 5000, when));
+  TEST_ASSERT_TRUE(st::agoMoved(when + 30, when + 300, when));   // minutes skipped (the dark): moved
+  TEST_ASSERT_FALSE(st::agoMoved(when + 1, when + 2, sv::kWhenSession));
+  TEST_ASSERT_FALSE(st::agoMoved(when + 1, when + 2, sv::kWhenEarlier));
+  TEST_ASSERT_FALSE(st::agoMoved(when - 5, when - 4, when));  // after now (a clock set back): none either way
+  // The minute from its low bits, at or before now.
+  for (uint32_t now : {0u, 5u, 65535u, 65536u, 65540u, 1000000u, kToday * 1440u + 1300u, 0xFFFFFFF0u}) {
+    for (uint32_t back : {0u, 1u, 59u, 1440u, 65535u}) {
+      if (back > now) continue;
+      const uint32_t was = now - back;
+      TEST_ASSERT_EQUAL_UINT32(was, minuteFrom(static_cast<uint16_t>(was), now));
+    }
+  }
+  TEST_ASSERT_EQUAL_UINT32(0, minuteFrom(10, 5));  // (low bits past a now under 65,536: none earlier)
+}
+
+// The latched entry row at the boot fold's end (A20): the lifetime line,
+// nothing played, or "Couldn't read the stats" with the stats off since.
+void test_the_entry_row_at_the_fold_s_end() {
+  char b[96];
+  int px = 6;
+  Lifetime l = dated();
+  l.folding = true;
+  TEST_ASSERT_EQUAL(EntryLine::Counting, entryLine(l, monoWidth, &px, b, sizeof(b)));
+  TEST_ASSERT_FALSE(entryFoldEnded(EntryLine::Counting, true));
+  TEST_ASSERT_TRUE(entryFoldEnded(EntryLine::Counting, false));
+  for (EntryLine e : {EntryLine::Empty, EntryLine::Since, EntryLine::Time, EntryLine::Unread}) {
+    TEST_ASSERT_FALSE(entryFoldEnded(e, false));  // a later fold doesn't move it
+    TEST_ASSERT_FALSE(entryFoldEnded(e, true));
+  }
+  l.folding = false;
+  TEST_ASSERT_EQUAL(EntryLine::Since, entryLine(l, monoWidth, &px, b, sizeof(b)));
+  l.plays = 0;
+  TEST_ASSERT_EQUAL(EntryLine::Empty, entryLine(l, monoWidth, &px, b, sizeof(b)));
+  l = dated();
+  l.on = false;
+  TEST_ASSERT_EQUAL(EntryLine::Unread, entryLine(l, monoWidth, &px, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING(uistr::tr(S::stats_unread), b);
+  TEST_ASSERT_FALSE(entryDue(l, true, false, 1));  // (never at an enter(): absent then)
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_the_states_of_the_lifetime);
@@ -2200,5 +2564,10 @@ int main(int, char**) {
   RUN_TEST(test_day_labels);
   RUN_TEST(test_the_week_texts);
   RUN_TEST(test_the_stat_value_s_segments);
+  RUN_TEST(test_the_hub_rows_take_a_touch);
+  RUN_TEST(test_the_hub_s_sub_reach_and_shape);
+  RUN_TEST(test_the_hub_s_lines);
+  RUN_TEST(test_a_new_minute);
+  RUN_TEST(test_the_entry_row_at_the_fold_s_end);
   return UNITY_END();
 }

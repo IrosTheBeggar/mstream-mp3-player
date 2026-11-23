@@ -25,7 +25,9 @@
 //     fit), Old favourites' (the count alone when it doesn't), both the
 //     snapshot's totals (4.2), Not played yet's albums since the first day
 //     (or that day alone), Recently played's newest title and how long ago;
-//     a disabled row's "Opens 6 Dec" (its short form) and the toasts.
+//     a disabled row's "Opens 6 Dec" (its short form) and the toasts; and
+//     each row's line as StatsView's hub look says (hubLine(), S9), and
+//     whether a new minute moved a "25 min ago" (agoMoved()).
 //   - The shelves (7.6): their header lines, the tray's labels, and a
 //     ranked row's line, "artist cut, count kept": the parts after the
 //     artist (the plays, who found it, its last day, how long ago) are
@@ -80,6 +82,11 @@ constexpr int kMinNameW = 32;
 // clock set back: no claim). Returns the bytes; 0 and "" for none.
 constexpr uint32_t kDayMin = 1440;
 size_t agoText(uint32_t nowMin, uint32_t whenMin, char* out, size_t size);
+// A new minute moved a row's "25 min ago" (7.10's "A new minute": its line
+// drawn again in place): agoText() at `wasMin`, when it was drawn, and at
+// `nowMin` differ. Under an hour each minute does; "2 h ago" moves once an
+// hour; at 24 h the time goes (the name alone); an undated row never moves.
+bool agoMoved(uint32_t wasMin, uint32_t nowMin, uint32_t whenMin);
 
 // ---------------------------------------------------------------------------
 // Days (8.2): UTC days, 0 being 2026-01-01 (a Thursday)
@@ -163,6 +170,33 @@ size_t toastText(S toast, uint16_t opensDay, char* out, size_t size);
 // The empty state's first line (7.5): stats.empty_rule when it fits `maxW`
 // px of `f` (its room, uitext::kEmptyLineW), else stats.empty_rule_short.
 S emptyRule(const textfit::Font& f, int maxW);
+
+// A track's title by its id into `out` ("" for none: an id past the index,
+// or statsvisit::kNoRow), cut to `size`: the card's catalog on the device
+// (ui's LibraryPage), a table in the host's tests.
+using TitleFn = size_t (*)(uint16_t id, char* out, size_t size, void* ctx);
+// A hub row's line (7.4) as StatsView's HubItem says, in `f` (Small):
+//   - Line::None: "";
+//   - Line::Text: its text as it is (the phase's line, a reason, Try
+//     again's reason);
+//   - Line::Warming: warmingLine() of opensDay() in kReasonW (a disabled
+//     row: no chevron);
+//   - Line::Status: the status row's second line, stats.clock_fix (its
+//     first is its title: hubTitle());
+//   - Line::SinceOnly: sinceOnlyLine() of the snapshot's first day (the
+//     lifetime's with none);
+//   - Line::Data, the snapshot's (none without one), in kHubLineW: Last 7
+//     days' weekLine() of its 7 days; Most played's All time top three
+//     titles (topThreeLine()); New finds' and Old favourites' counts
+//     (hubCount(): the uncapped total); Not played yet's albums since the
+//     first day; Recently played's newest title and how long ago at the
+//     lifetime's nowMin (no time for an undated row, or an undated
+//     snapshot), none with no rows.
+// The titles come from `title` (three on the stack at most, kTitleBytes
+// each: cut there, as the room cuts the join anyway).
+constexpr size_t kTitleBytes = 48;
+size_t hubLine(const statsview::HubItem& it, const statsview::Lifetime& l, const statsvisit::Snapshot* snap,
+               const textfit::Font& f, TitleFn title, void* ctx, char* out, size_t size);
 
 // ---------------------------------------------------------------------------
 // The shelves (7.6)

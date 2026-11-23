@@ -86,6 +86,14 @@ size_t agoText(uint32_t nowMin, uint32_t whenMin, char* out, size_t size) {
   return uistr::trf(out, size, S::stats_ago_h, ago / 60);
 }
 
+bool agoMoved(uint32_t wasMin, uint32_t nowMin, uint32_t whenMin) {
+  if (wasMin == nowMin) return false;
+  char was[48], now[48];
+  agoText(wasMin, whenMin, was, sizeof(was));
+  agoText(nowMin, whenMin, now, sizeof(now));
+  return std::strcmp(was, now) != 0;
+}
+
 // ---------------------------------------------------------------------------
 // Days
 // ---------------------------------------------------------------------------
@@ -243,6 +251,63 @@ size_t toastText(S toast, uint16_t opensDay, char* out, size_t size) {
 S emptyRule(const textfit::Font& f, int maxW) {
   return textfit::drawnWidth(f, uistr::tr(S::stats_empty_rule)) <= maxW ? S::stats_empty_rule
                                                                          : S::stats_empty_rule_short;
+}
+
+namespace {
+
+// The snapshot's data for a hub row (Line::Data), in kHubLineW.
+size_t hubData(statsview::HubRow row, const statsview::Lifetime& l, const sv::Snapshot& s, const textfit::Font& f,
+               TitleFn title, void* ctx, char* out, size_t size) {
+  using statsview::HubRow;
+  auto titleOf = [&](uint16_t id, char* buf, size_t n) {
+    buf[0] = 0;
+    if (title && id != sv::kNoRow) title(id, buf, n, ctx);
+  };
+  switch (row) {
+    case HubRow::Week: {
+      const statsview::WeekFigures w = statsview::weekFigures(s);
+      return weekLine(w.listenedMs, w.plays, out, size);
+    }
+    case HubRow::MostPlayed: {
+      char t[3][kTitleBytes];
+      const char* titles[3] = {t[0], t[1], t[2]};
+      const uint32_t n = s.rows(sr::kMostAll) < 3 ? s.rows(sr::kMostAll) : 3;
+      for (uint32_t i = 0; i < n; ++i) titleOf(s.rowAt(sr::kMostAll, i).id, t[i], sizeof(t[i]));
+      return topThreeLine(f, kHubLineW, titles, n, out, size);
+    }
+    case HubRow::NewFinds: return newFindsLine(f, kHubLineW, hubCount(s, sr::kNewFinds), out, size);
+    case HubRow::OldFavourites: return oldFavouritesLine(f, kHubLineW, hubCount(s, sr::kOldFavourites), out, size);
+    case HubRow::NotPlayed: return notPlayedLine(s.notPlayedCount(), s.sinceDay(), out, size);
+    case HubRow::Recent: {
+      if (s.rows(sr::kRecent) == 0) return 0;
+      const sv::Row r = s.rowAt(sr::kRecent, 0);
+      char t[kTitleBytes];
+      titleOf(r.id, t, sizeof(t));
+      // (A row's "25 min ago" from the snapshot's `when` and now: D10. A
+      // dated row of an undated snapshot has no time: no today to say it.)
+      const bool timed = s.dated() && l.dated && r.when != sv::kWhenSession && r.when != sv::kWhenEarlier;
+      return recentLine(f, kHubLineW, t, timed, l.nowMin, r.when, out, size);
+    }
+    default: return 0;
+  }
+}
+
+}  // namespace
+
+size_t hubLine(const statsview::HubItem& it, const statsview::Lifetime& l, const sv::Snapshot* snap,
+               const textfit::Font& f, TitleFn title, void* ctx, char* out, size_t size) {
+  using statsview::Line;
+  if (!out || size == 0) return 0;
+  out[0] = 0;
+  switch (it.line) {
+    case Line::Text: return uistr::copy(out, size, uistr::tr(it.text));
+    case Line::Warming: return warmingLine(f, kReasonW, statsview::opensDay(l), out, size);
+    case Line::Status: return uistr::copy(out, size, uistr::tr(S::stats_clock_fix));
+    case Line::SinceOnly: return sinceOnlyLine(snap ? snap->sinceDay() : l.sinceDay, out, size);
+    case Line::Data: return snap ? hubData(it.row, l, *snap, f, title, ctx, out, size) : 0;
+    case Line::None: break;
+  }
+  return 0;
 }
 
 // ---------------------------------------------------------------------------

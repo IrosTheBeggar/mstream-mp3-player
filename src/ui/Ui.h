@@ -238,7 +238,8 @@ public:
   uint32_t listFrameMs() const;
   void printState() const;     // ui
   // ui<n>: tab n; uib back; uic the coach cards; uiL<tag> the language
-  // (uiL the list, uiL- forget it and the tips); uiP the first boot's picker.
+  // (uiL the list, uiL- forget it and the tips); uiP the first boot's picker;
+  // uiS the stats pages' state (a dark screen left dark), uiSh their hub.
   void command(const char* a);
 
   // ---- the language ----
@@ -424,6 +425,22 @@ public:
   bool toastUp() const { return toast_.up(); }
   void drawHeader(const Header& h);
 
+  // ---- the listening stats' pages (docs/LISTENING-STATS.md 7.1, 7.11, 9.7) ----
+  // What the pages read, each through one accessor (a made-up view's
+  // lifetime and phase stand in for the host's here: S12): RAM, us.
+  void statsLifetime(statsview::Lifetime& out);
+  void statsPhase(statsview::PhaseInfo& out);
+  // The visit's snapshot once landed (UiHost::statsSnapshot()), only over
+  // the index it was made of (D6: its key, buildStamp and trackCount,
+  // the live index's); else null. Read at each draw and act, never kept.
+  const statsvisit::Snapshot* statsSnapshot() const;
+  // A page's ask (a Try again, an ask due: D9 as replaced): none under a
+  // made-up view (look only, D16). True: queued.
+  bool statsAsk(statsview::UiAsk a);
+  // The held condition as last evaluated (statsview::onStatsPages()): the
+  // snapshot is held exactly while it is true.
+  bool statsHeld() const { return statsHeld_; }
+
 private:
   enum class TouchOn : uint8_t { None, Bar, Toast, Sheet, Volume, Jump, Dialog, Coach, Page, Sleep, Filters };
 
@@ -512,6 +529,31 @@ private:
   // uiM: the Albums filter; uiMa<hex> / uiMa0 sets or clears it; uiMe the
   // editor (docs/MOOD-FILTERS.md 9.3).
   void filtersCommand(const char* a);
+  // ---- the listening stats' pages ----
+  // The held condition (statsview::onStatsPages(): the Library tab shown, a
+  // stats page in its stack, lit, not suspended, not uil's synthetic
+  // library) after a navigation, a tab, the dark or a suspend. Its rising
+  // edge asks the visit (D1: before the page's first draw; D3: none for the
+  // stats off, the card out, nothing played, a made-up view); its falling
+  // edge releases the snapshot (D1: after the stats page's leave(), so its
+  // place is saved first; `why`, its [listen] words).
+  void statsEdge(const char* why);
+  // Closes what reads the snapshot (D4): the Library's sheet and the jump
+  // grid over its list; never a dialog or another's sheet. True: one went.
+  bool statsCloseReaders();
+  // A stats page shown attached again at 0 rows around a release (7.2, D4):
+  // what reads the snapshot closed, leave() (its place saved), the held
+  // condition's edge (`why`: the dark; nullptr: S3a released it already),
+  // enter(). Under a modal that stays (a dialog) nothing is drawn: the page
+  // is drawn whole when it goes.
+  void statsReattach(const char* why);
+  // The stats' news (UiHost::statsNews(), consumed here once a pass): the
+  // stats page shown follows it.
+  void statsNewsPass();
+  // uiS (no wake: the dark's state can be read) and uiSh (the hub, as the
+  // entry row's tap; its push's ms).
+  void statsPrint();
+  void statsCommand(const char* a);
 
   UiHost& host_;
   Input& input_;
@@ -683,6 +725,9 @@ private:
   // A finger on the A-Z rail holds the card worker (listMoving()); off with
   // the scrub's pacing (console uir0: as before 0.12.0, to compare by hand).
   bool railHold_ = true;
+  // The stats pages' held condition as last evaluated (statsEdge()), in the
+  // padding after railHold_ (ui::Ui stays main's 9,416 B: S3b's call 2).
+  bool statsHeld_ = false;
   // The list's current motion, for its "[ui] scroll:" line (a page without
   // a list, Now Playing's seek bar: "[ui] scrub:"; a finger on the A-Z
   // rail: "[ui] rail scrub:", its band frames and its rail-only frames

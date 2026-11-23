@@ -477,8 +477,13 @@ public:
   // offset). `rail`: the thumb was drawn too.
   struct FrameCost {
     enum class Kind : uint8_t { Band, Rail, Piece, Stage };
+    static constexpr uint16_t kNoItem = 0xFFFF, kEmptyLine = 0xFFFE;
     Kind kind = Kind::Band;
     bool rail = false;
+    // A Stage frame's item pushed (kEmptyLine: the empty line), for the
+    // stats pages' log line (D17); kNoItem otherwise. (In the padding after
+    // `rail`: ListView stays 432 B.)
+    uint16_t item = kNoItem;
     uint32_t renders = 0, renderUs = 0;
     uint32_t bandUs = 0;
     uint32_t waitUs = 0;  // of the pass's time, waiting for the frame's window on the panel's scan

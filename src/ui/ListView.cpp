@@ -785,13 +785,17 @@ bool ListView::stageStep() {
     if (stageLead_) {
       stageLead_ = false;
       pushed = pushItemInPlace(0);
+      cost_.item = 0;
     } else if (stageLeft_ > 0) {
       --stageLeft_;
-      pushed = pushItemInPlace(stageNext_++);
+      const uint32_t item = stageNext_++;
+      pushed = pushItemInPlace(item);
+      cost_.item = static_cast<uint16_t>(item < FrameCost::kEmptyLine ? item : FrameCost::kEmptyLine - 1);
     } else {
       stageEmpty_ = false;
       drawEmpty();
       pushed = true;
+      cost_.item = FrameCost::kEmptyLine;
     }
   }
   if (pushed) ++frames_;
