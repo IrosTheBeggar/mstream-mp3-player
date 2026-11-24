@@ -1,7 +1,7 @@
 {
   "@@locale": "de",
   "@@autonym": "Deutsch",
-  "@@note": "German. A machine translation, not yet reviewed by a native speaker. Made from the mobile app's translations (mstream_music, master at bdb174e, lib/l10n/app_de.arb, GPL-3.0) and the terminal player's (mstream-terminal-player, main at b89ad0a, locales/de.yml, GPL-3.0-only; both by this repository's owner) where they had the text or its words: du, „…“, Titel, Album, Künstler, Ordner, Bibliothek, Warteschlange, Abspielen, Als Nächstes, Zufallswiedergabe, Kopfhörer, gekoppelt, Verbinden, Trennen, Vergessen, Akku, Karte, Sleep-Timer, Touch-Kalibrierung, Erneut versuchen, Speichern, Fertig. Translated by a Fable agent (Claude) otherwise, then reviewed by a second Fable agent (meaning against each text's context, terms, grammar and plurals, register, typography, the rooms). Notes in \"@<id>\" say where a shorter word replaced the apps' one for the room. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The Auto DJ texts (October 2026, the engine's UI: toast.autodj_*, now_playing.autodj*, library.autodj_here, empty.autodj, output.autodj*, autodj.*) were made the same way: the mobile app's words for Auto DJ, Anker, Der Stimmung folgen, Ausgangssong, Ähnlichkeitsschwelle, BPM-Kontinuität and Harmonisches Mixen (its autoDj* keys), translated by a Fable agent otherwise, fitted to en.json's rooms (the notes say where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_de.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' Auto DJ text (November 2026, docs/MOOD-FILTERS.md 8.2: autodj.status_waits_fit) was made the same way: the mobile app's autoDjSeedNoMatch and its word for the filters (moodFilters), from mstream_music master at d17c3fa5, fitted to en.json's room, not yet reviewed by a native speaker. The mood filters' Auto DJ page (November 2026, docs/MOOD-FILTERS.md 8, S5): mood.smart_filters, mood.any and mood.no_data are the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_de.arb: autoDjMoodTitle, autoDjAny, autoDjNoMoodData); autodj.smart_sub, autodj.status_fits, autodj.status_coverage_mood, autodj.status_few, autodj.status_few_sub, toast.autodj_few, toast.autodj_no_close, toast.autodj_plays_once, toast.autodj_no_mood and empty.no_track_fits were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjNoMoodData for the mood, autoDjSeedNoMatch, mainSync for a sync), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The screen's touch setting (November 2026, Output > Touch when off and the glance it can show: settings.screen_touch, its three values and their lines, glance.hint; settings.screen_off_sub rewritten, since a touch no longer wakes the screen unless the setting says so) was translated by a Fable agent (Claude), in this file's words for the screen's other settings, fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The listening stats' words (November 2026, docs/LISTENING-STATS.md 8.1: stats.title, stats.plays_n, stats.recent, stats.window_all, stats.days_n, stats.today, stats.yesterday, stats.shelf_empty, stats.listened, stats.plays_label) are the mobile app's from mstream_music at d17c3fa5 (lib/l10n/app_de.arb: its listening* keys and autoDjRecentlyPlayed), as it writes them; stats.empty_title, too wide for its room, is left out (English is drawn) until a shorter form is written. The stats' other texts are English until they are translated.",
+  "@@note": "German. A machine translation, not yet reviewed by a native speaker. Made from the mobile app's translations (mstream_music, master at bdb174e, lib/l10n/app_de.arb, GPL-3.0) and the terminal player's (mstream-terminal-player, main at b89ad0a, locales/de.yml, GPL-3.0-only; both by this repository's owner) where they had the text or its words: du, „…“, Titel, Album, Künstler, Ordner, Bibliothek, Warteschlange, Abspielen, Als Nächstes, Zufallswiedergabe, Kopfhörer, gekoppelt, Verbinden, Trennen, Vergessen, Akku, Karte, Sleep-Timer, Touch-Kalibrierung, Erneut versuchen, Speichern, Fertig. Translated by a Fable agent (Claude) otherwise, then reviewed by a second Fable agent (meaning against each text's context, terms, grammar and plurals, register, typography, the rooms). Notes in \"@<id>\" say where a shorter word replaced the apps' one for the room. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The Auto DJ texts (October 2026, the engine's UI: toast.autodj_*, now_playing.autodj*, library.autodj_here, empty.autodj, output.autodj*, autodj.*) were made the same way: the mobile app's words for Auto DJ, Anker, Der Stimmung folgen, Ausgangssong, Ähnlichkeitsschwelle, BPM-Kontinuität and Harmonisches Mixen (its autoDj* keys), translated by a Fable agent otherwise, fitted to en.json's rooms (the notes say where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_de.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' Auto DJ text (November 2026, docs/MOOD-FILTERS.md 8.2: autodj.status_waits_fit) was made the same way: the mobile app's autoDjSeedNoMatch and its word for the filters (moodFilters), from mstream_music master at d17c3fa5, fitted to en.json's room, not yet reviewed by a native speaker. The mood filters' Auto DJ page (November 2026, docs/MOOD-FILTERS.md 8, S5): mood.smart_filters, mood.any and mood.no_data are the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_de.arb: autoDjMoodTitle, autoDjAny, autoDjNoMoodData); autodj.smart_sub, autodj.status_fits, autodj.status_coverage_mood, autodj.status_few, autodj.status_few_sub, toast.autodj_few, toast.autodj_no_close, toast.autodj_plays_once, toast.autodj_no_mood and empty.no_track_fits were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjNoMoodData for the mood, autoDjSeedNoMatch, mainSync for a sync), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The screen's touch setting (November 2026, Output > Touch when off and the glance it can show: settings.screen_touch, its three values and their lines, glance.hint; settings.screen_off_sub rewritten, since a touch no longer wakes the screen unless the setting says so) was translated by a Fable agent (Claude), in this file's words for the screen's other settings, fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The listening stats' words (November 2026, docs/LISTENING-STATS.md 8.1: stats.title, stats.plays_n, stats.recent, stats.window_all, stats.days_n, stats.today, stats.yesterday, stats.shelf_empty, stats.listened, stats.plays_label) are the mobile app's from mstream_music at d17c3fa5 (lib/l10n/app_de.arb: its listening* keys and autoDjRecentlyPlayed), as it writes them; stats.empty_title, too wide for its room as the app writes it, has a short form (below). The listening stats' other texts (November 2026, docs/LISTENING-STATS.md 8.2: toast.stats_*, the other stats.*, format.day_month, format.weekday_date, format.day_range, format.day_range_month, day.*, month.*) take the mobile app's words from mstream_music at d17c3fa5 where it has them (lib/l10n/app_de.arb: its listening* keys for Wiedergaben, Hören, Sitzung and the day listened to most (listeningMostOnDay), listeningEmptyDevice, discoverPageTitle for Entdecken, songInfoLastPlayed for zuletzt) and the terminal player's from mstream-terminal-player at b89ad0a (locales/de.yml: gui.nav.most_played, gui.top.mp3 for the MP3 Player tab, eingesteckt, sta.title, dev.card_none, and sta.weekdays_short, sta.months_short, sta.day_label and sta.day_key for the dates); the rest was translated by a Claude agent (Claude Opus 5.5), then reviewed by a second, fitted to en.json's rooms and test_ui_library's (a note says where a room made a text shorter). The short form written for the ARB word that did not fit, stats.empty_title's 'Noch keine Wiedergabe', departs from the ARB ('Noch keine Wiedergaben', 314 px in Title 304). Not yet reviewed by a native speaker.",
   "boot.touch_hint": "Touch-Probleme? Finger aufs Display halten.",
   "coach.header_tip": "Tipp {0} von {1}",
   "coach.header_hint": "tippen: weiter",
@@ -89,6 +89,11 @@
   "toast.autodj_no_mood": "Keine Stimmungsdaten: Karte mit mStream synchronisieren",
   "@toast.autodj_no_mood": {
     "note": "Synchronisieren: the mobile app's word for a sync (mainSync)."
+  },
+  "toast.stats_needs_dates": "Nur mit Datum: {0}",
+  "toast.stats_needs_month": "Erst nach einem Monat Hören: {0}",
+  "@toast.stats_needs_month": {
+    "note": "stats.warming's words before the ': ' (its 'nach einem Monat Hören'), stats.warming_short after it."
   },
   "hud.bluetooth": "Bluetooth: {0}",
   "hud.bluetooth_connecting": "Bluetooth: Verbinden…",
@@ -323,21 +328,150 @@
   "mood.any": "Beliebig",
   "mood.no_data": "Keine Stimmungsdaten",
   "stats.title": "Hörstatistik",
+  "stats.entry_empty": "Wiedergaben landen hier",
+  "@stats.entry_empty": {
+    "note": "The first words of the mobile app's listeningEmptyDevice ('Wiedergaben landen hier, während du hörst.'): the whole is 284 px in Small 204, 'Wiedergaben erscheinen beim Hören' 241."
+  },
+  "stats.counting": "Wiedergaben werden gezählt…",
+  "@stats.counting": {
+    "note": "As the device's other work in progress ('Karte wird geprüft…')."
+  },
+  "stats.waiting": "Wartet auf die Karte…",
+  "@stats.waiting": {
+    "note": "The device's now_playing.waiting_for ('Wartet auf {0}…')."
+  },
+  "stats.no_room": "Im Moment zu wenig Speicher",
+  "@stats.no_room": {
+    "note": "The device's words for it (autodj.status_no_memory: 'zu wenig Speicher')."
+  },
+  "stats.unread": "Statistik nicht lesbar",
+  "@stats.unread": {
+    "note": "As the device's card.unknown_title and autodj.status_unreadable ('… nicht lesbar'); 'Statistik' is the terminal player's sta.title."
+  },
+  "stats.card_back": "Karte wieder da",
+  "@stats.card_back": {
+    "note": "The device's card.back ('Karte wieder da: Neustart')."
+  },
+  "stats.no_card": "Keine Karte: Zählen nicht möglich",
+  "@stats.no_card": {
+    "note": "'Keine Karte' is the terminal player's dev.card_none. 'Keine Karte: Wiedergaben werden nicht gezählt' doesn't fit the list line's Body 300."
+  },
+  "stats.since": "{0} seit {1}",
+  "stats.since_only": "seit {0}",
+  "stats.last7": "Letzte 7 Tage",
+  "stats.time_plays": "{0} · {1}",
   "stats.plays_n": {
     "one": "{0} Wiedergabe",
     "other": "{0} Wiedergaben"
   },
+  "stats.most_played": "Meistgehört",
+  "@stats.most_played": {
+    "note": "The terminal player's gui.nav.most_played."
+  },
+  "stats.new_finds": "Neu entdeckt",
+  "@stats.new_finds": {
+    "note": "From the mobile app's Discover ('Entdecken', discoverPageTitle)."
+  },
+  "stats.new_finds_sub": {
+    "one": "{0} Titel in 30 Tagen entdeckt",
+    "other": "{0} Titel in 30 Tagen entdeckt"
+  },
+  "@stats.new_finds_sub": {
+    "note": "'entdeckt' for first heard, as the shelf's title (Neu entdeckt): '{0} Titel in 30 Tagen erstmals gehört' is 236 px at 11 tracks in Small 232, so the short form would always be drawn; this is 218 px at 99.999."
+  },
+  "stats.new_finds_sub_short": {
+    "one": "{0} neu in 30 Tagen",
+    "other": "{0} neu in 30 Tagen"
+  },
+  "stats.old_favourites": "Alte Lieblinge",
+  "stats.old_favourites_sub": {
+    "one": "{0} Titel, früher oft gehört",
+    "other": "{0} Titel, früher oft gehört"
+  },
+  "@stats.old_favourites_sub": {
+    "note": "'früher oft gehört' (often heard before) for played often, not lately: '{0} Titel, oft gehört, lange nicht mehr' is 239 px at 11 tracks in Small 232, so the count alone would always be drawn; this is 192 px at 99.999."
+  },
+  "stats.not_played": "Noch nicht gehört",
   "stats.recent": "Zuletzt gehört",
+  "stats.no_dates": "Noch kein Datum: Uhr nicht gestellt",
+  "@stats.no_dates": {
+    "note": "'Datum', not 'Daten', which reads as data. 'Noch kein Datum: die Uhr ist nicht gestellt' is 277 px in Small 250."
+  },
+  "stats.clock_fix": "Einstecken, MP3-Player-Tab öffnen",
+  "@stats.clock_fix": {
+    "note": "The terminal player's name for the tab (gui.top.mp3: 'MP3-Player'), joined to 'Tab' as it names a tab (p2p.sheet_fed_theirs: 'Federation-Tab'), and its word for a player plugged in ('eingesteckt', dev.tabs_plugged). 'Einstecken und MP3-Player-Tab öffnen' is 251 px in the status row's Small 250."
+  },
+  "stats.needs_dates": "Nur mit Datum",
+  "@stats.needs_dates": {
+    "note": "As library_row.no_card ('Tags nur mit Karte'); 'Datum', not 'Daten', which reads as data."
+  },
+  "stats.warming": "Ab {0}, nach einem Monat Hören",
+  "@stats.warming": {
+    "note": "'Hören' as the apps' Hörzeit and Hörstatistik: 'Ab {0}, nach einem Monat Wiedergaben' is 289 px in Small 250."
+  },
+  "stats.warming_short": "Ab {0} verfügbar",
   "stats.window_all": "Gesamt",
   "stats.days_n": {
     "one": "{0} Tag",
     "other": "{0} Tage"
   },
+  "stats.sub_last7": "letzte 7 Tage",
+  "stats.sub_last30": "letzte 30 Tage",
+  "stats.first_heard": "in den letzten 30 Tagen",
+  "@stats.first_heard": {
+    "note": "The title above it (Neu entdeckt) says first heard, so the line gives the window: 'in 30 Tagen erstmals gehört' is 183 px in the header's Small 176 (beside German's crumb)."
+  },
+  "stats.not_in_30": "seit 30 Tagen nicht gehört",
+  "stats.found_autodj": "Auto-DJ-Fund",
+  "@stats.found_autodj": {
+    "note": "An Auto DJ find, hyphenated as the device's Auto-DJ-Index. 'von Auto DJ entdeckt' (137 px) beside even '1 Wiedergabe' leaves the artist under 32 px of the row's 264, so the row would show the count alone; this one is kept below 1.000 plays."
+  },
+  "stats.found_shuffle": "Zufallsfund",
+  "@stats.found_shuffle": {
+    "note": "A chance find: Zufall as in the device's Zufallswiedergabe. 'beim Mischen entdeckt' (151 px) or 'per Zufallswiedergabe' beside even '1 Wiedergabe' leaves the artist under 32 px of the row's 264, so the row would show the count alone; this one is kept at every count."
+  },
+  "stats.last_on": "zuletzt {0}",
+  "@stats.last_on": {
+    "note": "The mobile app's songInfoLastPlayed ('zuletzt {ago}') and the terminal player's sta.note_top_track ('zuletzt %{day}')."
+  },
+  "stats.ago_min": "vor {0} min",
+  "@stats.ago_min": {
+    "note": "'min' as format.minutes writes it, rather than the mobile app's 'vor {count} Min.' (agoMinutes): one form throughout."
+  },
+  "stats.ago_h": "vor {0} h",
+  "@stats.ago_h": {
+    "note": "'h' as format.hours_minutes writes it, rather than the mobile app's 'vor {count} Std.' (agoHours): one form throughout."
+  },
   "stats.today": "Heute",
   "stats.yesterday": "Gestern",
+  "stats.this_session": "Diese Sitzung",
+  "@stats.this_session": {
+    "note": "The apps' word for a sitting (listeningTileSessions, sta.tile_sessions: 'Sitzungen')."
+  },
+  "stats.earlier": "Früher",
   "stats.shelf_empty": "Nichts in diesem Zeitraum.",
+  "stats.utc": "{0} (UTC)",
   "stats.listened": "Hörzeit",
   "stats.plays_label": "Wiedergaben",
+  "stats.big_day": "Am meisten am {0}: {1}",
+  "@stats.big_day": {
+    "note": "The mobile app's words for the day listened to most (listeningMostOnDay: 'Am meisten am {date}: …'); weekdays don't change after 'am'. 'Donnerstag war dein großer Tag: 23 h 59 min' is 294 px in Small 288."
+  },
+  "stats.autodj_right": "Auto DJ lag in {0} der Fälle richtig",
+  "stats.empty_title": "Noch keine Wiedergabe",
+  "@stats.empty_title": {
+    "note": "Departs from the ARB: the mobile app's 'Noch keine Wiedergaben' (listeningEmptyTitle) is 314 px in Title 304; the singular, 298 px, keeps its words."
+  },
+  "stats.empty_rule": "Gezählt wird ab 30 s oder halber Titellänge",
+  "@stats.empty_rule": {
+    "note": "'Wiedergaben zählen ab 30 s oder halber Titellänge' is 331 px in Small 304."
+  },
+  "stats.empty_rule_short": "Gezählt wird ab 30 s",
+  "stats.empty_card": "Deine Statistik bleibt auf dieser Karte",
+  "stats.made_up": "Erfundene Statistik: nur ansehen",
+  "@stats.made_up": {
+    "note": "As library.synthetic ('Synthetische Bibliothek: nur ansehen')."
+  },
   "card.another": "Andere Karte: Neustart",
   "card.back": "Karte wieder da: Neustart",
   "queue_cap.full": {
@@ -917,5 +1051,47 @@
   "format.mb": "{0} MB",
   "format.khz": "{0} kHz",
   "format.hz": "{0} Hz",
-  "format.list_sep": ", "
+  "format.list_sep": ", ",
+  "format.day_month": "{0}. {1}",
+  "@format.day_month": {
+    "note": "The terminal player's order (sta.day_label: '%{day}. %{month}') and its short months (sta.months_short), without a full stop: '30. Sep'."
+  },
+  "format.weekday_date": "{0} {1}",
+  "@format.weekday_date": {
+    "note": "The terminal player's order, with no comma (sta.day_key: '%{weekday} %{day}.'): 'Mi 30. Sep'."
+  },
+  "format.day_range": "{0}–{1}",
+  "format.day_range_month": "{0}.–{1}. {2}",
+  "day.mon": "Mo",
+  "@day.mon": {
+    "note": "The terminal player's sta.weekdays_short."
+  },
+  "day.tue": "Di",
+  "day.wed": "Mi",
+  "day.thu": "Do",
+  "day.fri": "Fr",
+  "day.sat": "Sa",
+  "day.sun": "So",
+  "day.monday": "Montag",
+  "day.tuesday": "Dienstag",
+  "day.wednesday": "Mittwoch",
+  "day.thursday": "Donnerstag",
+  "day.friday": "Freitag",
+  "day.saturday": "Samstag",
+  "day.sunday": "Sonntag",
+  "month.jan": "Jan",
+  "@month.jan": {
+    "note": "The terminal player's sta.months_short, as it writes them: three letters, no full stop."
+  },
+  "month.feb": "Feb",
+  "month.mar": "Mär",
+  "month.apr": "Apr",
+  "month.may": "Mai",
+  "month.jun": "Jun",
+  "month.jul": "Jul",
+  "month.aug": "Aug",
+  "month.sep": "Sep",
+  "month.oct": "Okt",
+  "month.nov": "Nov",
+  "month.dec": "Dez"
 }

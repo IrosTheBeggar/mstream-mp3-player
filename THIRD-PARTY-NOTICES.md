@@ -468,14 +468,22 @@ mStream's apps say the same thing; each file's `@@note` says what it took:
   `listeningDays`, `listeningPlays`, `listeningEmptyTitle`,
   `listeningEmptyPeriod`, `listeningToday`, `listeningYesterday`,
   `listeningTilePlays`, `listeningTileTime` and `autoDjRecentlyPlayed`:
-  the `stats.*` texts docs/LISTENING-STATS.md 8.1 lists) at commit
+  the `stats.*` texts docs/LISTENING-STATS.md 8.1 lists; and, for the
+  stats' other texts, 8.2's, its words where it had them: its
+  `listeningEmptyDevice`, `listeningMostOnDay`, `listeningRecent`,
+  `listeningByTime`, `listeningTileSessions`, `listeningTileSubCounted`,
+  `listeningScopeSheetDevice`, `agoMinutes`, `agoHours`,
+  `songInfoLastPlayed`, `autoDjFirstSongRecent`, `discoverPageTitle`,
+  `discoverPageWindowAll`, `discoverPageWidened`, `discoverPageBasedOnLast`
+  and `discoverNetworkNothingNew`) at commit
   d17c3fa561da2b7ba3f575d132c3682177b83009 (2026-11-01), which bdb174e
   predates. Licence: GPL-3.0 (its LICENSE). Its translations are machine
   translations (its README says so). Source:
   https://github.com/IrosTheBeggar/mstream_music
 - **The mStream terminal player** (mstream-terminal-player, mstream-player
   0.12.1), `locales/<lang>.yml`, chiefly its MP3-player tab's words for
-  this device, branch main at commit
+  this device (and for the listening stats its stats tab's, `sta.*`, and
+  its Most played, `gui.nav.most_played`), branch main at commit
   b89ad0a97d4add4d47ac0c7404953cc6a0147679 (2026-10-10). Licence:
   GPL-3.0-only (its Cargo.toml; LICENSE is the GPL-3 text). Its
   translations are machine translations (its docs say so). Source:
