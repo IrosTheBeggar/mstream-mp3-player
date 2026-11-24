@@ -43,6 +43,11 @@
 //   full rank's, the clock set and unset;
 // - the overlay: every region patterned first, the u40 set over the dead
 //   window's rows, the lists, totals and set the separate regions'.
+// The owner's call (2026-11-24, "Yes, fix the order"): with no clock,
+// Recently played's rows of this session (lastOrd the live round, whatever
+// lastAt) first, on rank-no-clock-session and on a session's own undated
+// plays over 216 dated tracks or more; every card ranked by its session's
+// live round (rank.json's, else the fold's).
 // Run: pio test -e native -f test_stats_rank
 #include <unity.h>
 
@@ -127,6 +132,14 @@ void readCard(cutfs::CutFs& card, Session& s, int today) {
   s.in.baseCrc = s.fold.head().baseCrc;
   s.in.hasToday = today >= 0;
   s.in.today = static_cast<uint16_t>(today >= 0 ? today : 0);
+  s.in.liveRound = s.fold.liveRound();  // (a session that boots on the card: HEAD's round + 2)
+}
+
+// A rank scenario's live round (rank.json's `liveRound`, given with the
+// clock unset: the ranking session's, which may be one whose live save
+// left the card), else the fold's.
+void liveOf(const minijson::Value& sc, Session& s) {
+  if (sc.has("liveRound")) s.in.liveRound = static_cast<uint32_t>(sc["liveRound"].u64());
 }
 
 // Everything a rank needs, carved for `windowRows` and `playedRows`: the
@@ -353,8 +366,10 @@ void sameDaysAsRef(const sr::Report& rep, const Ref& ref, int today, const std::
 }
 
 // A list by the reference's rule, best first; `capped`: cut to its cap and
-// 16 (the Ranker's rows), else every row its rule takes (its total).
-std::vector<sr::Entry> refList(const Ref& ref, sr::List l, int today, bool capped = true) {
+// 16 (the Ranker's rows), else every row its rule takes (its total). With
+// no clock, Recently played's rows whose lastOrd is `liveRound` (0: none)
+// are this session's, first.
+std::vector<sr::Entry> refList(const Ref& ref, sr::List l, int today, uint32_t liveRound, bool capped = true) {
   std::vector<sr::Entry> v;
   if (today < 0 && l != sr::kMostAll && l != sr::kRecent) return v;
   const int first30 = today - 29, first7 = today - 6;
@@ -380,6 +395,7 @@ std::vector<sr::Entry> refList(const Ref& ref, sr::List l, int today, bool cappe
         if (t.plays < 1) continue;
         e.at = t.lastAt;
         e.ord = l == sr::kRecent ? t.lastOrd : 0;
+        e.session = l == sr::kRecent && today < 0 && liveRound != 0 && t.lastOrd == liveRound;
       } else if (l == sr::kNewFinds) {
         if (t.firstAt == 0 || t.firstAt == sf::kNoFirst) continue;
         const int d = sf::dayOfTime(t.firstAt);
@@ -400,12 +416,13 @@ std::vector<sr::Entry> refList(const Ref& ref, sr::List l, int today, bool cappe
 }
 
 // The lists and their totals as the reference ranks them.
-void sameAsRef(const sr::Ranker& r, const Ref& ref, int today, const std::string& what) {
+void sameAsRef(const sr::Ranker& r, const Ref& ref, int today, uint32_t liveRound, const std::string& what) {
   for (int l = 0; l < sr::kLists; ++l) {
     const sr::List li = static_cast<sr::List>(l);
-    const std::vector<sr::Entry> want = refList(ref, li, today);
+    const std::vector<sr::Entry> want = refList(ref, li, today, liveRound);
     const std::string m = what + " " + sr::listName(li);
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(refList(ref, li, today, false).size(), r.total(li), (m + " total").c_str());
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(refList(ref, li, today, liveRound, false).size(), r.total(li),
+                                     (m + " total").c_str());
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(want.size(), r.size(li), m.c_str());
     for (uint32_t i = 0; i < r.size(li); ++i) {
       const sr::Entry& a = r.at(li, i);
@@ -416,6 +433,7 @@ void sameAsRef(const sr::Ranker& r, const Ref& ref, int today, const std::string
       TEST_ASSERT_EQUAL_UINT32_MESSAGE(b.at, a.at, mi.c_str());
       TEST_ASSERT_EQUAL_UINT32_MESSAGE(b.ord, a.ord, mi.c_str());
       TEST_ASSERT_EQUAL_UINT32_MESSAGE(b.src, a.src, mi.c_str());
+      TEST_ASSERT_EQUAL_MESSAGE(b.session, a.session, mi.c_str());
     }
   }
 }
@@ -466,6 +484,8 @@ struct Card {
   int today = -1;
   const minijson::Value* want = nullptr;
   bool scenario = false;
+  bool hasLive = false;    // the scenario names its live round (rank.json's `liveRound`)
+  uint32_t liveRound = 0;  // ... else the fold's: a session that boots on the card
   const Bytes* file(const std::string& name) const {
     for (const auto& f : files)
       if (f.first == name) return &f.second;
@@ -500,17 +520,21 @@ void loadCards() {
     c.today = todayOf(sc["today"]);
     c.want = &sc;
     c.scenario = true;
+    c.hasLive = sc.has("liveRound");
+    c.liveRound = c.hasLive ? static_cast<uint32_t>(sc["liveRound"].u64()) : 0;
     gCards.push_back(c);
   }
 }
 
-// A card on a CutFs, read as the boot reads it, for a rank on `today`.
+// A card on a CutFs, read as the boot reads it, for a rank on `today` by
+// its session (the scenario's live round, else the fold's).
 struct Run {
   cutfs::CutFs card;
   Session s;
   Run(const Card& c, int today) {
     for (const auto& f : c.files) put(card, f.first, f.second);
     readCard(card, s, today);
+    if (c.hasLive) s.in.liveRound = c.liveRound;
   }
 };
 
@@ -564,6 +588,7 @@ void sameRanker(const sr::Ranker& a, const sr::Ranker& b, const std::string& wha
       TEST_ASSERT_EQUAL_UINT32_MESSAGE(x.at, y.at, mi.c_str());
       TEST_ASSERT_EQUAL_UINT32_MESSAGE(x.ord, y.ord, mi.c_str());
       TEST_ASSERT_EQUAL_UINT8_MESSAGE(x.src, y.src, mi.c_str());
+      TEST_ASSERT_EQUAL_MESSAGE(x.session, y.session, mi.c_str());
     }
   }
 }
@@ -659,7 +684,7 @@ void test_every_fixture_boot() {
     sameLists(r, (*c.want)["lists"], what);
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, run.card.openNow, what.c_str());
     const Ref ref = refOf(c, run.s.in);
-    sameAsRef(r, ref, c.today, what);
+    sameAsRef(r, ref, c.today, run.s.in.liveRound, what);
     sameDaysAsRef(rep, ref, c.today, what);
     // S2's fields: what it read and found.
     const Bytes* bin = c.file("stats.bin");
@@ -696,6 +721,7 @@ void test_the_rank_scenarios() {
     Session s;
     const int today = todayOf(sc["today"]);
     readCard(card, s, today);
+    liveOf(sc, s);
     const minijson::Value& rows = sc["rows"];
     Mem mem(static_cast<uint32_t>(rows["rcnt"].u64()), static_cast<uint32_t>(rows["played"].u64()), s.in.baseRows);
     sr::Ranker r;
@@ -762,7 +788,7 @@ void test_the_records_merged_in() {
     Mem mem(4096, 4096, s.in.baseRows);
     sr::Ranker r;
     TEST_ASSERT_EQUAL_STRING("ok", sr::outcomeName(sr::rank(card, s.in, mem.m, r).outcome));
-    sameAsRef(r, plain, today, "no records");
+    sameAsRef(r, plain, today, s.in.liveRound, "no records");
     sameLists(r, sc["lists"], "no records");
   }
   std::mt19937_64 rng(7);
@@ -851,7 +877,7 @@ void test_the_records_merged_in() {
     const sr::Report rep = sr::rank(card, s.in, mem.m, r);
     const std::string what = "round " + std::to_string(round);
     TEST_ASSERT_EQUAL_STRING_MESSAGE("ok", sr::outcomeName(rep.outcome), what.c_str());
-    sameAsRef(r, ref, today, what);
+    sameAsRef(r, ref, today, s.in.liveRound, what);
     sameDaysAsRef(rep, ref, today, what);
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(ref.rows.size(), rep.tracks, what.c_str());
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(s.in.trkdRows + s.in.rcntRows + s.in.daysRows, rep.recordRows, what.c_str());
@@ -907,7 +933,7 @@ void test_the_records_merged_in() {
     sr::Ranker r;
     const sr::Report rep = sr::rank(card, s.in, mem.m, r);
     TEST_ASSERT_EQUAL_STRING("ok", sr::outcomeName(rep.outcome));
-    sameAsRef(r, ref, today, "the session's fold");
+    sameAsRef(r, ref, today, s.in.liveRound, "the session's fold");
     sameDaysAsRef(rep, ref, today, "the session's fold");
     // The same by hand, from the card's 7 days (statsref's).
     const minijson::Value& card7 = sc["days7"]["days"];
@@ -968,12 +994,200 @@ void test_the_records_merged_in() {
     sr::Ranker r;
     const sr::Report rep = sr::rank(card, in, mem.m, r);
     TEST_ASSERT_EQUAL_STRING("ok", sr::outcomeName(rep.outcome));
-    sameAsRef(r, ref, day, "records alone");
+    sameAsRef(r, ref, day, in.liveRound, "records alone");
     sameDaysAsRef(rep, ref, day, "records alone");
     TEST_ASSERT_EQUAL_UINT32(40, mem.played.n);
     TEST_ASSERT_EQUAL_UINT32(1000u * static_cast<uint32_t>(day + 1), rep.days[6].listenedMs);
     TEST_ASSERT_EQUAL_UINT16(day - 2, rep.firstDay);
     TEST_ASSERT_EQUAL_UINT16(sf::kUnsetDay, rep.rcntFirstDay);
+  }
+}
+
+namespace {
+
+// A live play of `hash` with the clock unset (an undated slot: 5.9); a
+// skip (pl::kSkipped) 10 s of it, under the line.
+pl::Slot undatedPlay(uint32_t seq, uint64_t hash, uint8_t outcome = pl::kCompleted) {
+  pl::Slot s = livePlay(seq, hash, 0, 0, outcome == pl::kSkipped ? 10000 : 200000, 200000, outcome,
+                        pl::kSourceManual);
+  s.startedAt = 0;
+  s.clock = pl::kClockUnset;
+  return s;
+}
+
+}  // namespace
+
+// The owner's call (2026-11-24, "Yes, fix the order"): with no clock,
+// Recently played puts this session's plays first (4.3: "This session",
+// then "Earlier"): every row whose lastOrd is the ask's live round
+// (Fold::liveRound()), whatever its lastAt (an undated play leaves lastAt
+// and sets lastOrd, 5.9). Before it, 4.3's order put the dated rows first,
+// so on a card of 216 dated tracks or more this session's never-dated plays
+// fell past the rows kept ("This session" empty) and a track played again
+// sat among the dated rows by its old lastAt.
+//   - rank-no-clock-session (statsref's): the card as the session's live
+//     save leaves it (HEAD's round its live round, 902), 363 dated tracks
+//     of earlier rounds, ranked by that session: its six rows first (two
+//     dated, played again; four never dated), statsref's lists.
+//   - The same card under the next session (it loads 902: live round 904),
+//     its own fold's undated plays as the hand-off copies them (the
+//     records): two tracks never played, one played before but never dated,
+//     the oldest dated one, all first; the last session's rows Earlier now;
+//     a skip moves no row. With the clock set the same rows rank by 4.3's
+//     order as before, the never-dated plays past the 216 dated ones.
+void test_this_session_first_with_no_clock() {
+  const minijson::Value& sc = rankScenario("rank-no-clock-session");
+  TEST_ASSERT_TRUE(sc["today"].isNull());
+  const RankCard c = rankCard(sc);
+  Ref plain;
+  refFrom(c.bin, c.base, &plain);
+  const uint32_t saved = static_cast<uint32_t>(sc["liveRound"].u64());
+  // The scenario's session: its rows, those of earlier rounds.
+  std::vector<sr::Entry> mine;
+  uint32_t dated = 0;
+  for (const auto& kv : plain.rows) {
+    const sf::Track& t = kv.second;
+    TEST_ASSERT_TRUE(t.lastOrd <= saved);  // (HEAD's round: every row's at most)
+    if (t.plays < 1) continue;
+    if (t.lastOrd == saved) {
+      sr::Entry e;
+      e.hash = t.hash;
+      e.at = t.lastAt;
+      mine.push_back(e);
+    } else if (t.lastAt != 0) {
+      ++dated;
+    }
+  }
+  TEST_ASSERT_TRUE(dated >= sr::rowsOf(sr::kRecent));
+  TEST_ASSERT_EQUAL_UINT32(6, mine.size());
+  uint32_t mineDated = 0;
+  for (const sr::Entry& e : mine) mineDated += e.at != 0 ? 1 : 0;
+  TEST_ASSERT_EQUAL_UINT32(2, mineDated);
+  // Within this session 4.3's order as before: the dated lastAt, newest
+  // first, then the never-dated ones by the hash (one round).
+  std::sort(mine.begin(), mine.end(), [](const sr::Entry& a, const sr::Entry& b) {
+    return (a.at != 0) != (b.at != 0) ? a.at != 0 : a.at != b.at ? a.at > b.at : a.hash < b.hash;
+  });
+  {
+    cutfs::CutFs card;
+    putRankCard(card, c);
+    Session s;
+    readCard(card, s, -1);
+    TEST_ASSERT_EQUAL_UINT32(saved + 2, s.in.liveRound);  // (read fresh: the next session's)
+    liveOf(sc, s);
+    TEST_ASSERT_EQUAL_UINT32(saved, s.in.liveRound);
+    Mem mem(4096, 4096, s.in.baseRows);
+    sr::Ranker r;
+    TEST_ASSERT_EQUAL_STRING("ok", sr::outcomeName(sr::rank(card, s.in, mem.m, r).outcome));
+    sameLists(r, sc["lists"], "the saving session");
+    sameAsRef(r, plain, -1, saved, "the saving session");
+    TEST_ASSERT_EQUAL_UINT32(sr::rowsOf(sr::kRecent), r.size(sr::kRecent));
+    for (uint32_t i = 0; i < mine.size(); ++i) {
+      const std::string m = "this session's row " + std::to_string(i);
+      TEST_ASSERT_TRUE_MESSAGE(r.at(sr::kRecent, i).hash == mine[i].hash, m.c_str());
+      TEST_ASSERT_TRUE_MESSAGE(r.at(sr::kRecent, i).session, m.c_str());
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(saved, r.at(sr::kRecent, i).ord, m.c_str());
+    }
+    for (uint32_t i = static_cast<uint32_t>(mine.size()); i < r.size(sr::kRecent); ++i) {
+      TEST_ASSERT_FALSE(r.at(sr::kRecent, i).session);
+      TEST_ASSERT_TRUE(r.at(sr::kRecent, i).ord != saved);
+    }
+    // No other list marks a row; All time as before.
+    for (uint32_t i = 0; i < r.size(sr::kMostAll); ++i) TEST_ASSERT_FALSE(r.at(sr::kMostAll, i).session);
+    // Before the call (no row this session's): none of its never-dated
+    // plays among the rows kept.
+    const std::vector<sr::Entry> before = refList(plain, sr::kRecent, -1, 0);
+    uint32_t keptBefore = 0;
+    for (const sr::Entry& e : before) keptBefore += e.ord == saved && e.at == 0 ? 1 : 0;
+    TEST_ASSERT_EQUAL_UINT32(0, keptBefore);
+  }
+
+  // The next session: the card read fresh, its own fold's undated plays.
+  uint64_t oldDated = 0, neverDated = 0, skipped = 0;
+  uint32_t oldestAt = UINT32_MAX;
+  for (const auto& kv : plain.rows) {
+    const sf::Track& t = kv.second;
+    if (t.plays < 1 || t.lastOrd == saved) continue;
+    if (t.lastAt != 0 && t.lastAt < oldestAt) {
+      oldestAt = t.lastAt;
+      oldDated = kv.first;
+    } else if (t.lastAt == 0 && !neverDated) {
+      neverDated = kv.first;
+    }
+  }
+  for (const auto& kv : plain.rows)
+    if (kv.second.plays >= 1 && kv.second.lastAt != 0 && kv.second.lastOrd != saved && kv.first != oldDated) {
+      skipped = kv.first;  // a dated row only skipped this session: not this session's
+      break;
+    }
+  TEST_ASSERT_TRUE(oldDated && neverDated && skipped);
+  const uint64_t fresh1 = 0x5e55000000000011ull, fresh2 = 0x5e55000000000003ull;
+  TEST_ASSERT_TRUE(plain.rows.count(fresh1) == 0 && plain.rows.count(fresh2) == 0);
+  cutfs::CutFs card;
+  putRankCard(card, c);
+  Session s;
+  readCard(card, s, -1);
+  const uint32_t live = s.fold.liveRound();
+  TEST_ASSERT_EQUAL_UINT32(saved + 2, live);
+  TEST_ASSERT_EQUAL_UINT32(live, s.in.liveRound);
+  TEST_ASSERT_TRUE(s.fold.liveSlot(undatedPlay(1, fresh1)));
+  TEST_ASSERT_TRUE(s.fold.liveSlot(undatedPlay(2, oldDated)));
+  TEST_ASSERT_TRUE(s.fold.liveSlot(undatedPlay(3, neverDated)));
+  TEST_ASSERT_TRUE(s.fold.liveSlot(undatedPlay(4, skipped, pl::kSkipped)));
+  TEST_ASSERT_TRUE(s.fold.liveSlot(undatedPlay(5, fresh2)));
+  TEST_ASSERT_TRUE(s.fold.liveSlot(undatedPlay(6, fresh1)));  // (twice: one row)
+  const Records recs(s.fold);
+  recs.into(&s.in);
+  Ref ref = plain;
+  recs.addTo(ref);
+  // The rows as the session holds them: the four played have lastOrd the
+  // live round, the old one its dated lastAt still; the skip moved nothing.
+  TEST_ASSERT_EQUAL_UINT32(live, ref.rows[oldDated].lastOrd);
+  TEST_ASSERT_EQUAL_UINT32(oldestAt, ref.rows[oldDated].lastAt);
+  TEST_ASSERT_EQUAL_UINT32(live, ref.rows[neverDated].lastOrd);
+  TEST_ASSERT_EQUAL_UINT32(0, ref.rows[neverDated].lastAt);
+  TEST_ASSERT_TRUE(ref.rows[skipped].lastOrd != live);
+  uint32_t sessionRows = 0;
+  for (const auto& kv : ref.rows) sessionRows += kv.second.plays >= 1 && kv.second.lastOrd == live ? 1 : 0;
+  TEST_ASSERT_EQUAL_UINT32(4, sessionRows);
+  Mem mem(4096 + 40, 4096 + 40, s.in.baseRows);
+  sr::Ranker r;
+  TEST_ASSERT_EQUAL_STRING("ok", sr::outcomeName(sr::rank(card, s.in, mem.m, r).outcome));
+  sameAsRef(r, ref, -1, live, "the next session");
+  TEST_ASSERT_EQUAL_UINT32(sr::rowsOf(sr::kRecent), r.size(sr::kRecent));
+  std::vector<uint64_t> undated = {fresh1, fresh2, neverDated};
+  std::sort(undated.begin(), undated.end());
+  const uint64_t want[4] = {oldDated, undated[0], undated[1], undated[2]};
+  for (uint32_t i = 0; i < 4; ++i) {
+    const std::string m = "the next session's row " + std::to_string(i);
+    TEST_ASSERT_TRUE_MESSAGE(r.at(sr::kRecent, i).hash == want[i], m.c_str());
+    TEST_ASSERT_TRUE_MESSAGE(r.at(sr::kRecent, i).session, m.c_str());
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(live, r.at(sr::kRecent, i).ord, m.c_str());
+  }
+  // Then Earlier, in 4.3's order: the last session's dated rows among the
+  // dated, by lastAt; no row this session's.
+  for (uint32_t i = 4; i < r.size(sr::kRecent); ++i) {
+    TEST_ASSERT_FALSE(r.at(sr::kRecent, i).session);
+    TEST_ASSERT_TRUE(r.at(sr::kRecent, i).at != 0);
+    if (i > 4) TEST_ASSERT_TRUE(r.at(sr::kRecent, i).at <= r.at(sr::kRecent, i - 1).at);
+  }
+  // With the clock set, the same card and records: 4.3's order as before,
+  // no row marked, the never-dated plays past the 216 dated ones.
+  {
+    cutfs::CutFs dcard;
+    putRankCard(dcard, c);
+    Session d;
+    readCard(dcard, d, static_cast<int>(rankScenario("rank-big")["today"].u64()));
+    recs.into(&d.in);
+    Mem dm(4096 + 40, 4096 + 40, d.in.baseRows);
+    sr::Ranker dr;
+    TEST_ASSERT_EQUAL_STRING("ok", sr::outcomeName(sr::rank(dcard, d.in, dm.m, dr).outcome));
+    sameAsRef(dr, ref, static_cast<int>(d.in.today), d.in.liveRound, "the next session, dated");
+    for (uint32_t i = 0; i < dr.size(sr::kRecent); ++i) {
+      TEST_ASSERT_FALSE(dr.at(sr::kRecent, i).session);
+      TEST_ASSERT_TRUE(dr.at(sr::kRecent, i).at != 0);
+      TEST_ASSERT_TRUE(dr.at(sr::kRecent, i).hash != fresh1 && dr.at(sr::kRecent, i).hash != neverDated);
+    }
   }
 }
 
@@ -1237,7 +1451,7 @@ void test_a_newer_minor_s_base() {
     for (size_t o = 0; o < rc.size(); o += 12)
       ref.rcnt[{cc::get16(u8(rc) + o), cc::get64(u8(rc) + o + 4)}] += cc::get16(u8(rc) + o + 2);
   }
-  sameAsRef(r, ref, today, "a newer minor's base");
+  sameAsRef(r, ref, today, s.in.liveRound, "a newer minor's base");
   Block work(sx::kWorkBytes);
   sr::Files f;
   TEST_ASSERT_EQUAL_STRING("ok", sr::outcomeName(sr::open(card, s.in, &f)));
@@ -1266,7 +1480,7 @@ void test_totals_at_and_past_each_cap() {
     for (const uint32_t n : {sr::kCaps[li], sr::rowsOf(li), sr::rowsOf(li) + 1, 3 * sr::rowsOf(li) + 5}) {
       for (const bool dated : {true, false}) {
         sr::Ranker r;
-        r.begin(mem.p(), true, today);
+        r.begin(mem.p(), true, today, 0);
         sf::Track stale;  // (offered before: begin() below starts the totals over)
         stale.plays = 1;
         stale.firstAt = 0;
@@ -1274,7 +1488,7 @@ void test_totals_at_and_past_each_cap() {
           stale.hash = i + 1;
           r.track(stale);
         }
-        r.begin(mem.p(), dated, today);
+        r.begin(mem.p(), dated, today, 0);
         uint32_t want[sr::kLists] = {};
         for (uint32_t i = 0; i < n; ++i) {
           const uint64_t h = 0x9E3779B97F4A7C15ull * (i + 1);
@@ -1543,7 +1757,7 @@ void test_a_null_window_while_undated() {
     const sr::Report rep = sr::rank(run.card, run.s.in, mem.m, r);
     TEST_ASSERT_EQUAL_STRING_MESSAGE("ok", sr::outcomeName(rep.outcome), c.what.c_str());
     const Ref ref = refOf(c, run.s.in);
-    sameAsRef(r, ref, -1, c.what + " undated");
+    sameAsRef(r, ref, -1, run.s.in.liveRound, c.what + " undated");
     sameDaysAsRef(rep, ref, -1, c.what + " undated");
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(ref.rcnt.size(), rep.rcntRows, c.what.c_str());
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, rep.windowRows, c.what.c_str());
@@ -1698,6 +1912,7 @@ int main(int, char**) {
   RUN_TEST(test_every_fixture_boot);
   RUN_TEST(test_the_rank_scenarios);
   RUN_TEST(test_the_records_merged_in);
+  RUN_TEST(test_this_session_first_with_no_clock);
   RUN_TEST(test_the_sparse_index);
   RUN_TEST(test_the_refusals);
   RUN_TEST(test_a_tracks_rows);

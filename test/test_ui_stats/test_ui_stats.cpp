@@ -1460,22 +1460,78 @@ void test_recently_played_s_sections() {
                               {true, Section::Earlier, 3, false, U},  {false, Section::Earlier, 3, false, U},
                               {false, Section::Earlier, 4, false, U}};
   sameRecent(*b.s(), wantU, 7, "undated");
-  // Rows with a dated lastAt (the rank puts them first: 4.3), two days of
-  // them: under their days, a heading each, no Today, no time. A track
-  // replayed this session with no clock is such a row too (an undated play
-  // leaves lastAt: 5.9; the copy-out codes This session only for lastAt 0),
-  // so it reads under its old day, not This session: the owner's call.
-  putWhen(b, 0, 300u * 1440 + 90);
-  putWhen(b, 1, 299u * 1440 + 1300);
-  const WantRecent wantD[] = {{true, Section::Day, 0, false, 300},     {false, Section::Day, 0, false, 300},
-                              {true, Section::Day, 1, false, 299},     {false, Section::Day, 1, false, 299},
-                              {true, Section::Session, 2, false, U},   {false, Section::Session, 2, false, U},
-                              {true, Section::Earlier, 3, false, U},   {false, Section::Earlier, 3, false, U},
-                              {false, Section::Earlier, 4, false, U}};
-  sameRecent(*b.s(), wantD, 9, "undated, two dated days");
+  // An undated snapshot has these two sections alone (the owner's call,
+  // 2026-11-24, "Yes, fix the order"): a `when` that is neither code (none
+  // a write() makes) reads as Earlier, never a day.
+  putWhen(b, 3, 300u * 1440 + 90);
+  putWhen(b, 4, 299u * 1440 + 1300);
+  sameRecent(*b.s(), wantU, 7, "undated, a stray dated when");
   // Past the end: no row.
-  TEST_ASSERT_FALSE(recentAt(*b.s(), 9).heading);
-  TEST_ASSERT_EQUAL_UINT32(b->rows(sr::kRecent), recentAt(*b.s(), 9).row);
+  TEST_ASSERT_FALSE(recentAt(*b.s(), 7).heading);
+  TEST_ASSERT_EQUAL_UINT32(b->rows(sr::kRecent), recentAt(*b.s(), 7).row);
+
+  // The whole way: a rank with no clock (300 dated tracks of earlier
+  // rounds; this session's undated plays: two tracks never dated and one
+  // dated long ago played again, its lastAt kept; one never dated of the
+  // round before), copied out and resolved. This session's three first,
+  // then Earlier, the only two headings, no time. Before the call the 216
+  // dated rows came first: This session was empty and the track played
+  // again sat under its old day.
+  const uint32_t live = 12;
+  std::vector<uint64_t> km(sr::Ranker::kBytes / 8 + 1, 0);
+  sr::Ranker k;
+  k.begin(km.data(), false, 0, live);
+  auto track = [&k](uint64_t h, uint32_t at, uint32_t ord) {
+    sf::Track t;
+    t.hash = h;
+    t.plays = 1;
+    t.firstAt = t.lastAt = at;
+    t.lastOrd = ord;
+    k.track(t);
+  };
+  // (Each hash's whole row once: the oldest dated one, 0x1000, as the
+  // merge leaves it played again with no clock, lastAt kept.)
+  for (uint32_t i = 0; i < 300; ++i) track(0x1000 + i, (200 + i) * 86400u + 1, i == 0 ? live : 1 + i % 10);
+  track(0x2001, 0, live);
+  track(0x2002, 0, live);
+  track(0x2003, 0, live - 1);
+  k.finish();
+  std::vector<uint64_t> wm(statsmap::Wanted::bytesFor(sr::Ranker::kEntries) / 8 + 1, 0);
+  statsmap::Wanted w;
+  TEST_ASSERT_TRUE(w.region(reinterpret_cast<uint8_t*>(wm.data()), sr::Ranker::kEntries));
+  for (int l = 0; l < sr::kLists; ++l)
+    for (uint32_t i = 0; i < k.size(static_cast<sr::List>(l)); ++i) w.add(k.at(static_cast<sr::List>(l), i).hash);
+  w.seal();
+  for (uint32_t i = 0; i < w.n; ++i) w.setId(i, 100 + i);
+  sv::Context ctx;
+  ctx.buildStamp = kStamp;
+  ctx.trackCount = kTracks;
+  ctx.albums = kAlbums;
+  ctx.liveRound = live;
+  ctx.sinceDay = kSince;
+  Snap c;
+  TEST_ASSERT_TRUE(sv::write(k, w, sr::Report(), ctx, c.s(), sv::kBound));
+  TEST_ASSERT_TRUE(sv::resolve(w, c.s()));
+  TEST_ASSERT_FALSE(c->dated());
+  TEST_ASSERT_EQUAL_UINT32(sr::kCaps[sr::kRecent], c->rows(sr::kRecent));
+  TEST_ASSERT_EQUAL_UINT32(sr::kCaps[sr::kRecent] + 2, recentCount(*c.s()));
+  uint32_t headings = 0;
+  for (uint32_t i = 0; i < recentCount(*c.s()); ++i) {
+    const RecentItem it = recentAt(*c.s(), i);
+    TEST_ASSERT_FALSE(it.timed);
+    TEST_ASSERT_TRUE(it.section == Section::Session || it.section == Section::Earlier);
+    TEST_ASSERT_EQUAL(it.row < 3 ? static_cast<int>(Section::Session) : static_cast<int>(Section::Earlier),
+                      static_cast<int>(it.section));
+    headings += it.heading ? 1 : 0;
+  }
+  TEST_ASSERT_EQUAL_UINT32(2, headings);
+  TEST_ASSERT_TRUE(recentAt(*c.s(), 0).heading && recentAt(*c.s(), 4).heading);
+  // This session's: the one played again (its dated lastAt), then by the
+  // hash; then Earlier from the newest dated one.
+  TEST_ASSERT_TRUE(k.at(sr::kRecent, 0).hash == 0x1000 && k.at(sr::kRecent, 1).hash == 0x2001 &&
+                   k.at(sr::kRecent, 2).hash == 0x2002 && k.at(sr::kRecent, 3).hash == 0x1000 + 299);
+  // The hub's row 6: This session's first row, no time.
+  TEST_ASSERT_EQUAL_UINT32(sv::kWhenSession, c->rowAt(sr::kRecent, 0).when);
 }
 
 // ---------------------------------------------------------------------------
@@ -2712,7 +2768,7 @@ namespace {
 void putReal(Snap& b, bool dated) {
   std::vector<uint64_t> mem(sr::Ranker::kBytes / 8 + 1, 0);
   sr::Ranker k;
-  k.begin(mem.data(), dated, kToday);
+  k.begin(mem.data(), dated, kToday, 1);
   for (const uint64_t h : {uint64_t{0x51}, uint64_t{0x52}}) {
     sf::Track t;
     t.hash = h;

@@ -594,16 +594,22 @@ struct Key {
 
 Key keyOf(const Snapshot& s, uint32_t when) {
   Key k;
+  if (!s.dated()) {
+    // Undated: this session's, then earlier (4.3; the owner's call,
+    // 2026-11-24): the copy-out codes every row one or the other, so a
+    // when that is neither (none a write() makes) reads as Earlier too,
+    // never a day.
+    k.section = when == sv::kWhenSession ? Section::Session : Section::Earlier;
+    return k;
+  }
   if (isCode(when)) {
-    // Dated: every undated row under one Earlier, last; undated: this
-    // session's, then earlier.
-    k.section = s.dated() || when == sv::kWhenEarlier ? Section::Earlier : Section::Session;
+    k.section = Section::Earlier;  // dated: every undated row under one Earlier, last
     return k;
   }
   k.day = static_cast<uint16_t>(when / kDayMin);
-  if (s.dated() && k.day == s.today()) {
+  if (k.day == s.today()) {
     k.section = Section::Today;
-  } else if (s.dated() && k.day + 1u == s.today()) {
+  } else if (k.day + 1u == s.today()) {
     k.section = Section::Yesterday;
   } else {
     k.section = Section::Day;

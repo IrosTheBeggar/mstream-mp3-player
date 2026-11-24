@@ -44,8 +44,17 @@ const char* outcomeName(Outcome o) {
 // ---------------------------------------------------------------------------
 bool before(List l, const Entry& a, const Entry& b) {
   if (l == kRecent) {
-    // lastAt, newest first; then the rows with no dated play (lastAt 0) by
-    // lastOrd, newest first; then the hash.
+    // With the clock unset, this session's rows first (the owner's call,
+    // 2026-11-24, "Yes, fix the order": 4.3's "This session", then
+    // "Earlier"; the Ranker marks them, never in a dated rank). Then, within
+    // each part, 4.3's order as before: lastAt, newest first; then the rows
+    // with no dated play (lastAt 0) by lastOrd, newest first; then the hash.
+    // Within this session no play order is known (its plays have no time
+    // and one round), so its rows keep that order too: a track played
+    // again keeps its dated lastAt from before and comes first, then the
+    // never-dated ones by the hash. Earlier keeps it whole, as a dated rank
+    // orders the same rows (the dated by lastAt, then the rest by round).
+    if (a.session != b.session) return a.session;
     const bool da = a.at != 0, db = b.at != 0;
     if (da != db) return da;
     if (da) {
@@ -104,7 +113,7 @@ struct Heap {
 
 }  // namespace
 
-void Ranker::begin(void* mem, bool hasToday, uint16_t today) {
+void Ranker::begin(void* mem, bool hasToday, uint16_t today, uint32_t liveRound) {
   Entry* base = static_cast<Entry*>(mem);
   for (int l = 0; l < kLists; ++l) {
     list_[l] = base + kOffsets[l];
@@ -113,8 +122,7 @@ void Ranker::begin(void* mem, bool hasToday, uint16_t today) {
   }
   hasToday_ = hasToday;
   today_ = hasToday ? today : 0;
-  first7_ = !hasToday ? 0 : today >= 6 ? static_cast<uint16_t>(today - 6) : 0;
-  first30_ = !hasToday ? 0 : today >= 29 ? static_cast<uint16_t>(today - 29) : 0;
+  liveRound_ = liveRound;
 }
 
 void Ranker::offer(List l, const Entry& x) {
@@ -139,13 +147,18 @@ void Ranker::track(const sf::Track& t) {
     e.at = t.lastAt;
     offer(kMostAll, e);
     e.ord = t.lastOrd;
+    // With the clock unset: this session's when its latest play has the
+    // live round, whatever lastAt (a track played again with no clock
+    // keeps its dated lastAt: 5.9).
+    e.session = !hasToday_ && liveRound_ != 0 && t.lastOrd == liveRound_;
     offer(kRecent, e);
   }
   if (!hasToday_) return;
+  const uint16_t from30 = first30();
   // (A dated time: neither 0 nor kNoFirst.)
   if (t.firstAt != 0 && t.firstAt != sf::kNoFirst) {
     const uint16_t d = sf::dayOfTime(t.firstAt);
-    if (d >= first30_ && d <= today_) {
+    if (d >= from30 && d <= today_) {
       Entry e;
       e.hash = t.hash;
       e.count = t.plays;
@@ -154,7 +167,7 @@ void Ranker::track(const sf::Track& t) {
       offer(kNewFinds, e);
     }
   }
-  if (t.plays >= kOldFavourite && t.lastAt != 0 && sf::dayOfTime(t.lastAt) < first30_) {
+  if (t.plays >= kOldFavourite && t.lastAt != 0 && sf::dayOfTime(t.lastAt) < from30) {
     Entry e;
     e.hash = t.hash;
     e.count = t.plays;
@@ -553,7 +566,7 @@ Report rank(const Files& f, const Input& in, const Memory& mem, Ranker& ranker) 
   Report rep;
   // No lists: the played-set-only rank (S3a's V1): the Ranker not touched.
   const bool lists = mem.lists != nullptr;
-  if (lists) ranker.begin(mem.lists, in.hasToday, in.today);
+  if (lists) ranker.begin(mem.lists, in.hasToday, in.today, in.liveRound);
   if (mem.played40) {
     mem.played40->n = 0;
     mem.played40->lost = 0;
@@ -589,7 +602,7 @@ Report rank(tagstore::Fs& fs, const Input& in, const Memory& mem, Ranker& ranker
   if (o != Outcome::Ok) {
     Report rep;
     if (mem.lists) {
-      ranker.begin(mem.lists, in.hasToday, in.today);
+      ranker.begin(mem.lists, in.hasToday, in.today, in.liveRound);
       ranker.finish();
     }
     rep.outcome = o;

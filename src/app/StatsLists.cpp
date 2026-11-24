@@ -192,10 +192,13 @@ void dayText(uint32_t day, char* out, size_t cap) {
   const wallclock::Civil c = wallclock::toCivil(sf::kMinMs + static_cast<uint64_t>(day) * sf::kDayMs);
   snprintf(out, cap, "%04d-%02d-%02d", c.year, c.month, c.day);
 }
-// Recently played's `when` (minutes since 2026-01-01, or the undated codes).
+// Recently played's `when` (minutes since 2026-01-01, or the codes: a dated
+// snapshot's rows with no dated play, and every row of an undated one, a
+// dated row of an earlier session's among them: the owner's call,
+// 2026-11-24).
 void whenText(uint32_t when, char* out, size_t cap) {
   if (when == sv::kWhenSession || when == sv::kWhenEarlier) {
-    snprintf(out, cap, "%s", when == sv::kWhenSession ? "undated, this session" : "undated, before it");
+    snprintf(out, cap, "%s", when == sv::kWhenSession ? "this session (no time)" : "earlier (no time)");
     return;
   }
   const wallclock::Civil c = wallclock::toCivil(sf::kMinMs + static_cast<uint64_t>(when) * 60000);
@@ -860,6 +863,10 @@ bool StatsLists::prepare() {
   // (A visit's layout made undated has no window room: it ranks undated,
   // should the clock be set since its turn.)
   if (visiting() && !a.y.dated) a.in.hasToday = false;
+  // The round this session's live plays have: ranked with no clock,
+  // Recently played's rows of it first (This session: the owner's call,
+  // 2026-11-24), and the copy-out's This session by the same round.
+  a.in.liveRound = fold.liveRound();
   if (rank_) {
     const uint32_t records = sf::kRecords;
     const bool lists = !visiting() || a.mem.lists;  // (the lean ask's played-set-only rank: TRKD's alone)
@@ -1236,7 +1243,7 @@ void StatsLists::finishVisit(const Gates& g) {
     ctx.trackCount = idx.trackCount();
     ctx.albums = idx.albumCount();
     ctx.time = a.in.hasToday && sf::todayOf(nowMs, &today) ? sf::timeOf(nowMs) : 0;
-    ctx.liveRound = glue_->fold().liveRound();
+    ctx.liveRound = a.in.liveRound;  // (prepare()'s Fold::liveRound(): the one the rank marked This session by)
     ctx.sinceDay = glue_->fold().sinceDayNow(nowMs);
     ctx.window = snap_->written() ? snap_->window() : sv::kAllTime;  // (a re-ask keeps the page's window)
     ctx.version = version_;
@@ -1559,9 +1566,11 @@ void StatsLists::printLists(const Gates& g) {
       case sr::kRecent:
         timeText(e.at, t, sizeof(t));
         if (e.at) {
-          snprintf(what, sizeof(what), "%lu plays, last %s", static_cast<ul>(e.count), t);
+          snprintf(what, sizeof(what), "%lu plays, last %s%s", static_cast<ul>(e.count), t,
+                   e.session ? " (this session)" : "");
         } else {
-          snprintf(what, sizeof(what), "%lu plays, undated (round %lu)", static_cast<ul>(e.count), static_cast<ul>(e.ord));
+          snprintf(what, sizeof(what), "%lu plays, undated (round %lu%s)", static_cast<ul>(e.count),
+                   static_cast<ul>(e.ord), e.session ? ", this session" : "");
         }
         break;
       default:

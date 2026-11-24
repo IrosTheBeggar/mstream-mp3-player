@@ -75,8 +75,10 @@ constexpr uint16_t kNoRow = 0xFFFF;    // an id field with no wanted row (resolv
 constexpr uint32_t kCountMax = 0xFFFF;         // a count saturates
 constexpr uint32_t kNewFindsCountMax = 0x3FFF;  // ... New finds' (bits 14-15 the source)
 constexpr uint32_t kWhenMax = 0xFFFFFD;        // `when` saturates (in 2057)
-constexpr uint32_t kWhenEarlier = 0xFFFFFE;    // undated, before this session
-constexpr uint32_t kWhenSession = 0xFFFFFF;    // undated, this session (lastOrd the live round)
+// The codes: a dated snapshot's rows with no dated play; every row of an
+// undated one (4.3's "This session", then "Earlier": write()).
+constexpr uint32_t kWhenEarlier = 0xFFFFFE;    // before this session
+constexpr uint32_t kWhenSession = 0xFFFFFF;    // this session (lastOrd the live round)
 constexpr uint32_t kNoAlbum = 0xFFFFFFFF;      // albumAt() past the count
 // Most played's window (the header's byte; 7.1's PageRef window).
 constexpr uint8_t k7Days = 0, k30Days = 1, kAllTime = 2;
@@ -208,6 +210,13 @@ struct Context {
 // its row in `wanted` (kNoRow when it has none) and its facts, the totals,
 // the 7 days and the span from `report`; every other byte of the block
 // (bytesFor(ctx.albums)) zero. `snap` is a block of `bytes`, as carved.
+// Recently played's `when`: dated, a row's minute, or with no dated play
+// kWhenSession (lastOrd ctx.liveRound) or kWhenEarlier; ranked with no
+// clock, kWhenSession for the rank's own rows of this session
+// (Entry::session: lastOrd its live round, whatever lastAt) and
+// kWhenEarlier for every other, no minute (4.3: "This session", then
+// "Earlier"; the owner's call, 2026-11-24). The ask gives ctx.liveRound
+// the rank's (Input::liveRound), so the header's round is the rank's.
 // False, nothing written: a library past kMaxTracks or kMaxAlbums, or a
 // block short of bytesFor(ctx.albums) (a held snapshot re-asked over an
 // index with more albums). A backstop in the firmware: StatsLists'
@@ -271,7 +280,9 @@ struct MadeUp {
   // Recently played's dated rows: the first `recentFirstAgoMin` minutes
   // before `time`'s minute, each next `recentStepMin` before the last; then
   // `sessionRows` of this session (kWhenSession) and `earlierRows` before
-  // it (kWhenEarlier), last, as a rank orders them.
+  // it (kWhenEarlier), last, as a dated rank orders them. Undated (view 3):
+  // no dated row, `sessionRows` first, then `earlierRows`, as a rank with
+  // no clock orders and codes them (4.3: "This session", then "Earlier").
   uint32_t recentFirstAgoMin = 25;
   uint32_t recentStepMin = 60;
   uint32_t sessionRows = 0;

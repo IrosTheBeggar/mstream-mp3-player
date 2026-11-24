@@ -296,8 +296,8 @@ size_t hubData(statsview::HubRow row, const statsview::Lifetime& l, const sv::Sn
       const sv::Row r = s.rowAt(sr::kRecent, 0);
       char t[kTitleBytes];
       titleOf(r.id, t, sizeof(t));
-      // (A row's "25 min ago" from the snapshot's `when` and now: D10. A
-      // dated row of an undated snapshot has no time: no today to say it.)
+      // (A row's "25 min ago" from the snapshot's `when` and now: D10. An
+      // undated snapshot's rows have no time: This session or Earlier.)
       const bool timed = s.dated() && l.dated && r.when != sv::kWhenSession && r.when != sv::kWhenEarlier;
       return recentLine(f, kHubLineW, t, timed, l.nowMin, r.when, out, size);
     }

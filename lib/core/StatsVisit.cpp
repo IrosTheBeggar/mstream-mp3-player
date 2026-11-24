@@ -275,10 +275,18 @@ bool write(const sr::Ranker& ranker, const sm::Wanted& wanted, const sr::Report&
           cc::put16(row + 4, e.at ? sf::dayOfTime(e.at) : sf::kUnsetDay);
           break;
         case sr::kRecent: {
-          // Minutes since 2026-01-01 (a row's time is seconds plus 1); no
-          // dated play: this session's (lastOrd the live round) or earlier.
+          // Dated: minutes since 2026-01-01 (a row's time is seconds plus
+          // 1); no dated play: this session's (lastOrd the live round) or
+          // earlier. With no clock (4.3: "This session", then "Earlier"; the
+          // owner's call, 2026-11-24): the rank's mark alone, this session's
+          // rows (lastOrd the live round, whatever lastAt: a track played
+          // again keeps its dated lastAt) and every other row earlier. No
+          // dated when, so no day heading and no time: the rank has put
+          // this session's first, so the two parts follow each other.
           uint32_t when = 0;
-          if (e.at) {
+          if (!dated) {
+            when = e.session ? kWhenSession : kWhenEarlier;
+          } else if (e.at) {
             when = (e.at - 1) / 60;
             if (when > kWhenMax) when = kWhenMax;
           } else {
@@ -413,7 +421,9 @@ bool writeMadeUp(const MadeUp& m, Snapshot* snap, size_t bytes) {
     const uint32_t n = std::min({want, roomOf(l, m.albums), sr::kCaps[l], m.trackCount});
     uint8_t* row = p + offsetOf(l, m.albums);
     // Recently played: its dated rows first, then this session's, then
-    // earlier (cut from the end, as the cap cuts a rank's).
+    // earlier (cut from the end, as the cap cuts a rank's). Undated: no
+    // dated row, so this session's, then earlier, as write() codes a rank
+    // made with no clock (the owner's call, 2026-11-24).
     const uint32_t dated = l == sr::kRecent ? std::min(n, m.dated ? m.rows[li] : 0) : 0;
     const uint32_t session = l == sr::kRecent ? std::min(n - dated, m.sessionRows) : 0;
     for (uint32_t i = 0; i < n; ++i, row += kStrides[l]) {

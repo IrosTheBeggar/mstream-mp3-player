@@ -494,12 +494,12 @@ ShelfLook shelfLook(uint32_t id, const Lifetime& l, const PhaseInfo& p, const Sn
 //     time relative to now. Undated rows (kWhenSession, kWhenEarlier) go
 //     last, under one Earlier.
 //   - Undated snapshot: This session (kWhenSession), then Earlier
-//     (kWhenEarlier), no times. A row with a dated lastAt (the rank puts
-//     dated rows first: 4.3) is under its day, with no Today or Yesterday
-//     (no today) and no time. That is also a track replayed this session
-//     with no clock: an undated play leaves lastAt (5.9), and the copy-out
-//     codes kWhenSession only for lastAt 0, so it shows under its old day,
-//     not This session (an owner's call: S3b's review of S5).
+//     (kWhenEarlier), no days and no times, the only two sections (4.3; the
+//     owner's call, 2026-11-24, "Yes, fix the order"). The rank made with
+//     no clock puts this session's rows first, a track played again with
+//     no clock among them though its lastAt stays dated (5.9), and the
+//     copy-out codes every row one or the other; any other `when` (none a
+//     write() makes) reads as Earlier.
 enum class Section : uint8_t { Today, Yesterday, Day, Session, Earlier };
 struct RecentItem {
   bool heading = false;

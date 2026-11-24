@@ -34,9 +34,12 @@
 //                              30-day window; plays, then lastAt, newest
 //                              first; then the hash. None while the clock is
 //                              unset
-//       Recently played        plays at least 1; lastAt, newest first; then
-//                              the rows with no dated play by lastOrd, newest
-//                              first; then the hash
+//       Recently played        plays at least 1; with the clock unset this
+//                              session's rows first (lastOrd the ask's live
+//                              round, whatever lastAt: Entry::session), then
+//                              the rest; within each, lastAt, newest first;
+//                              then the rows with no dated play by lastOrd,
+//                              newest first; then the hash
 //     "Then the hash": the smaller first, as an unsigned 64-bit integer.
 //     Not played yet is the map's (StatsMap: the album bits).
 //   - Windows: RCNT's rows in the 30-day window, gathered in the caller's
@@ -72,14 +75,21 @@ const char* listName(List l);  // "most7", "most30", "mostAll", "newFinds", "old
 // 30 days). at: lastAt (Most played All time, Old favourites, Recently
 // played), firstAt (New finds), or the latest day of a play in the window
 // (Most played's 7 and 30 days). ord: lastOrd (Recently played). src: the
-// source firstAt keeps (New finds).
+// source firstAt keeps (New finds). session: Recently played with the
+// clock unset, a row of this session's (lastOrd the ask's live round,
+// whatever its lastAt: an undated play leaves lastAt and sets lastOrd, 5.9),
+// which ranks first (the owner's call, 2026-11-24: 4.3's "This session",
+// then "Earlier"); false in every other list and in every dated rank.
 struct Entry {
   uint64_t hash = 0;
   uint32_t count = 0;
   uint32_t at = 0;
   uint32_t ord = 0;
   uint8_t src = 0;
+  bool session = false;  // (in the pad: Ranker::kBytes as before)
 };
+static_assert(sizeof(Entry) == 24, "a list's row: Ranker::kBytes, the grades' (statsvisit::layout()) and the "
+                                   "heap model's");
 
 class Ranker {
 public:
@@ -89,7 +99,11 @@ public:
 
   // Starts over in `mem` (kBytes, 8-byte aligned). `hasToday` false: the
   // clock unset (the windows' lists, New finds and Old favourites none).
-  void begin(void* mem, bool hasToday, uint16_t today);
+  // `liveRound`: the ask's Fold::liveRound(), the round this session's
+  // live plays have; with the clock unset, a played row whose lastOrd is
+  // it is this session's (Entry::session: Recently played's first). 0:
+  // none (no played row has round 0).
+  void begin(void* mem, bool hasToday, uint16_t today, uint32_t liveRound);
   // A track's whole row (base ⊕ delta), once a hash, in any order.
   void track(const statsfold::Track& t);
   // A hash's plays in the 7- and 30-day windows and the latest day of a play
@@ -109,9 +123,11 @@ public:
   uint32_t total(List l) const { return total_[l]; }
   bool hasToday() const { return hasToday_; }
   uint16_t today() const { return today_; }
-  // The 30-day window's first day (today - 29, at least day 0).
-  uint16_t first30() const { return first30_; }
-  uint16_t first7() const { return first7_; }
+  uint32_t liveRound() const { return liveRound_; }
+  // The 30-day window's first day (today - 29, at least day 0; 0 with the
+  // clock unset), the 7-day window's (today - 6).
+  uint16_t first30() const { return today_ >= 29 ? static_cast<uint16_t>(today_ - 29) : 0; }
+  uint16_t first7() const { return today_ >= 6 ? static_cast<uint16_t>(today_ - 6) : 0; }
 
 private:
   void offer(List l, const Entry& e);
@@ -119,10 +135,14 @@ private:
   uint32_t n_[kLists] = {};
   uint32_t total_[kLists] = {};
   bool hasToday_ = false;
-  uint16_t today_ = 0, first7_ = 0, first30_ = 0;
+  uint16_t today_ = 0;  // (0 with the clock unset)
+  // (In first7_'s and first30_'s room, the two now worked out from today_:
+  // the Ranker stays 80 B on the board, StatsLists::Ask's 1,600.)
+  uint32_t liveRound_ = 0;
 };
 
-// Whether `a` comes before `b` in list `l` (the order of 4.3).
+// Whether `a` comes before `b` in list `l` (the order of 4.3; Recently
+// played's this session first by Entry::session, the Ranker's mark).
 bool before(List l, const Entry& a, const Entry& b);
 
 // RCNT's rows in the 30-day window, summed by hash for the Ranker.
@@ -217,11 +237,15 @@ struct Sparse {
 
 // What the rank reads besides the card: the copy the session stands on, its
 // base, the records' rows (Fold::Cursor's, TRKD's, RCNT's and DAYS', each
-// sorted and a key's records ⊕'d), and today.
+// sorted and a key's records ⊕'d), today and the live round. (The clock's
+// two fields beside `present`, in what was its pad: 52 B on the board with
+// the live round, StatsLists::Ask's 1,600.)
 struct Input {
   uint32_t generation = 0;  // stats.bin's (0 with headerCrc 0: none on the card)
   uint32_t headerCrc = 0;
   bool present = false;     // a stats.bin the session stands on
+  bool hasToday = false;    // the clock set (today its UTC day)
+  uint16_t today = 0;
   uint32_t baseGen = 0;     // HEAD's (0: none)
   uint32_t baseRows = 0;
   uint32_t baseCrc = 0;     // the base's header CRC, HEAD's
@@ -231,8 +255,10 @@ struct Input {
   uint32_t rcntRows = 0;
   const uint8_t* days = nullptr;  // the records' DAYS rows (16 B each; S3a)
   uint32_t daysRows = 0;
-  bool hasToday = false;
-  uint16_t today = 0;
+  // The session's Fold::liveRound() (the ask's, as write()'s Context has
+  // it): with the clock unset, Recently played's rows whose lastOrd is it
+  // first (Ranker::begin()). 0: none.
+  uint32_t liveRound = 0;
 };
 
 // The rank's memory, every block the caller's.

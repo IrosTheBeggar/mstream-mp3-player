@@ -17,7 +17,9 @@
 //   less the orphans among the kept rows;
 // - the counts' saturation (65,535; New finds' 16,383 beside its source)
 //   and when's codes (minutes since 2026; undated this session, undated
-//   earlier; saturating in 2057);
+//   earlier; saturating in 2057); ranked with no clock, the two codes
+//   alone, this session's rows (the rank's) first (the owner's call,
+//   2026-11-24);
 // - notPlayed(): the album bits in A-Z order and the directory over
 //   libraries of 1 to 6,000 albums, albumAt() for every k, nothing written
 //   past the block (trimmed or not); refused for a map not Ready, another
@@ -129,14 +131,18 @@ struct WantedRegion {
 };
 
 // What the copy-out writes for a kept row's facts (9.7's table), worked out
-// here from the Ranker's entry.
+// here from the Ranker's entry. Recently played ranked with no clock: This
+// session for the rank's own rows of it (lastOrd its live round, whatever
+// lastAt), else Earlier, never a minute (the owner's call, 2026-11-24).
 uint16_t sat16(uint32_t v) { return static_cast<uint16_t>(v > 0xFFFF ? 0xFFFF : v); }
-uint32_t whenOf(const sr::Entry& e, uint32_t liveRound) {
+uint32_t whenOf(const sr::Entry& e, uint32_t liveRound, bool dated) {
+  if (!dated) return e.session ? sv::kWhenSession : sv::kWhenEarlier;
   if (e.at == 0) return e.ord == liveRound ? sv::kWhenSession : sv::kWhenEarlier;
   const uint32_t m = (e.at - 1) / 60;
   return m > sv::kWhenMax ? sv::kWhenMax : m;
 }
-void sameFacts(sr::List l, const sr::Entry& e, const sv::Row& r, uint32_t liveRound, const std::string& m) {
+void sameFacts(sr::List l, const sr::Entry& e, const sv::Row& r, uint32_t liveRound, bool dated,
+               const std::string& m) {
   switch (l) {
     case sr::kNewFinds:
       TEST_ASSERT_EQUAL_UINT32_MESSAGE(e.count > 0x3FFF ? 0x3FFF : e.count, r.count, m.c_str());
@@ -147,7 +153,7 @@ void sameFacts(sr::List l, const sr::Entry& e, const sv::Row& r, uint32_t liveRo
       TEST_ASSERT_EQUAL_UINT32_MESSAGE(sf::dayOfTime(e.at), r.lastDay, m.c_str());
       break;
     case sr::kRecent:
-      TEST_ASSERT_EQUAL_UINT32_MESSAGE(whenOf(e, liveRound), r.when, m.c_str());
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(whenOf(e, liveRound, dated), r.when, m.c_str());
       break;
     default:
       TEST_ASSERT_EQUAL_UINT32_MESSAGE(sat16(e.count), r.count, m.c_str());
@@ -198,7 +204,8 @@ Files scenarioFiles(const minijson::Value& sc) {
 
 // A card read as the boot reads it and ranked on `today` (-1: the clock
 // unset), into the u40 set: with the lists (a visit's Full grade) or
-// without (the lean ask's played-set-only rank).
+// without (the lean ask's played-set-only rank); by the session of
+// `liveRound` (-1: the fold's, a session that boots on the card).
 struct Ranked {
   cutfs::CutFs card;
   sf::Fold fold;
@@ -211,7 +218,8 @@ struct Ranked {
   sr::Report rep;
 };
 
-std::unique_ptr<Ranked> rankOf(const Files& files, int today, bool lean, const std::string& what) {
+std::unique_ptr<Ranked> rankOf(const Files& files, int today, bool lean, const std::string& what,
+                               int64_t liveRound = -1) {
   std::unique_ptr<Ranked> r(new Ranked());
   for (const auto& f : files) r->card.put(kDir + f.first, std::vector<uint8_t>(f.second.begin(), f.second.end()));
   sx::Store store(r->card);
@@ -225,6 +233,7 @@ std::unique_ptr<Ranked> rankOf(const Files& files, int today, bool lean, const s
   in.baseCrc = r->fold.head().baseCrc;
   in.hasToday = today >= 0;
   in.today = static_cast<uint16_t>(today >= 0 ? today : 0);
+  in.liveRound = liveRound < 0 ? r->fold.liveRound() : static_cast<uint32_t>(liveRound);
   const uint32_t rows = in.baseRows + 4096;
   sr::Memory mem;
   mem.work = r->work.p();
@@ -380,17 +389,23 @@ void test_write_and_resolve_on_the_rank_scenarios() {
   for (size_t s = 0; s < gRank.size(); ++s) {
     const minijson::Value& sc = gRank[s];
     const std::string what = sc["name"].str();
-    const std::unique_ptr<Ranked> r = rankOf(scenarioFiles(sc), todayOf(sc["today"]), false, what);
+    // (With the clock unset, by the scenario's session: rank.json's
+    // liveRound.)
+    const std::unique_ptr<Ranked> r =
+        rankOf(scenarioFiles(sc), todayOf(sc["today"]), false, what,
+               sc.has("liveRound") ? static_cast<int64_t>(sc["liveRound"].u64()) : -1);
     const sr::Ranker& k = r->ranker;
     WantedRegion wr(k);
-    // The live round: the newest undated Recently played row's (so This
-    // session and Earlier both come up), else one no row has.
+    // The live round: dated, the newest undated Recently played row's (so
+    // This session and Earlier both come up), else one no row has; undated,
+    // the rank's own (the ask gives the copy-out the rank's: finishVisit()).
     uint32_t live = 0xABCDE;
-    for (uint32_t i = 0; i < k.size(sr::kRecent); ++i)
+    for (uint32_t i = 0; i < k.size(sr::kRecent) && k.hasToday(); ++i)
       if (k.at(sr::kRecent, i).at == 0) {
         live = k.at(sr::kRecent, i).ord;
         break;
       }
+    if (!k.hasToday()) live = k.liveRound();
     const uint32_t albums = 1706;
     const sv::Context ctx = contextOf(albums, live, static_cast<uint32_t>(s) + 1);
     Block zero(sv::bytesFor(albums)), pattern(sv::bytesFor(albums)), part(sv::bytesFor(albums));
@@ -465,8 +480,23 @@ void test_write_and_resolve_on_the_rank_scenarios() {
         TEST_ASSERT_EQUAL_UINT32_MESSAGE(row.id, cc::get16(sn.ids(l) + static_cast<size_t>(i) * sv::kStrides[l]),
                                          mi.c_str());
         TEST_ASSERT_EQUAL_STRING_MESSAGE(want[static_cast<size_t>(i)][0].c_str(), hx(e.hash).c_str(), mi.c_str());
-        sameFacts(l, e, row, live, mi);
+        sameFacts(l, e, row, live, k.hasToday(), mi);
       }
+    }
+    // Undated: Recently played's whens are the two codes alone, This
+    // session's rows (the rank's: lastOrd its live round) first.
+    if (!k.hasToday()) {
+      uint32_t session = 0, others = 0;
+      for (uint32_t i = 0; i < sn.rows(sr::kRecent); ++i) {
+        const uint32_t when = sn.rowAt(sr::kRecent, i).when;
+        const bool mine = k.at(sr::kRecent, i).ord == live;
+        TEST_ASSERT_EQUAL_UINT32_MESSAGE(mine ? sv::kWhenSession : sv::kWhenEarlier, when, what.c_str());
+        TEST_ASSERT_TRUE_MESSAGE(mine ? others == 0 : true, what.c_str());
+        ++(mine ? session : others);
+      }
+      if (what == "rank-no-clock-session") TEST_ASSERT_EQUAL_UINT32(6, session);
+      if (what == "rank-no-clock") TEST_ASSERT_EQUAL_UINT32(0, session);  // (a session that boots on it: none)
+      TEST_ASSERT_TRUE(others > 0);
     }
     // A list number past the six: no ids, no rows, an empty row.
     for (uint32_t bad : {static_cast<uint32_t>(sr::kLists), 200u}) {
@@ -506,7 +536,7 @@ void test_write_and_resolve_on_the_rank_scenarios() {
         // The queue's id view over the list (7.6: a shelf acts through it)
         // reads the same id.
         TEST_ASSERT_EQUAL_UINT32_MESSAGE(row.id, IdView::u16(sn.ids(l), sn.rows(l), sv::kStrides[l])[j], mj.c_str());
-        sameFacts(l, e, row, live, mj);
+        sameFacts(l, e, row, live, k.hasToday(), mj);
       }
       // The rows past them zeroed (none left of the ask's indices).
       for (uint32_t j = rows; j < sv::roomOf(l, albums); ++j)
@@ -543,8 +573,8 @@ void test_saturation_and_when_s_codes() {
   Block mem(sr::Ranker::kBytes);
   sr::Ranker k;
   const uint16_t today = 320;
-  k.begin(mem.p(), true, today);
   const uint32_t live = 77;
+  k.begin(mem.p(), true, today, live);
   auto timeAt = [](uint32_t day, uint32_t minute) { return day * 86400u + minute * 60u + 1u; };
   // New finds: plays past 16,383 and under, each source.
   for (uint32_t i = 0; i < 4; ++i) {
@@ -630,17 +660,54 @@ void test_saturation_and_when_s_codes() {
   TEST_ASSERT_EQUAL_UINT32(0xFFFFFE, sv::kWhenEarlier);
   // 2057: the last minute `when` holds is in it.
   TEST_ASSERT_EQUAL_UINT32(2057, 2026 + (sv::kWhenMax / (60 * 24)) / 365);
-  // Recently played by minute, the clock unset: a row's time (seconds
-  // since 2026, plus 1) 1 and 60 are minute 0, 61 to 120 minute 1.
+  // Recently played by minute (day 0): a row's time (seconds since 2026,
+  // plus 1) 1 and 60 are minute 0, 61 to 120 minute 1.
+  auto byMinute = [](sr::Ranker& r) {
+    for (uint32_t s : {1u, 60u, 61u, 119u, 120u, 121u}) {
+      sf::Track t;
+      t.hash = 0x5000 + s;
+      t.plays = 1;
+      t.lastAt = s;  // (seconds since 2026, plus 1)
+      t.firstAt = s;
+      t.lastOrd = 5;
+      r.track(t);
+    }
+  };
+  {
+    Block memd(sr::Ranker::kBytes);
+    sr::Ranker kd;
+    kd.begin(memd.p(), true, 0, live);
+    byMinute(kd);
+    kd.finish();
+    WantedRegion wrd(kd);
+    Block bd(sv::bytesFor(1));
+    TEST_ASSERT_TRUE(sv::write(kd, wrd.w, sr::Report(), contextOf(1, live, 1), snapOf(bd), bd.bytes));
+    TEST_ASSERT_TRUE(snapOf(bd)->dated());
+    TEST_ASSERT_EQUAL_UINT32(6, snapOf(bd)->rows(sr::kRecent));
+    const uint32_t minutes[] = {2, 1, 1, 1, 0, 0};  // newest first: 121, 120, 119, 61, 60, 1
+    for (uint32_t i = 0; i < 6; ++i) TEST_ASSERT_EQUAL_UINT32(minutes[i], snapOf(bd)->rowAt(sr::kRecent, i).when);
+  }
+  // The clock unset (the owner's call, 2026-11-24): no minute, the two
+  // codes alone. This session's rows (lastOrd the live round, whatever
+  // lastAt) first, kWhenSession: a track played again with no clock (its
+  // dated lastAt kept), then one never dated; then every other row
+  // kWhenEarlier, the dated ones (by lastAt) and one never dated of the
+  // round before.
   Block mem2(sr::Ranker::kBytes);
   sr::Ranker k2;
-  k2.begin(mem2.p(), false, 0);
-  for (uint32_t s : {1u, 60u, 61u, 119u, 120u, 121u}) {
+  k2.begin(mem2.p(), false, 0, live);
+  byMinute(k2);
+  const struct {
+    uint64_t hash;
+    uint32_t lastAt, ord;
+  } undated[] = {{0x6001, 0, live}, {0x6002, 30, live}, {0x6003, 0, live - 1}};
+  for (const auto& x : undated) {
     sf::Track t;
-    t.hash = 0x5000 + s;
-    t.plays = 1;
-    t.lastAt = s;  // (seconds since 2026, plus 1)
-    t.firstAt = s;
+    t.hash = x.hash;
+    t.plays = 2;
+    t.firstAt = x.lastAt;
+    t.lastAt = x.lastAt;
+    t.lastOrd = x.ord;
     k2.track(t);
   }
   k2.finish();
@@ -651,12 +718,33 @@ void test_saturation_and_when_s_codes() {
   TEST_ASSERT_FALSE(s2.dated());
   TEST_ASSERT_EQUAL_UINT32(0, s2.time());
   TEST_ASSERT_EQUAL_UINT16(sf::kUnsetDay, s2.today());
-  TEST_ASSERT_EQUAL_UINT32(6, s2.rows(sr::kRecent));
-  const uint32_t minutes[] = {2, 1, 1, 1, 0, 0};  // newest first: 121, 120, 119, 61, 60, 1
-  for (uint32_t i = 0; i < 6; ++i) TEST_ASSERT_EQUAL_UINT32(minutes[i], s2.rowAt(sr::kRecent, i).when);
+  TEST_ASSERT_EQUAL_UINT32(live, s2.liveRound());
+  TEST_ASSERT_EQUAL_UINT32(9, s2.rows(sr::kRecent));
+  const uint64_t order[] = {0x6002, 0x6001, 0x5000 + 121, 0x5000 + 120, 0x5000 + 119,
+                            0x5000 + 61, 0x5000 + 60, 0x5000 + 1, 0x6003};
+  for (uint32_t i = 0; i < 9; ++i) {
+    TEST_ASSERT_TRUE(k2.at(sr::kRecent, i).hash == order[i]);
+    TEST_ASSERT_EQUAL(i < 2, k2.at(sr::kRecent, i).session);
+    TEST_ASSERT_EQUAL_UINT32(i < 2 ? sv::kWhenSession : sv::kWhenEarlier, s2.rowAt(sr::kRecent, i).when);
+  }
+  // Every other list marks nothing; All time by plays as before.
+  for (uint32_t i = 0; i < k2.size(sr::kMostAll); ++i) TEST_ASSERT_FALSE(k2.at(sr::kMostAll, i).session);
   for (sr::List l : {sr::kMost7, sr::kMost30, sr::kNewFinds, sr::kOldFavourites}) {
     TEST_ASSERT_EQUAL_UINT32(0, s2.rows(l));
     TEST_ASSERT_EQUAL_UINT32(0, s2.total(l));
+  }
+  // Live round 0 (none): no row this session's, every one Earlier.
+  {
+    Block mem0(sr::Ranker::kBytes);
+    sr::Ranker k0;
+    k0.begin(mem0.p(), false, 0, 0);
+    byMinute(k0);
+    sf::Track t;
+    t.hash = 0x6004;
+    t.plays = 1;  // (lastOrd 0: none has it, a play's round is 1 at least)
+    k0.track(t);
+    k0.finish();
+    for (uint32_t i = 0; i < k0.size(sr::kRecent); ++i) TEST_ASSERT_FALSE(k0.at(sr::kRecent, i).session);
   }
   // resolve() drops the row with no index, and counts it out of the total.
   for (uint32_t i = 0; i < w.n; ++i) w.setId(i, i + 1);
@@ -797,7 +885,7 @@ void test_the_directory_and_album_at() {
     Block b(sv::bytesFor(albums));
     Block mem(sr::Ranker::kBytes);
     sr::Ranker k;
-    k.begin(mem.p(), true, 300);
+    k.begin(mem.p(), true, 300, 0);
     for (uint32_t i = 0; i < 230; ++i) {
       sf::Track t;
       t.hash = 0x9000 + i;
@@ -1762,6 +1850,9 @@ void test_the_made_up_writer_reads_back() {
 
   // No clock: the lists that need it have none, Recently played this
   // session's then earlier rows, the 7 days zero; a Lists grade, no bits.
+  // As a rank with no clock codes them (the owner's call, 2026-11-24): the
+  // two codes alone, This session's first, no dated row (the recipe's 60
+  // dated ones not written).
   sv::MadeUp u = m;
   u.dated = false;
   u.grade = sv::Grade::Lists;
@@ -1780,6 +1871,7 @@ void test_the_made_up_writer_reads_back() {
     TEST_ASSERT_EQUAL_UINT32(0, t->total(l));
   }
   TEST_ASSERT_EQUAL_UINT32(50, t->rows(sr::kMostAll));
+  TEST_ASSERT_EQUAL_UINT32(60, u.rows[sr::kRecent]);
   TEST_ASSERT_EQUAL_UINT32(5, t->rows(sr::kRecent));
   for (uint32_t i = 0; i < 5; ++i)
     TEST_ASSERT_EQUAL_UINT32(i < 3 ? sv::kWhenSession : sv::kWhenEarlier, t->rowAt(sr::kRecent, i).when);
@@ -1858,7 +1950,7 @@ void test_the_made_up_writer_reads_back() {
   // A real ask's write() over it: the mark goes with the rest of the flags.
   Block mem(sr::Ranker::kBytes);
   sr::Ranker k;
-  k.begin(mem.p(), true, 313);
+  k.begin(mem.p(), true, 313, 9);
   k.finish();
   WantedRegion w(k);
   sr::Report rep;
