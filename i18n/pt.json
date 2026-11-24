@@ -353,7 +353,7 @@
     "other": "{0} faixas que você ouvia muito"
   },
   "@stats.old_favourites_sub": {
-    "note": "'que você ouvia muito' (that you used to play a lot): the imperfect says 'not lately'. 'muito ouvidas, mas não ultimamente' is 287 px at 0 tracks in Small 232, so it would never be drawn; this one is drawn up to 19,416 tracks, the count alone above."
+    "note": "'que você ouvia muito' (that you used to play a lot): the imperfect says 'not lately'. 'muito ouvidas, mas não ultimamente' is 287 px at 0 tracks in Small 232, so it would never be drawn; this one is drawn up to 9,999 tracks (225 px); from 10.000 it is 233 px and the count alone (library.tracks_n) is drawn."
   },
   "stats.not_played": "Ainda não ouvidos",
   "@stats.not_played": {

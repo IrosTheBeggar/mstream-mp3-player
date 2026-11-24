@@ -362,7 +362,13 @@
     "note": "Счёт не ведётся (no count is kept): 'Нет карты: прослушивания не считаются' is 348 px in Body 300, '…: прослушивания не в счёт' 311."
   },
   "stats.since": "{0} с {1}",
+  "@stats.since": {
+    "note": "с before the date, as the terminal player writes it (sta.week_of, 'Неделя с %{date}'). On the 2nd of a month it reads 'с 2 сен', where Russian writes 'со 2' (со второго): the date's number can't choose the form, and 'со' every time would be wrong from the 3rd. For a native review, as Italian's 'dal 8'."
+  },
   "stats.since_only": "с {0}",
+  "@stats.since_only": {
+    "note": "As stats.since: 'с 2 сен' on the 2nd of a month, where Russian writes 'со 2'; the date's number can't choose the form. For a native review."
+  },
   "stats.last7": "За 7 дней",
   "@stats.last7": {
     "note": "За 7 дней (over 7 days), as stats.window_all's За всё время: 'Последние 7 дней' is 171 px in Bold 161, the page's title beside Библиотека's crumb."
@@ -401,7 +407,7 @@
     "many": "{0} треков — часто, но давно"
   },
   "@stats.old_favourites_sub": {
-    "note": "'часто, но давно' (often, but long ago: played often, not lately), after a dash: 'часто слушали, но давно' is 269 px in Small 232 at 1 000."
+    "note": "'часто, но давно' (often, but long ago: played often, not lately), after a dash: '1 000 треков — часто слушали, но давно' is 282 px in Small 232 (with English's comma, 269)."
   },
   "stats.not_played": "Ещё не слушали",
   "@stats.not_played": {
@@ -414,7 +420,7 @@
   "stats.no_dates": "Дат пока нет: часы не настроены",
   "stats.clock_fix": "Подключите к вкладке MP3-плеер",
   "@stats.clock_fix": {
-    "note": "MP3-плеер, the terminal player's name for its MP3 Player tab (gui.top.mp3), with no quotes, as it names its tabs ('на вкладке Доступ'). Capitalized also after the toast's ': ' (toast.stats_needs_dates), as it is drawn alone on the hub's status row."
+    "note": "MP3-плеер, the terminal player's name for its MP3 Player tab (gui.top.mp3), with no quotes, as it names its tabs ('на вкладке Доступ'). Capitalized also after the toast's ': ' (toast.stats_needs_dates), as it is drawn alone on the hub's status row. 236 px in Small 250. For a native review: one plugs in to a computer, not a tab; 'Подключите к ПК (вкладка MP3-плеер)' and 'Подключите к компьютеру: MP3-плеер' are 269 px, 'Подключите и откройте вкладку MP3-плеер' 304, and 'Подключите (вкладка MP3-плеер)', the French file's way, fits at 234."
   },
   "stats.needs_dates": "Нужны даты",
   "stats.warming": "Откроется {0}, после месяца",

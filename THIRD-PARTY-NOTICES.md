@@ -452,11 +452,13 @@ It contains:
 
 The nine translations of the UI's texts (i18n/de.json, es, fr, it, ja, pl,
 pt, ru and zh; the firmware holds them in lib/core/UiStringsData.cpp) are
-machine translations made for this project by Fable agents (Claude), not
-yet reviewed by native speakers (docs/I18N.md, phase 3, "The
-translations"). Where they had the text or its words, they take them from
-two apps by the same author as this firmware (IrosTheBeggar), so that
-mStream's apps say the same thing; each file's `@@note` says what it took:
+machine translations made for this project by Fable agents (Claude), and
+their listening stats' texts (November 2026) by Claude agents (Claude
+Opus 5.5), not yet reviewed by native speakers (docs/I18N.md, phase 3,
+"The translations"). Where they had the text or its words, they take
+them from two apps by the same author as this firmware (IrosTheBeggar),
+so that mStream's apps say the same thing; each file's `@@note` says
+what it took:
 
 - **The mStream mobile app** (mstream_music), `lib/l10n/app_<lang>.arb`,
   branch master at commit bdb174e0ea3a6333f820b593888d5a662c9ae976
@@ -468,14 +470,16 @@ mStream's apps say the same thing; each file's `@@note` says what it took:
   `listeningDays`, `listeningPlays`, `listeningEmptyTitle`,
   `listeningEmptyPeriod`, `listeningToday`, `listeningYesterday`,
   `listeningTilePlays`, `listeningTileTime` and `autoDjRecentlyPlayed`:
-  the `stats.*` texts docs/LISTENING-STATS.md 8.1 lists; and, for the
-  stats' other texts, 8.2's, its words where it had them: its
-  `listeningEmptyDevice`, `listeningMostOnDay`, `listeningRecent`,
-  `listeningByTime`, `listeningTileSessions`, `listeningTileSubCounted`,
+  the `stats.*` texts docs/LISTENING-STATS.md 8.1 lists; for the short
+  forms of those too wide for their rooms, its `listeningRecent`,
+  `listeningByTime`, `autoDjFirstSongRecent` and `discoverPageWindowAll`;
+  and, for the stats' other texts, 8.2's, its words where it had them:
+  its `listeningEmptyDevice`, `listeningMostOnDay`,
+  `listeningTileSessions`, `listeningTileSubCounted`,
   `listeningScopeSheetDevice`, `agoMinutes`, `agoHours`,
-  `songInfoLastPlayed`, `autoDjFirstSongRecent`, `discoverPageTitle`,
-  `discoverPageWindowAll`, `discoverPageWidened`, `discoverPageBasedOnLast`
-  and `discoverNetworkNothingNew`) at commit
+  `songInfoLastPlayed`, `discoverPageTitle`, `discoverPageWidened`,
+  `discoverPageBasedOnLast`, `discoverNetworkNothingNew` and
+  `queueEmptyDjRandom`) at commit
   d17c3fa561da2b7ba3f575d132c3682177b83009 (2026-11-01), which bdb174e
   predates. Licence: GPL-3.0 (its LICENSE). Its translations are machine
   translations (its README says so). Source:

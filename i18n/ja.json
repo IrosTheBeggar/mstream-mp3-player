@@ -325,9 +325,9 @@
   "stats.not_played": "未再生のアルバム",
   "stats.recent": "最近再生した曲",
   "stats.no_dates": "まだ日付なし: 時計が未設定",
-  "stats.clock_fix": "「MP3プレーヤー」タブに接続",
+  "stats.clock_fix": "「MP3プレーヤー」タブで接続",
   "@stats.clock_fix": {
-    "note": "MP3プレーヤー as the terminal player names its tab (gui.top.mp3), spelt as it spells it, in 「」 as this file names a control (bt.forget_body, queue.clear_confirm_body). 'パソコンの「MP3プレーヤー」タブに接続' (on the computer's) is 299 px in Small, the status row's line 250."
+    "note": "MP3プレーヤー as the terminal player names its tab (gui.top.mp3), spelt as it spells it, in 「」 as this file names a control (bt.forget_body, queue.clear_confirm_body). で (connect in that tab, 219 px in Small 250): 「MP3プレーヤー」タブに接続 (219 px) would plug the player into the tab; 「MP3プレーヤー」タブを開いて接続 (open the tab and connect) is 267 px, 'パソコンの「MP3プレーヤー」タブに接続' (on the computer's) 299, in the status row's line 250."
   },
   "stats.needs_dates": "日付が必要",
   "stats.warming": "{0}から利用可能 (1 か月の再生後)",

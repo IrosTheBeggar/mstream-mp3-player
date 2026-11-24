@@ -345,7 +345,7 @@
   "stats.no_room": "Za mało pamięci w tej chwili",
   "stats.unread": "Nie można odczytać statystyk",
   "@stats.unread": {
-    "note": "'Nie udało się odczytać statystyk' is 212 px in the entry row's Small 204: 'Nie można odczytać' (197 px), as the device's card.unknown_still and the terminal player's dev.card_unreadable. Not the device's 'jest nieczytelny' (card.unknown_title), which reads as damage where Try again is offered."
+    "note": "'Nie udało się odczytać statystyk' is 212 px in the entry row's Small 204: 'Nie można odczytać' (197 px), as the device's card.unknown_still and the terminal player's dev.card_unreadable. Not the device's 'jest nieczytelna' (card.unknown_title, 'Karta jest nieczytelna'), which reads as damage where Try again is offered."
   },
   "stats.card_back": "Karta wróciła",
   "stats.no_card": "Brak karty: odtworzeń się nie liczy",
@@ -402,7 +402,7 @@
   },
   "stats.clock_fix": "Podłącz do zakładki Odtwarzacz MP3",
   "@stats.clock_fix": {
-    "note": "'Odtwarzacz MP3' is the terminal player's name for its MP3 Player tab (gui.top.mp3): the player plugged in to the computer with that tab open, which sets its clock. 240 px in Small 250."
+    "note": "'Odtwarzacz MP3' is the terminal player's name for its MP3 Player tab (gui.top.mp3): the player plugged in to the computer with that tab open, which sets its clock. 240 px in Small 250. For a native review: 'do zakładki' can read as plugging the player into the tab; 'Podłącz (zakładka Odtwarzacz MP3)', the French file's way, is 234 px, 'Podłącz przy zakładce Odtwarzacz MP3' 255 and 'Podłącz, otwórz zakładkę Odtwarzacz MP3' 276, and 'Podłącz i otwórz Odtwarzacz MP3' (217) can read as opening the player."
   },
   "stats.needs_dates": "Wymaga dat",
   "@stats.needs_dates": {

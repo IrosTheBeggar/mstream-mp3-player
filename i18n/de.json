@@ -330,7 +330,7 @@
   "stats.title": "Hörstatistik",
   "stats.entry_empty": "Wiedergaben landen hier",
   "@stats.entry_empty": {
-    "note": "The first words of the mobile app's listeningEmptyDevice ('Wiedergaben landen hier, während du hörst.'): the whole is 284 px in Small 204, 'Wiedergaben erscheinen beim Hören' 241."
+    "note": "The first words of the mobile app's listeningEmptyDevice ('Wiedergaben landen hier, während du hörst.'): the whole is 288 px in Small 204, 'Wiedergaben erscheinen beim Hören' 241."
   },
   "stats.counting": "Wiedergaben werden gezählt…",
   "@stats.counting": {
