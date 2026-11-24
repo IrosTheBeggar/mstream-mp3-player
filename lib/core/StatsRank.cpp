@@ -42,19 +42,33 @@ const char* outcomeName(Outcome o) {
 // ---------------------------------------------------------------------------
 // The order (4.3)
 // ---------------------------------------------------------------------------
-bool before(List l, const Entry& a, const Entry& b) {
+bool before(List l, const Entry& a, const Entry& b, bool dated) {
   if (l == kRecent) {
     // With the clock unset, this session's rows first (the owner's call,
     // 2026-11-24, "Yes, fix the order": 4.3's "This session", then
-    // "Earlier"; the Ranker marks them, never in a dated rank). Then, within
-    // each part, 4.3's order as before: lastAt, newest first; then the rows
-    // with no dated play (lastAt 0) by lastOrd, newest first; then the hash.
-    // Within this session no play order is known (its plays have no time
-    // and one round), so its rows keep that order too: a track played
-    // again keeps its dated lastAt from before and comes first, then the
-    // never-dated ones by the hash. Earlier keeps it whole, as a dated rank
-    // orders the same rows (the dated by lastAt, then the rest by round).
+    // "Earlier"; the Ranker marks them, never in a dated rank).
     if (a.session != b.session) return a.session;
+    if (!dated) {
+      // Then, with the clock unset, lastOrd, newest first; then lastAt,
+      // newest first (a row with no dated play, 0, last); then the hash.
+      // Every play sets lastOrd to its fold round, dated or not (5.2's
+      // merge: the larger), and a later session or boot fold has a larger
+      // round, so with no time to go by the round is the one order every
+      // row has. 4.3's dated order would put each dated row before every
+      // never-dated one: a card with 216 dated rows or more would lose the
+      // last no-clock session's never-dated plays from Earlier, past the
+      // 216 rows kept, as it lost this session's. The cost: a boot's
+      // fold gives the plays it folds (an older log's, another player's)
+      // the boot's round, so they rank before the sessions saved before it.
+      // Within this session (one round) no play order is known, so a track
+      // played again comes first by its dated lastAt from before, then the
+      // never-dated ones by the hash; Earlier's rows of one round the same.
+      if (a.ord != b.ord) return a.ord > b.ord;
+      if (a.at != b.at) return a.at > b.at;
+      return a.hash < b.hash;
+    }
+    // Dated, 4.3's order: lastAt, newest first; then the rows with no dated
+    // play (lastAt 0) by lastOrd, newest first; then the hash.
     const bool da = a.at != 0, db = b.at != 0;
     if (da != db) return da;
     if (da) {
@@ -89,8 +103,9 @@ static_assert(kOffsets[kLists] == Ranker::kEntries, "the lists' block");
 struct Heap {
   List l;
   Entry* e;
+  bool dated;  // the rank's clock set (before())
   // `a` is worse than `b`: it goes nearer the top.
-  bool worse(const Entry& a, const Entry& b) const { return before(l, b, a); }
+  bool worse(const Entry& a, const Entry& b) const { return before(l, b, a, dated); }
   void up(uint32_t i) {
     while (i > 0) {
       const uint32_t p = (i - 1) / 2;
@@ -127,14 +142,14 @@ void Ranker::begin(void* mem, bool hasToday, uint16_t today, uint32_t liveRound)
 
 void Ranker::offer(List l, const Entry& x) {
   ++total_[l];  // every offer, kept or not (S3a's totals)
-  Heap h{l, list_[l]};
+  Heap h{l, list_[l], hasToday_};
   const uint32_t cap = rowsOf(l);
   if (n_[l] < cap) {
     h.e[n_[l]] = x;
     h.up(n_[l]++);
     return;
   }
-  if (!before(l, x, h.e[0])) return;  // no better than the worst kept
+  if (!before(l, x, h.e[0], hasToday_)) return;  // no better than the worst kept
   h.e[0] = x;
   h.down(0, cap);
 }
@@ -195,7 +210,7 @@ void Ranker::windows(uint64_t hash, uint32_t plays7, uint16_t latest7, uint32_t 
 void Ranker::finish() {
   for (int l = 0; l < kLists; ++l) {
     // The heap sort: the worst to the end, one at a time.
-    Heap h{static_cast<List>(l), list_[l]};
+    Heap h{static_cast<List>(l), list_[l], hasToday_};
     for (uint32_t end = n_[l]; end > 1;) {
       --end;
       std::swap(h.e[0], h.e[end]);

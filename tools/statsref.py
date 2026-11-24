@@ -990,19 +990,25 @@ def live_round_of(st: Stats):
     return sat(st.head["round"] + 2, M24)
 
 
-def recently_played(st: Stats, rows=None, live_round=None):
-    """[(pathHash, plays, lastAt, lastOrd)]: plays at least 1. With the
-    clock unset (live_round: the ranking session's, Fold::liveRound(); None
-    or 0 for a dated rank) this session's rows first: lastOrd the live
-    round, whatever lastAt (an undated play leaves lastAt, 5.9; the owner's
-    call, 2026-11-24: 4.3's "This session", then "Earlier"). Then, within
-    each part, lastAt, newest first; then the rows with no dated play by
-    lastOrd, newest first; then the hash."""
+def recently_played(st: Stats, rows=None, live_round=None, dated=True):
+    """[(pathHash, plays, lastAt, lastOrd)]: plays at least 1. Dated (the
+    clock set): lastAt, newest first; then the rows with no dated play by
+    lastOrd, newest first; then the hash. With the clock unset (dated False;
+    live_round the ranking session's Fold::liveRound(), None or 0: none)
+    this session's rows first: lastOrd the live round, whatever lastAt (an
+    undated play leaves lastAt, 5.9; the owner's call, 2026-11-24: 4.3's
+    "This session", then "Earlier"). Then, within each part, lastOrd,
+    newest first (every play sets it, dated or not: with no time, the one
+    order every row has, so the last no-clock session's never-dated plays
+    lead Earlier, not fall past 216 dated rows); then lastAt, newest first
+    (no dated play last); then the hash."""
     rows = st.tracks() if rows is None else rows
 
     def key(h, r):
+        if dated:
+            return (1, (0, -r.lastAt) if r.lastAt else (1, -r.lastOrd), h)
         session = bool(live_round) and r.lastOrd == live_round
-        return (0 if session else 1, (0, -r.lastAt) if r.lastAt else (1, -r.lastOrd), h)
+        return (0 if session else 1, (-r.lastOrd, -r.lastAt), h)
 
     items = sorted(key(h, r) for h, r in rows.items() if r.plays >= 1)
     items = items[:CAPS["recentlyPlayed"] + PAST_CAP]
@@ -1019,13 +1025,14 @@ def not_played(st: Stats, albums, rows=None):
 def lists(st: Stats, today, albums=None, live_round=None):
     """Every shelf's list (4.3) as the rankers give it: hashes, no names.
     With the clock unset (today None) Recently played puts the ranking
-    session's rows first: live_round its Fold::liveRound(), by default a
-    session that boots on the card (live_round_of(): no row is its)."""
+    session's rows first, then the rest by lastOrd (recently_played()):
+    live_round its Fold::liveRound(), by default a session that boots on
+    the card (live_round_of(): no row is its)."""
     rows = st.tracks()
     live = None if today is not None else live_round_of(st) if live_round is None else live_round
     out = {"mostPlayed": {str(d or "all"): most_played(st, today, d, rows) for d in (7, 30, None)},
            "newFinds": new_finds(st, today, rows), "oldFavourites": old_favourites(st, today, rows),
-           "recentlyPlayed": recently_played(st, rows, live)}
+           "recentlyPlayed": recently_played(st, rows, live, dated=today is not None)}
     if albums is not None:
         out["notPlayed"] = not_played(st, albums, rows)
     return out
@@ -2864,8 +2871,13 @@ def rank_scenarios():
         ("rank-no-clock-session", "this session's plays with the clock unset, as its live save leaves the card "
          "(its HEAD round, 902, the session's live round: it loaded 900), ranked by that session: three tracks "
          "never played before, one played before but never dated, the oldest and the newest dated tracks played "
-         "again, all undated, first (This session), then the rest (Earlier) among them over 216 dated tracks and "
-         "the boot's fold of an earlier undated play (round 901); a skip moves no row", session, None, live),
+         "again, all undated, first (This session), then the rest (Earlier) by round, newest first: the boot's "
+         "fold of an earlier undated play (round 901), then the rows of rounds up to 900, over 216 of them "
+         "dated; a skip moves no row", session, None, live),
+        ("rank-no-clock-next", "rank-no-clock-session's card ranked by the next session, the clock still unset, "
+         "before it plays (it loads 902: live round 904): no row is this session's; Earlier by round, newest "
+         "first: the last session's six rows (two dated, four never dated) lead it, then round 901's, though the "
+         "card has over 216 dated tracks", session, None, live_round_of(session)),
     ]
 
 

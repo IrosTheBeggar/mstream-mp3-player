@@ -34,12 +34,14 @@
 //                              30-day window; plays, then lastAt, newest
 //                              first; then the hash. None while the clock is
 //                              unset
-//       Recently played        plays at least 1; with the clock unset this
-//                              session's rows first (lastOrd the ask's live
-//                              round, whatever lastAt: Entry::session), then
-//                              the rest; within each, lastAt, newest first;
-//                              then the rows with no dated play by lastOrd,
-//                              newest first; then the hash
+//       Recently played        plays at least 1; lastAt, newest first; then
+//                              the rows with no dated play by lastOrd,
+//                              newest first; then the hash. With the clock
+//                              unset this session's rows first (lastOrd the
+//                              ask's live round, whatever lastAt:
+//                              Entry::session), then the rest; within each,
+//                              lastOrd, newest first; then lastAt, newest
+//                              first (no dated play last); then the hash
 //     "Then the hash": the smaller first, as an unsigned 64-bit integer.
 //     Not played yet is the map's (StatsMap: the album bits).
 //   - Windows: RCNT's rows in the 30-day window, gathered in the caller's
@@ -143,7 +145,9 @@ private:
 
 // Whether `a` comes before `b` in list `l` (the order of 4.3; Recently
 // played's this session first by Entry::session, the Ranker's mark).
-bool before(List l, const Entry& a, const Entry& b);
+// `dated`: the rank's clock set (Ranker::hasToday()); false, Recently
+// played by lastOrd first (the comment in StatsRank.cpp says why).
+bool before(List l, const Entry& a, const Entry& b, bool dated);
 
 // RCNT's rows in the 30-day window, summed by hash for the Ranker.
 class Windows {

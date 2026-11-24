@@ -1527,9 +1527,13 @@ void test_recently_played_s_sections() {
   TEST_ASSERT_EQUAL_UINT32(2, headings);
   TEST_ASSERT_TRUE(recentAt(*c.s(), 0).heading && recentAt(*c.s(), 4).heading);
   // This session's: the one played again (its dated lastAt), then by the
-  // hash; then Earlier from the newest dated one.
+  // hash; then Earlier by round (the review of the session order): the
+  // never-dated one of the round before first, though 300 rows are dated,
+  // then round 10's newest dated one.
   TEST_ASSERT_TRUE(k.at(sr::kRecent, 0).hash == 0x1000 && k.at(sr::kRecent, 1).hash == 0x2001 &&
-                   k.at(sr::kRecent, 2).hash == 0x2002 && k.at(sr::kRecent, 3).hash == 0x1000 + 299);
+                   k.at(sr::kRecent, 2).hash == 0x2002 && k.at(sr::kRecent, 3).hash == 0x2003 &&
+                   k.at(sr::kRecent, 4).hash == 0x1000 + 299);
+  TEST_ASSERT_EQUAL_UINT32(sv::kWhenEarlier, c->rowAt(sr::kRecent, 3).when);
   // The hub's row 6: This session's first row, no time.
   TEST_ASSERT_EQUAL_UINT32(sv::kWhenSession, c->rowAt(sr::kRecent, 0).when);
 }

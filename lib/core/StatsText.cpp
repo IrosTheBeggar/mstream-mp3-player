@@ -297,7 +297,11 @@ size_t hubData(statsview::HubRow row, const statsview::Lifetime& l, const sv::Sn
       char t[kTitleBytes];
       titleOf(r.id, t, sizeof(t));
       // (A row's "25 min ago" from the snapshot's `when` and now: D10. An
-      // undated snapshot's rows have no time: This session or Earlier.)
+      // undated snapshot's rows have no time: This session or Earlier. Its
+      // row 0 is the rank's first, not the newest play: within This
+      // session a track played again first by its old dated lastAt, then
+      // the never-dated ones by the hash; with none, Earlier's newest
+      // round. statsrank::before().)
       const bool timed = s.dated() && l.dated && r.when != sv::kWhenSession && r.when != sv::kWhenEarlier;
       return recentLine(f, kHubLineW, t, timed, l.nowMin, r.when, out, size);
     }

@@ -496,6 +496,9 @@ void test_write_and_resolve_on_the_rank_scenarios() {
       }
       if (what == "rank-no-clock-session") TEST_ASSERT_EQUAL_UINT32(6, session);
       if (what == "rank-no-clock") TEST_ASSERT_EQUAL_UINT32(0, session);  // (a session that boots on it: none)
+      // (The next session's, before it plays: none; the last session's six
+      // lead Earlier, kWhenEarlier, no minute.)
+      if (what == "rank-no-clock-next") TEST_ASSERT_EQUAL_UINT32(0, session);
       TEST_ASSERT_TRUE(others > 0);
     }
     // A list number past the six: no ids, no rows, an empty row.
@@ -691,8 +694,8 @@ void test_saturation_and_when_s_codes() {
   // codes alone. This session's rows (lastOrd the live round, whatever
   // lastAt) first, kWhenSession: a track played again with no clock (its
   // dated lastAt kept), then one never dated; then every other row
-  // kWhenEarlier, the dated ones (by lastAt) and one never dated of the
-  // round before.
+  // kWhenEarlier, by round (the review of the session order): one never
+  // dated of the round before first, then round 5's dated ones by lastAt.
   Block mem2(sr::Ranker::kBytes);
   sr::Ranker k2;
   k2.begin(mem2.p(), false, 0, live);
@@ -720,8 +723,8 @@ void test_saturation_and_when_s_codes() {
   TEST_ASSERT_EQUAL_UINT16(sf::kUnsetDay, s2.today());
   TEST_ASSERT_EQUAL_UINT32(live, s2.liveRound());
   TEST_ASSERT_EQUAL_UINT32(9, s2.rows(sr::kRecent));
-  const uint64_t order[] = {0x6002, 0x6001, 0x5000 + 121, 0x5000 + 120, 0x5000 + 119,
-                            0x5000 + 61, 0x5000 + 60, 0x5000 + 1, 0x6003};
+  const uint64_t order[] = {0x6002,       0x6001,      0x6003,     0x5000 + 121, 0x5000 + 120,
+                            0x5000 + 119, 0x5000 + 61, 0x5000 + 60, 0x5000 + 1};
   for (uint32_t i = 0; i < 9; ++i) {
     TEST_ASSERT_TRUE(k2.at(sr::kRecent, i).hash == order[i]);
     TEST_ASSERT_EQUAL(i < 2, k2.at(sr::kRecent, i).session);

@@ -46,8 +46,10 @@
 // The owner's call (2026-11-24, "Yes, fix the order"): with no clock,
 // Recently played's rows of this session (lastOrd the live round, whatever
 // lastAt) first, on rank-no-clock-session and on a session's own undated
-// plays over 216 dated tracks or more; every card ranked by its session's
-// live round (rank.json's, else the fold's).
+// plays over 216 dated tracks or more; then Earlier by lastOrd, newest
+// first (the review of the session order: the last no-clock session's
+// never-dated plays lead it, rank-no-clock-next); every card ranked by its
+// session's live round (rank.json's, else the fold's).
 // Run: pio test -e native -f test_stats_rank
 #include <unity.h>
 
@@ -410,7 +412,9 @@ std::vector<sr::Entry> refList(const Ref& ref, sr::List l, int today, uint32_t l
       v.push_back(e);
     }
   }
-  std::sort(v.begin(), v.end(), [l](const sr::Entry& a, const sr::Entry& b) { return sr::before(l, a, b); });
+  const bool dated = today >= 0;
+  std::sort(v.begin(), v.end(),
+            [l, dated](const sr::Entry& a, const sr::Entry& b) { return sr::before(l, a, b, dated); });
   if (capped && v.size() > sr::rowsOf(l)) v.resize(sr::rowsOf(l));
   return v;
 }
@@ -1024,17 +1028,22 @@ pl::Slot undatedPlay(uint32_t seq, uint64_t hash, uint8_t outcome = pl::kComplet
 // and sets lastOrd, 5.9). Before it, 4.3's order put the dated rows first,
 // so on a card of 216 dated tracks or more this session's never-dated plays
 // fell past the rows kept ("This session" empty) and a track played again
-// sat among the dated rows by its old lastAt.
+// sat among the dated rows by its old lastAt. Then Earlier by lastOrd,
+// newest first, then lastAt, then the hash (the review of the session
+// order: 4.3's dated order there lost the last no-clock session's
+// never-dated plays one boot later, as it had lost this session's).
 //   - rank-no-clock-session (statsref's): the card as the session's live
 //     save leaves it (HEAD's round its live round, 902), 363 dated tracks
 //     of earlier rounds, ranked by that session: its six rows first (two
-//     dated, played again; four never dated), statsref's lists.
+//     dated, played again; four never dated), statsref's lists. Under 4.3's
+//     dated order none of its never-dated plays is kept.
 //   - The same card under the next session (it loads 902: live round 904),
 //     its own fold's undated plays as the hand-off copies them (the
 //     records): two tracks never played, one played before but never dated,
-//     the oldest dated one, all first; the last session's rows Earlier now;
-//     a skip moves no row. With the clock set the same rows rank by 4.3's
-//     order as before, the never-dated plays past the 216 dated ones.
+//     the oldest dated one, all first; then Earlier, led by the last
+//     session's six rows (round 902), its four never-dated plays among
+//     them; a skip moves no row. With the clock set the same rows rank by
+//     4.3's order as before, the never-dated plays past the 216 dated ones.
 void test_this_session_first_with_no_clock() {
   const minijson::Value& sc = rankScenario("rank-no-clock-session");
   TEST_ASSERT_TRUE(sc["today"].isNull());
@@ -1094,9 +1103,12 @@ void test_this_session_first_with_no_clock() {
     }
     // No other list marks a row; All time as before.
     for (uint32_t i = 0; i < r.size(sr::kMostAll); ++i) TEST_ASSERT_FALSE(r.at(sr::kMostAll, i).session);
-    // Before the call (no row this session's): none of its never-dated
-    // plays among the rows kept.
-    const std::vector<sr::Entry> before = refList(plain, sr::kRecent, -1, 0);
+    // Before the call (4.3's dated order, no row this session's): none of
+    // its never-dated plays among the rows kept.
+    std::vector<sr::Entry> before = refList(plain, sr::kRecent, -1, 0, false);
+    std::sort(before.begin(), before.end(),
+              [](const sr::Entry& a, const sr::Entry& b) { return sr::before(sr::kRecent, a, b, true); });
+    before.resize(sr::rowsOf(sr::kRecent));
     uint32_t keptBefore = 0;
     for (const sr::Entry& e : before) keptBefore += e.ord == saved && e.at == 0 ? 1 : 0;
     TEST_ASSERT_EQUAL_UINT32(0, keptBefore);
@@ -1164,13 +1176,28 @@ void test_this_session_first_with_no_clock() {
     TEST_ASSERT_TRUE_MESSAGE(r.at(sr::kRecent, i).session, m.c_str());
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(live, r.at(sr::kRecent, i).ord, m.c_str());
   }
-  // Then Earlier, in 4.3's order: the last session's dated rows among the
-  // dated, by lastAt; no row this session's.
+  // Then Earlier by round, newest first; no row this session's. The last
+  // session's six rows (round 902, none played again here) lead it, its
+  // four never-dated plays among them (4.3's dated order put them past the
+  // 216 dated rows), then lastAt within a round, then the hash.
+  uint32_t lastNever = 0;
   for (uint32_t i = 4; i < r.size(sr::kRecent); ++i) {
-    TEST_ASSERT_FALSE(r.at(sr::kRecent, i).session);
-    TEST_ASSERT_TRUE(r.at(sr::kRecent, i).at != 0);
-    if (i > 4) TEST_ASSERT_TRUE(r.at(sr::kRecent, i).at <= r.at(sr::kRecent, i - 1).at);
+    const sr::Entry& e = r.at(sr::kRecent, i);
+    const std::string m = "the next session's Earlier row " + std::to_string(i);
+    TEST_ASSERT_FALSE_MESSAGE(e.session, m.c_str());
+    TEST_ASSERT_TRUE_MESSAGE(e.ord != live, m.c_str());
+    if (i < 10) {
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(saved, e.ord, m.c_str());
+      lastNever += e.at == 0 ? 1 : 0;
+    }
+    if (i > 4) {
+      const sr::Entry& p = r.at(sr::kRecent, i - 1);
+      TEST_ASSERT_TRUE_MESSAGE(p.ord > e.ord || (p.ord == e.ord && (p.at > e.at || (p.at == e.at && p.hash < e.hash))),
+                               m.c_str());
+    }
   }
+  TEST_ASSERT_EQUAL_UINT32(4, lastNever);
+  TEST_ASSERT_TRUE(r.at(sr::kRecent, 10).ord < saved);
   // With the clock set, the same card and records: 4.3's order as before,
   // no row marked, the never-dated plays past the 216 dated ones.
   {
