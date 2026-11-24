@@ -983,7 +983,7 @@ void LibraryPage::act(const IdView& span, int32_t start, int action, const char*
   ui_.toast(ok ? text : tr(S::toast_no_memory), ok, viewKey);
 }
 
-void LibraryPage::onRowAction(const RowRef& r, int action) {
+void LibraryPage::onRowAction(const RowRef& r, int action, bool topBar) {
   // A stats page's Play, Play next, + Queue (a ranked row's bar, the top
   // bar, a sheet's choices, Not played yet's album's sheet) under a made-up
   // view: look only (uiSx<n>, as uil<n>'s library), the toast says so.
@@ -994,10 +994,13 @@ void LibraryPage::onRowAction(const RowRef& r, int action) {
     act(IdView::of(span.ids, span.count), -1, action, name);
     return;
   }
-  // A stats shelf's ranked row, and its top bar (the page's own: kind None):
-  // the queue's view over the visit's snapshot (LibraryStats.cpp).
+  // A stats shelf's ranked row, and its top bar (the page's own, `topBar`:
+  // onAction(-1)'s alone): the queue's view over the visit's snapshot
+  // (LibraryStats.cpp). A row that reads None from a bar (its look moved
+  // under it, in the pass before the restage) is refused there, never
+  // taken for the top bar's whole list (S3b's review, finding 4).
   if (r.kind == RowKind::Ranked || (r.kind == RowKind::None && kind_ == PageKind::StatsShelf)) {
-    statsAct(r, action);
+    statsAct(r, action, topBar);
     return;
   }
   if (r.kind != RowKind::Track && r.kind != RowKind::File) return;
@@ -1018,7 +1021,7 @@ void LibraryPage::onAction(int32_t row, int action) {
   // The top bar: the page's own container. The Folders root has two
   // buttons: Play all, + Queue.
   if (root() && action == 1) action = 2;
-  onRowAction(RowRef{}, action);
+  onRowAction(RowRef{}, action, true);
 }
 
 ListView::Tap LibraryPage::onTap(uint32_t row) {

@@ -105,7 +105,9 @@
 // And S3b's cross-cutting review: the hub's header line and the entry row's
 // with the card out (nothing played, folding: the card hides neither), an
 // Off hub's rows refused (hubTap(): no blank shelf or Week pushed), Most
-// played's header at a capped RCNT naming what the picked cell names.
+// played's header at a capped RCNT naming what the picked cell names; uiS's
+// checksum over a shelf, Not played yet's albums in one walk of the bits
+// (shelfSum(): the values albumAt() gives).
 // And Last 7 days as the page draws it (S3b's S11): each look through the
 // list's body hook (the card out's No card line alone there, as Pending's)
 // or as the empty state (Try again's button with Retry and the card back),
@@ -3854,6 +3856,68 @@ void test_most_played_s_window_and_the_tray_alone() {
   TEST_ASSERT_FALSE(trayAlone(shapeOf(week, dated(6), full.s()), shapeOf(week, dated(7), full.s()), false));
 }
 
+// uiS's checksum over a served shelf (run 3b-6): the ranked rows' ids and
+// figures, and Not played yet's albums in the bits' order, the values
+// albumAt(r) a row gives (the old walk, O(rows x groups) in one pass), in
+// one walk of the bits (S3b's review, finding 12): every shelf, albums at
+// and past a group's end, every album or few of them not played.
+void test_the_uis_checksum_in_one_walk() {
+  auto reference = [](const ShelfLook& k, const sv::Snapshot& s) {
+    uint32_t hash = 2166136261u;
+    auto mix = [&hash](uint32_t v) { hash = (hash ^ v) * 16777619u; };
+    if (k.shelf == Shelf::NotPlayed) {
+      for (uint32_t r = 0; r < k.rows; ++r) mix(s.albumAt(r));
+    } else {
+      for (uint32_t r = 0; r < s.rows(k.list); ++r) {
+        const sv::Row row = s.rowAt(k.list, r);
+        mix(row.id);
+        mix(row.count);
+        mix(row.lastDay);
+        mix(row.when);
+      }
+    }
+    return hash;
+  };
+  const uint32_t ids[] = {shelfId(Shelf::MostPlayed, sv::k7Days), shelfId(Shelf::MostPlayed, sv::k30Days),
+                          shelfId(Shelf::MostPlayed, sv::kAllTime), shelfId(Shelf::NewFinds),
+                          shelfId(Shelf::OldFavourites), shelfId(Shelf::NotPlayed), shelfId(Shelf::Recent)};
+  const uint32_t albums[] = {kAlbums, 64, 65, 127, 128, 1};
+  const uint32_t every[] = {1, 3, 7, 64, 1000};
+  uint32_t notPlayed = 0;
+  for (uint32_t a : albums) {
+    for (uint32_t e : every) {
+      sv::MadeUp m = fullCard();
+      m.albums = a;
+      m.notPlayedEvery = e;
+      Snap b;
+      put(b, m);
+      for (uint32_t id : ids) {
+        const ShelfLook k = shelfLook(id, dated(), kReady, b.s());
+        TEST_ASSERT_EQUAL(Look::Served, k.page.look);
+        TEST_ASSERT_FALSE(k.tryAgain);
+        char msg[64];
+        snprintf(msg, sizeof(msg), "shelf %u, %u albums, every %u", static_cast<unsigned>(id),
+                 static_cast<unsigned>(a), static_cast<unsigned>(e));
+        TEST_ASSERT_EQUAL_HEX32_MESSAGE(reference(k, *b.s()), shelfSum(k, *b.s()), msg);
+        if (k.shelf != Shelf::NotPlayed) continue;
+        TEST_ASSERT_EQUAL_UINT32_MESSAGE((a + e - 1) / e, k.rows, msg);
+        ++notPlayed;
+      }
+    }
+  }
+  TEST_ASSERT_EQUAL_UINT32(30, notPlayed);
+  // (A checksum: another set of albums not played reads another sum.)
+  uint32_t sums[2] = {};
+  for (int i = 0; i < 2; ++i) {
+    sv::MadeUp m = fullCard();
+    m.notPlayedEvery = i ? 7 : 3;
+    Snap b;
+    put(b, m);
+    sums[i] = shelfSum(shelfLook(shelfId(Shelf::NotPlayed), dated(), kReady, b.s()), *b.s());
+  }
+  TEST_ASSERT_NOT_EQUAL(sums[0], sums[1]);
+}
+
 // 7.10's "A new UTC day": the hub's disabled rows and the tray (its cells,
 // the window shown) follow the counting days at the next enter(). A page
 // latches them at its enter() (and the wake), holds them across a new day,
@@ -4063,6 +4127,7 @@ int main(int, char**) {
   RUN_TEST(test_a_shelf_s_rows);
   RUN_TEST(test_a_shelf_s_touch_place_and_shape);
   RUN_TEST(test_most_played_s_window_and_the_tray_alone);
+  RUN_TEST(test_the_uis_checksum_in_one_walk);
   RUN_TEST(test_the_counting_days_a_page_holds);
   RUN_TEST(test_recently_played_at_a_new_minute);
   return UNITY_END();

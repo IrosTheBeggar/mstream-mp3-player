@@ -818,6 +818,32 @@ bool windowOwed(const ShelfLook& k, const Snapshot* snap) {
   return snap && k.shelf == Shelf::MostPlayed && k.page.look == Look::Served && snap->window() != k.window;
 }
 
+uint32_t shelfSum(const ShelfLook& k, const Snapshot& s) {
+  uint32_t hash = 2166136261u;
+  auto mix = [&hash](uint32_t v) { hash = (hash ^ v) * 16777619u; };
+  if (k.shelf == Shelf::NotPlayed) {
+    // Each clear bit's place, in order, until k.rows of them: one walk.
+    const uint8_t* bits = reinterpret_cast<const uint8_t*>(&s) + s.bitsOffset();
+    const uint32_t n = s.albums();
+    uint32_t seen = 0;
+    for (uint32_t pos = 0; pos < n && seen < k.rows; ++pos) {
+      if (bits[pos / 8] >> (pos % 8) & 1) continue;
+      mix(pos);
+      ++seen;
+    }
+    for (; seen < k.rows; ++seen) mix(sv::kNoAlbum);  // (past the bits: albumAt()'s none)
+    return hash;
+  }
+  for (uint32_t r = 0; r < s.rows(k.list); ++r) {
+    const sv::Row row = s.rowAt(k.list, r);
+    mix(row.id);
+    mix(row.count);
+    mix(row.lastDay);
+    mix(row.when);
+  }
+  return hash;
+}
+
 bool shelfArg(const char* a, Shelf* shelf, uint8_t* window, bool* windowGiven) {
   if (!a || a[0] < '0' || a[0] >= static_cast<char>('0' + kShelves)) return false;
   const Shelf s = static_cast<Shelf>(a[0] - '0');

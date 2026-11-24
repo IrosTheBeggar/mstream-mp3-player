@@ -454,8 +454,14 @@ public:
   // view on (or the tray's window): the act goes on.
   bool statsLookOnly(statsview::Act a, const char* what);
   // Most played's window into the held snapshot's header byte (UiHost::
-  // statsSetWindow(): the UI's one write to it, D7; nothing held, nothing).
-  void statsSetWindow(uint8_t window) { host_.statsSetWindow(window); }
+  // statsSetWindow(): the UI's one write to it, D7), only while the pages
+  // are served one (statsSnapshot(): under a made-up view the view's own,
+  // never a real one held under it; with none, a real one over the live
+  // index). Else nothing: a look-only tray tap never reaches the card's
+  // (S3b's review, finding 5).
+  void statsSetWindow(uint8_t window) {
+    if (statsSnapshot()) host_.statsSetWindow(window);
+  }
   // The held condition as last evaluated (statsview::onStatsPages()): the
   // snapshot is held exactly while it is true.
   bool statsHeld() const { return statsHeld_; }

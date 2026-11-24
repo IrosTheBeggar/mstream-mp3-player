@@ -206,7 +206,7 @@ void LibraryPage::statsEntering() {
   }
 }
 
-void LibraryPage::statsFollow(const sv::Lifetime& l, const char* why) {
+void LibraryPage::statsFollow(const sv::Lifetime& l, const char* why, bool wake) {
   sv::PageLook look;
   const uint32_t sig = statsSigNow(l, &look);
   // Idle with nothing served and the stats on (D9 as replaced: a Cancelled
@@ -218,12 +218,20 @@ void LibraryPage::statsFollow(const sv::Lifetime& l, const char* why) {
   const uint32_t drawn = statsSigDrawn();
   if (sig == drawn) return;  // (nothing it draws moved: a landing's second version move, Idle to Working)
   keepSig(sig);
+  // A header that moved is drawn here while the page shows, but at the
+  // wake: redrawAll() draws the page whole next, its header among it, so
+  // it is drawn once in the wake's pass, not twice (about 5 ms each: S3b's
+  // review, finding 10).
+  const bool headerHere = !wake && ui_.pageShowing();
   if (kind_ == PageKind::StatsShelf) {
-    shelfFollow(drawn, sig, l, why);  // (its shape's bits are its own: shelfShape())
+    shelfFollow(drawn, sig, l, why, headerHere);  // (its shape's bits are its own: shelfShape())
     return;
   }
   if (kind_ == PageKind::StatsWeek) {
-    weekFollow(drawn, sig, look.look, why);  // (no rows: its body or its empty state, whole)
+    // (No rows: its body or its empty state, whole; its header when its
+    // days moved, statsview::weekHeaderMoved().)
+    weekFollow(look.look, why, sv::weekHeaderMoved(static_cast<uint16_t>(drawn), static_cast<uint16_t>(sig)),
+               headerHere);
     return;
   }
   const uint32_t moved = sig ^ drawn;
@@ -233,7 +241,7 @@ void LibraryPage::statsFollow(const sv::Lifetime& l, const char* why) {
   // has it ("At once: the header and its sub"). Under a modal or in the
   // dark it is drawn whole when the page shows again (repaintUnder(),
   // redrawAll()); a toast over it keeps its row (gfx's cover).
-  if ((moved & kSub) && ui_.pageShowing()) repaintHeader();
+  if ((moved & kSub) && headerHere) repaintHeader();
   if (!(moved & ~kSub)) return;  // (the header alone)
   minute_ = static_cast<uint16_t>(l.nowMin);  // (row 6 drawn again with the rest)
   Serial.printf("[ui] stats: %s drawn again in place (%s): %s\n", pageKindName(static_cast<uint8_t>(kind_)), why,
@@ -275,7 +283,7 @@ bool LibraryPage::statsNews(const char* why, bool wake) {
   // its tray and rows with it. Else a reading: 7.10's next enter().)
   sv::Lifetime l;
   statsLatch(l, wake);
-  statsFollow(l, why);
+  statsFollow(l, why, wake);
   return false;
 }
 
@@ -877,7 +885,8 @@ bool LibraryPage::pending() {
   return kind_ == PageKind::StatsShelf && sv::shelfPending(sv::shelfOf(id_), ui_.statsSnapshot());
 }
 
-__attribute__((noinline)) bool LibraryPage::statsActIds(const RowRef& r, IdView* ids, const char** name) {
+__attribute__((noinline)) bool LibraryPage::statsActIds(const RowRef& r, bool topBar, IdView* ids,
+                                                         const char** name) {
   sv::Lifetime l;
   statsLife(l);
   const sv::ShelfLook k = shelfNow(l);
@@ -886,15 +895,20 @@ __attribute__((noinline)) bool LibraryPage::statsActIds(const RowRef& r, IdView*
   // Read now (D6): a snapshot served over the live index, the shelf's
   // ranked list, every id a track of it; a ranked row still the track it
   // was (a bar or a sheet never stays across a new ask: 7.2, so this is a
-  // guard, said if it ever trips).
+  // guard, said if it ever trips). The top bar is said by its caller alone
+  // (`topBar`): a row from a bar or a sheet that reads None now (its look
+  // moved under it, a pass before the restage) acts on nothing, never on
+  // the whole list (S3b's review, finding 4).
   const bool listed = snap && i && k.page.look == sv::Look::Served && !k.tryAgain && k.shelf != sv::Shelf::NotPlayed &&
                       sv::idsServed(*snap, k.list, i->trackCount());
-  const bool same = r.kind != RowKind::Ranked ||
-                    (listed && r.index < snap->rows(k.list) && snap->rowAt(k.list, r.index).id == r.id);
+  const bool same = topBar || (r.kind == RowKind::Ranked && listed && r.index < snap->rows(k.list) &&
+                               snap->rowAt(k.list, r.index).id == r.id);
   if (!listed || !same) {
     Serial.printf("[ui] stats: %s: nothing acted on (%s)\n", tr(sv::shelfTitle(k.shelf)),
-                  !snap || !i ? "no snapshot served over this index" : !listed ? "no ranked rows served" :
-                                                                                "the row isn't the track it was");
+                  !snap || !i                     ? "no snapshot served over this index"
+                  : !listed                       ? "no ranked rows served"
+                  : r.kind != RowKind::Ranked     ? "the row reads nothing now: its look moved under the bar"
+                                                  : "the row isn't the track it was");
     ui_.input().missBuzz();
     return false;
   }
@@ -906,15 +920,15 @@ __attribute__((noinline)) bool LibraryPage::statsActIds(const RowRef& r, IdView*
   return true;
 }
 
-void LibraryPage::statsAct(const RowRef& r, int action) {
+void LibraryPage::statsAct(const RowRef& r, int action, bool topBar) {
   // The view and the shelf's name only, in this frame across act() and
   // playNow()'s start: what was read to make them (the lifetime, the look)
   // is in statsActIds()'s, gone by then (main's album Play is onRowAction
   // then act(); a shelf's adds this frame alone).
   IdView ids;
   const char* name = "";
-  if (!statsActIds(r, &ids, &name)) return;
-  if (r.kind == RowKind::None) {
+  if (!statsActIds(r, topBar, &ids, &name)) return;
+  if (topBar) {
     act(ids, -1, action, name);  // the top bar: the whole shelf, named by its title
   } else if (action == 0) {
     act(ids, static_cast<int32_t>(r.index), 0, "");  // Play: the shelf from it
@@ -969,11 +983,11 @@ void LibraryPage::drawLeadRow(ListView::Row& r) {
 
 // A cell's tap (after the tick): its window shown (7.6, 7.10). The window
 // into the snapshot's header (D7: the hub's next push opens on it), the
-// page's id and its ref (kept across the dark and a Back); the tray and the
-// header drawn again in its pass; the window's rows staged in one a pass
-// where the list stands, a bar folded (S2's rule for a tray tap). No ask.
-// The lift pushed nothing (ListView's Tap on a lead row: this push is the
-// tray's one, 7.10), so the [ui] line's ms is the pass's pushes.
+// page's id and its ref (kept across the dark and a Back); the window's
+// rows staged in one a pass where the list stands, a bar folded (S2's rule
+// for a tray tap); then the tray and the header drawn again in its pass.
+// No ask. The lift pushed nothing (ListView's Tap on a lead row: this push
+// is the tray's one, 7.10), so the [ui] line's ms is the pass's pushes.
 void LibraryPage::onLeadRowTap(int x, bool rightEdge) {
   if (kind_ != PageKind::StatsShelf) return;
   const uint32_t t0 = micros();
@@ -989,11 +1003,16 @@ void LibraryPage::onLeadRowTap(int x, bool rightEdge) {
   id_ = sv::shelfId(sv::Shelf::MostPlayed, w);
   if (ref_) ref_->id = id_;
   ListView& list = ui_.list();
+  keepSig(statsSigNow(l));  // (this tap's picture: not the next pass's to restage)
+  // The recount first, then the tray once, at the width the new window's
+  // rows leave: a recount that moves the edge (a scrollbar coming or going)
+  // owes the lead (stageLead_), and refreshTopRow()'s push is that one, so
+  // the tap pushes the tray once, never at the old width and again a pass
+  // later (7.10: one tray refresh a tap; S3b's review, finding 9).
+  list.recountStaged(-1, -1, 0, false);
   list.refreshTopRow();
   repaintHeader();
   const uint32_t t1 = micros();
-  keepSig(statsSigNow(l));  // (this tap's picture: not the next pass's to restage)
-  list.recountStaged(-1, -1, 0, false);
   Serial.printf("[ui] stats: Most played, the tray: %s (was %s): the tray and the header in %.1f ms, %lu rows to "
                 "stage one a pass\n",
                 windowName(w), windowName(k.window), (t1 - t0) / 1000.0f,
@@ -1002,7 +1021,8 @@ void LibraryPage::onLeadRowTap(int x, bool rightEdge) {
 
 // ---- a shelf following what it reads ----
 
-void LibraryPage::shelfFollow(uint32_t drawn, uint32_t sig, const sv::Lifetime& l, const char* why) {
+void LibraryPage::shelfFollow(uint32_t drawn, uint32_t sig, const sv::Lifetime& l, const char* why,
+                              bool headerHere) {
   ListView& list = ui_.list();
   if (list.source() != this) return;  // (not attached: drawn whole at its next enter())
   const uint8_t was = static_cast<uint8_t>(drawn >> 16), now = static_cast<uint8_t>(sig >> 16);
@@ -1010,8 +1030,8 @@ void LibraryPage::shelfFollow(uint32_t drawn, uint32_t sig, const sv::Lifetime& 
   // Most played's window line (a landing's D7; a kept 30 days dropped as
   // the latch takes the counting days again under 30, never at a new day;
   // at the 30 days a capped landing's "16 days"): the header again while
-  // the page shows (else drawn whole when it does).
-  if (sv::shelfHeaderMoved(was, now, textsMoved) && ui_.pageShowing()) repaintHeader();
+  // the page shows (else drawn whole when it does: the wake's redrawAll()).
+  if (sv::shelfHeaderMoved(was, now, textsMoved) && headerHere) repaintHeader();
   const sv::ShelfLook k = shelfNow(l);
   // D7: the window shown is the snapshot's from here (a new ask's loan
   // opened on All time), at a landing with rows or with none in the window
@@ -1103,22 +1123,11 @@ __attribute__((noinline)) void LibraryPage::printShelf(const sv::Lifetime& l) {
     return;
   }
   if (snap && !k.tryAgain) {
-    uint32_t hash = 2166136261u;
-    auto mix = [&hash](uint32_t v) { hash = (hash ^ v) * 16777619u; };
-    if (k.shelf == sv::Shelf::NotPlayed) {
-      for (uint32_t r = 0; r < k.rows; ++r) mix(snap->albumAt(r));
-    } else {
-      for (uint32_t r = 0; r < snap->rows(k.list); ++r) {
-        const statsvisit::Row row = snap->rowAt(k.list, r);
-        mix(row.id);
-        mix(row.count);
-        mix(row.lastDay);
-        mix(row.when);
-      }
-    }
+    // (Not played yet's albums in one walk of its bits: statsview::
+    // shelfSum(), not albumAt() a row, O(rows x groups) in one pass.)
     Serial.printf("[ui] stats:   the snapshot's version %lu; its %s's ids and figures 0x%08lX\n",
-                  static_cast<unsigned long>(snap->version()),
-                  k.shelf == sv::Shelf::NotPlayed ? "albums" : "rows", static_cast<unsigned long>(hash));
+                  static_cast<unsigned long>(snap->version()), k.shelf == sv::Shelf::NotPlayed ? "albums" : "rows",
+                  static_cast<unsigned long>(sv::shelfSum(k, *snap)));
   }
   ListView& list = ui_.list();
   uint32_t first = 0, last = 0;
@@ -1295,12 +1304,12 @@ void LibraryPage::weekLines(M5Canvas& c, int top, int h, const statsvisit::Snaps
 // when it does); the band whole at the next still pass, its body or its
 // empty state (a recount of no items to none owes the list's drawEmpty()
 // alone: about 31 ms, three strips). Under a modal or in the dark, drawn
-// whole when the page shows again.
-void LibraryPage::weekFollow(uint32_t drawn, uint32_t sig, sv::Look now, const char* why) {
+// whole when the page shows again (the wake's redrawAll(): `headerHere`
+// false).
+void LibraryPage::weekFollow(sv::Look now, const char* why, bool header, bool headerHere) {
   ListView& list = ui_.list();
   if (list.source() != this) return;  // (not attached: drawn whole at its next enter())
-  const bool header = sv::weekHeaderMoved(static_cast<uint16_t>(drawn), static_cast<uint16_t>(sig));
-  if (header && ui_.pageShowing()) repaintHeader();
+  if (header && headerHere) repaintHeader();
   Serial.printf("[ui] stats: %s drawn again in place (%s): %s%s\n", pageKindName(static_cast<uint8_t>(kind_)), why,
                 sv::lookName(now), header ? ", its header's days too" : "");
   list.recountStaged(-1, -1, 0, false);

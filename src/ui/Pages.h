@@ -561,7 +561,9 @@ private:
   void act(const IdView& ids, int32_t start, int action, const char* name);
   // What a container row (or, kind None, the page itself) plays, and its name.
   bool container(const RowRef& r, LibraryIndex::Span* span, const char** name) const;
-  void onRowAction(const RowRef& r, int action);
+  // A row's action (its bar, its sheet), or the top bar's (`topBar`: the
+  // page's own, onAction(-1)'s; a stats shelf's None row is no top bar).
+  void onRowAction(const RowRef& r, int action, bool topBar = false);
   // The long-press sheet's "Auto DJ from here" on `track`.
   void autoDjFromHere(uint32_t track);
   Header header() const;
@@ -607,9 +609,10 @@ private:
   // The page follows what it reads (the news, each pass's look): an ask
   // due made (D9 as replaced); a moved shape or text drawn again in place,
   // the rows staged one a pass (ListView::recountStaged()), and kept; the
-  // header again when its line came or went; the band whole from the empty
-  // state to No card's line (statsview::hubDrawsWhole()).
-  void statsFollow(const statsview::Lifetime& l, const char* why);
+  // header again when its line came or went (not at the wake, `wake`:
+  // redrawAll() draws it next); the band whole from the empty state to No
+  // card's line (statsview::hubDrawsWhole()).
+  void statsFollow(const statsview::Lifetime& l, const char* why, bool wake = false);
   // The hub as it is now (the phase, the snapshot: Ui's; `l` the lifetime).
   statsview::HubLook hubNow(const statsview::Lifetime& l) const;
   // What the stats page draws now, as its shape (the hub's
@@ -651,20 +654,22 @@ private:
   // rows' arrival at the place kept for it); -1: none.
   int32_t statsPlayingRow() const;
   // A ranked row's Play, Play next and + Queue (its bar, its sheet), and
-  // the shelf's top bar (`r` None): through the queue's id view over the
-  // snapshot's list, read anew now (D6: its key the live index's, every id
-  // a track of it; a ranked row still the track it was).
-  void statsAct(const RowRef& r, int action);
+  // the shelf's top bar (`topBar`, `r` None): through the queue's id view
+  // over the snapshot's list, read anew now (D6: its key the live index's,
+  // every id a track of it; a ranked row still the track it was). A None
+  // row that isn't the top bar acts on nothing.
+  void statsAct(const RowRef& r, int action, bool topBar);
   // statsAct()'s reading: the view over the shelf's list and its title, or
   // false (the double buzz and a [ui] line: nothing acted on). Not inlined:
   // the lifetime and the look it reads stay out of the frame that runs
   // act() and playNow()'s start.
-  __attribute__((noinline)) bool statsActIds(const RowRef& r, IdView* ids, const char** name);
+  __attribute__((noinline)) bool statsActIds(const RowRef& r, bool topBar, IdView* ids, const char** name);
   // statsFollow()'s for a shelf: its rows arriving at the place kept for
   // them (listlayout::arrival(), kShowPlaying resolved, D7's window
   // written back), or restaged where it stands; the tray and the header
-  // drawn again when theirs moved.
-  void shelfFollow(uint32_t drawn, uint32_t sig, const statsview::Lifetime& l, const char* why);
+  // drawn again when theirs moved (the header only `headerHere`: the page
+  // shows, and not the wake, whose redrawAll() draws it).
+  void shelfFollow(uint32_t drawn, uint32_t sig, const statsview::Lifetime& l, const char* why, bool headerHere);
   // A new minute on Recently played: its rows on screen from the first
   // whose "25 min ago" moved, drawn again in place one a pass.
   void recentMinute(const statsview::Lifetime& l, uint32_t was);
@@ -685,9 +690,10 @@ private:
   __attribute__((noinline)) void weekLines(M5Canvas& c, int top, int h, const statsvisit::Snapshot& s,
                                            const statsview::WeekFigures& w);
   // statsFollow()'s for Week: the header again when its days moved
-  // (statsview::weekHeaderMoved()), the body (or the empty state) whole at
-  // the next still pass.
-  void weekFollow(uint32_t drawn, uint32_t sig, statsview::Look now, const char* why);
+  // (`header`: statsview::weekHeaderMoved(); `headerHere` as
+  // shelfFollow()'s), the body (or the empty state) whole at the next still
+  // pass.
+  void weekFollow(statsview::Look now, const char* why, bool header, bool headerHere);
   // Its empty state's button (Retry: the visit asked again).
   void weekTryAgain();
   // uiS's parts (printStats()): the hub's rows, a shelf's, Week's.

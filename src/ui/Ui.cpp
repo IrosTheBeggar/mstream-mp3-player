@@ -3171,14 +3171,21 @@ void Ui::statsEdge(const char* why) {
   }
   statsview::Lifetime l;
   statsLifetime(l);
+  // Every rise folds the Library stack's shelf bars first, its place kept
+  // (7.2: statsview::foldShelfBars()): a bar the fall's leave() saved by
+  // its index would be put back by enter()'s attach() on whatever is served
+  // then, a made-up view's snapshot written below, or one the rise's ask
+  // takes over (a console Hu's, kept while nothing held it, served until
+  // the ask's write): a Play acting on a track the listener never picked.
+  // (A rise with nothing served comes up at 0 rows, and the landing folds
+  // it anyway: listlayout::arrival(), sameVisit false. S3b's review,
+  // finding 1.)
+  const int folded = statsview::foldShelfBars(nav_);
   switch (statsview::riseOf(l, statsView_)) {
     case statsview::Rise::MadeUp: {
       // A made-up view on (D16): its snapshot written again (whatever freed
       // it since: the fall, the card, the stats off), never an ask; before
-      // the page's first draw, as the rise's ask is (D1). Its rows are there
-      // at enter()'s attach(), so a shelf's bar is folded first, as a new
-      // ask's landing folds it (7.2: statsview::foldShelfBars()).
-      const int folded = statsview::foldShelfBars(nav_);
+      // the page's first draw, as the rise's ask is (D1).
       const bool ok = host_.statsMadeUp(statsView_);
       Serial.printf("[ui] stats: on the stats pages under made-up view %u (%s), no ask (look only): %s%s\n",
                     static_cast<unsigned>(statsView_), statsview::madeUpName(statsView_),
@@ -3189,6 +3196,12 @@ void Ui::statsEdge(const char* why) {
       return;
     }
     case statsview::Rise::Ask:
+      // (A snapshot served at the rise is a console ask's: its rows show
+      // until the visit's lands, with no bar reopened on them.)
+      if (folded && statsSnapshot()) {
+        Serial.println("[ui] stats: the rise over a snapshot served (a console ask's): a shelf's open bar folded "
+                       "(7.2)");
+      }
       statsAsk(statsview::UiAsk::Visit);  // (queued: its turn after the Rank lane's waits, input among them)
       return;
     default: break;
@@ -3310,6 +3323,13 @@ void Ui::statsPrint() {
 }
 
 void Ui::statsCommand(const char* a) {
+  // The console's wake (Ui::command()'s host_.wakeScreen()) only asks
+  // ScreenControl, whose later step runs setDark(false): a push from here on
+  // a dark screen draws nothing and makes no rise (the held condition needs
+  // the light), so its line says so rather than timing a frame drawn. The
+  // wake draws the page and its rise asks (S3b's review, finding 14).
+  const bool inDark = dark_;
+  const char* drawn = inDark ? "pushed in the dark: drawn and asked at the wake" : "its first frame drawn";
   if (a[0] == 'x') {
     uint8_t n = 0;
     if (statsview::madeUpArg(a, &n)) {
@@ -3345,9 +3365,9 @@ void Ui::statsCommand(const char* a) {
     } else {
       showLibrary(LibrarySegment::Artists, &hub, 1);
     }
-    Serial.printf("[ui] uiSh: the hub %s in %.1f ms (its first frame drawn)\n",
+    Serial.printf("[ui] uiSh: the hub %s in %.1f ms (%s)\n",
                   atRoot ? "pushed from the Artists root" : "shown over the Artists root",
-                  (micros() - t0) / 1000.0f);
+                  (micros() - t0) / 1000.0f, drawn);
     return;
   }
   if (a[0] == 'w' && !a[1]) {
@@ -3376,8 +3396,9 @@ void Ui::statsCommand(const char* a) {
     } else {
       showLibrary(LibrarySegment::Artists, pages, 2);
     }
-    Serial.printf("[ui] uiSw: Last 7 days %s in %.1f ms (its header and body drawn)%s\n",
+    Serial.printf("[ui] uiSw: Last 7 days %s in %.1f ms (%s)%s\n",
                   atHub ? "pushed from the hub" : "shown over the hub", (micros() - t0) / 1000.0f,
+                  inDark ? drawn : "its header and body drawn",
                   l.dated ? "" : "; no clock: the hub's row 1 is the status row, so no touch reaches it");
     return;
   }
@@ -3413,9 +3434,9 @@ void Ui::statsCommand(const char* a) {
     } else {
       showLibrary(LibrarySegment::Artists, pages, 2);
     }
-    Serial.printf("[ui] uiS%s: %s %lu %s in %.1f ms (its first frame drawn)\n", a, pageKindName(pages[1].kind),
+    Serial.printf("[ui] uiS%s: %s %lu %s in %.1f ms (%s)\n", a, pageKindName(pages[1].kind),
                   static_cast<unsigned long>(pages[1].id), atHub ? "pushed from the hub" : "shown over the hub",
-                  (micros() - t0) / 1000.0f);
+                  (micros() - t0) / 1000.0f, drawn);
     return;
   }
   Serial.println("[ui] uiS: the listening stats' pages (no wake: a dark screen stays dark); uiSh their hub (as the "

@@ -1251,6 +1251,9 @@ void StatsLists::finishVisit(const Gates& g) {
     // write() unserves it, its rows wanted-set indices until the landing,
     // so the version moves, as at a release (the phase stays Working).
     const bool served = snapshot() != nullptr;
+    // (An Hk past its header ends: the block written over is another
+    // snapshot's from here, as freeSnap() says for a release.)
+    if (hkPart_ >= 2) hkPart_ = kHkCut;
     const bool written = sv::write(a.ranker, a.wanted, r, ctx, snap_, snapshotBytes());
     a.writeUs = static_cast<uint32_t>(esp_timer_get_time() - w0);
     if (served && !snapshot()) ++version_;
@@ -1925,6 +1928,10 @@ uint32_t StatsLists::freeSnap(const char* why) {
   // (The pointer dropped: the block is the Dance tab's, lent, never the
   // stats' to free.)
   snap_ = nullptr;
+  // An Hk past its header ends at its next step: what it would print from
+  // here is another snapshot's, if one is written into the block in this
+  // call (a made-up view's, uiSx<n> or a rise's: S3b's review, finding 2).
+  if (hkPart_ >= 2) hkPart_ = kHkCut;
   flags_ = static_cast<uint8_t>(flags_ & ~(kFake | kCarved));
   // (What snapshot() serves changed: the pages' news(), whether or not the
   // phase moves with it.)
@@ -2025,9 +2032,12 @@ __attribute__((noinline)) void StatsLists::stepHk(const Gates& g) {
     hkRow_ = 0;
     return;
   }
-  if (!snap_ || !snap_->written()) {
-    Serial.println("[listen] Hk: the snapshot released, or under an ask's rewrite, since its header: the rest not "
-                   "printed");
+  // (kHkCut: released or written over since the header, another one perhaps
+  // written in the same call: a made-up view's, an ask's. S3b's review,
+  // finding 2.)
+  if (hkPart_ == kHkCut || !snap_ || !snap_->written()) {
+    Serial.println("[listen] Hk: the snapshot released or written over, or under an ask's rewrite, since its "
+                   "header: the rest not printed");
     hkPart_ = 0;
     return;
   }

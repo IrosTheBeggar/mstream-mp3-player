@@ -904,7 +904,10 @@ void ListView::scrub(uint32_t ms, int y) {
   scroll_.jumpTo(static_cast<float>(o));
   jumped_ = true;
   const ListLayout::Item it = layout_.item(static_cast<uint32_t>(o / kPitch));
-  const int key = it.row >= 0 ? src_->railKey(static_cast<uint32_t>(it.row)) : 0;
+  // (The letter the thumb shows, drawRailSprite()'s: a lead item or a top
+  // bar reads the first row's, so reaching one is no new letter and no
+  // tick: Artists' entry row, Albums' Filters row, the Folders root's bar.)
+  const int key = src_->railKey(it.row >= 0 ? static_cast<uint32_t>(it.row) : 0u);
   if (key != railKeyShown_) {
     if (railKeyShown_ >= 0) input_->railTick();  // a tick at each new letter
     railKeyShown_ = key;

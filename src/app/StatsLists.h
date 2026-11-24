@@ -425,8 +425,12 @@ private:
   uint8_t pastCap_ = 0;       // visits whose holds passed kLitCapMs this session (saturating)
   // Hk owed, as the TX buffer's room allows (stepHk()): 0 none; 1-3 the
   // header's pieces; 4-9 a list's rows (from hkRow_); 10 Not played yet's
-  // first albums (from hkRow_). (Both in the object's tail padding: no
-  // .bss.)
+  // first albums (from hkRow_); kHkCut, the snapshot its header printed
+  // was released or written over since (freeSnap(), an ask's write: a
+  // made-up view's write follows its release in the same call, so stepHk
+  // would find one written): the rest not printed. (Both in the object's
+  // tail padding: no .bss.)
+  static constexpr uint8_t kHkCut = 0xFF;
   uint8_t hkPart_ = 0;
   uint8_t hkRow_ = 0;
 };

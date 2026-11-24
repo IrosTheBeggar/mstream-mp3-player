@@ -692,6 +692,16 @@ constexpr bool trayAlone(uint8_t drawnShape, uint8_t nowShape, bool textsMoved) 
 // page latched the counting days, latchDays(): a kept 30 days falls back
 // to All time at an enter() under 30 days, never at a pass.)
 bool windowOwed(const ShelfLook& k, const Snapshot* snap);
+// uiS's checksum over a served shelf's rows (run 3b-6: two uiS compared
+// around a counted play): FNV-1a over each ranked row's id, count, lastDay
+// and when in the snapshot's list; on Not played yet over each album's
+// place in albumsAZ() in the bits' order, the values albumAt(0), albumAt(1)
+// ... give (k.rows of them), the bits walked once. albumAt() walks the
+// directory from its start each call: O(rows x groups) in one loop pass,
+// about 100 ms on 15,000 albums not played (S3b's review, finding 12).
+// (A directory that isn't its bits', which no write() makes, would read
+// differently: albumAt()'s kNoAlbum where it disagrees.)
+uint32_t shelfSum(const ShelfLook& k, const Snapshot& s);
 // The console's uiS<shelf>[w] (9.3): a shelf 0-4 (Most played, New finds,
 // Old favourites, Not played yet, Recently played), Most played's window
 // after it (0 seven days, 1 thirty, 2 All time); `windowGiven` false with
@@ -831,16 +841,17 @@ inline bool viewServes(const Snapshot& s, bool viewOn) { return s.madeUp() == vi
 // nothing played).
 enum class Rise : uint8_t { None, Ask, MadeUp };
 Rise riseOf(const Lifetime& l, uint8_t view);
-// 7.2's "An open bar across a new ask", where a made-up view's snapshot is
-// written before the page's enter() (the rise's Rise::MadeUp; uiSx<n>, 0
-// among them, with the held condition up): every stats shelf in the
-// Library's stack has its bar folded (expanded -1), its place kept. A real
-// rise asks, so its shelf comes up at 0 rows and the landing folds the bar
-// (listlayout::arrival(), sameVisit false); a snapshot written first has its
-// rows there at ListView::attach(), which would put the ref's bar back on
-// another snapshot's row: a bar whose Play could act on a track nobody
-// picked once the view ends. Other pages' bars (an album's) are their own.
-// Returns how many were open.
+// 7.2's "An open bar across a new ask", at every rise of the held condition
+// and where a made-up view's snapshot is written before the page's enter()
+// (uiSx<n>, 0 among them, with the held condition up): every stats shelf in
+// the Library's stack has its bar folded (expanded -1), its place kept. A
+// rise with nothing served comes up at 0 rows and the landing folds the bar
+// (listlayout::arrival(), sameVisit false); a snapshot served at enter()
+// (a view's written first, or a console Hu's the rise's ask takes over:
+// S3b's review, finding 1) has its rows there at ListView::attach(), which
+// would put the ref's bar back on another snapshot's row: a bar whose Play
+// could act on a track nobody picked. Other pages' bars (an album's) are
+// their own. Returns how many were open.
 int foldShelfBars(NavModel& nav);
 // What a touch on a stats page does, as a made-up view takes it (look only,
 // as uil<n>'s synthetic library: refused, the look-only toast):
@@ -850,7 +861,10 @@ int foldShelfBars(NavModel& nav);
 //   - ShuffleAll: the empty hub's Shuffle all (7.5);
 //   - Ask: Try again (the hub's row, a shelf's, Week's button);
 //   - Window: Most played's tray, the window shown (its byte in the
-//     snapshot's header, D7): look only, never refused.
+//     snapshot's header, D7): look only, never refused. Its write reaches
+//     only a snapshot the pages are served (Ui::statsSetWindow(): under a
+//     view the view's own, never a real one a console Hv or Hu left held
+//     under it; S3b's review, finding 5).
 // A push opens a page (a hub row, an album, the entry row, the rail and the
 // jump grid): no act. An album page pushed from Not played yet is the
 // card's own album, its acts the card's. A disabled row's buzz and toast,
