@@ -3348,7 +3348,7 @@
     "other": "{0} days"
   },
   "@stats.days_n": {
-    "context": "Most played's tray (docs/LISTENING-STATS.md 7.6): a window's length, \"7 days\", \"30 days\" (fewer when the card's recent counts hold less than 30 days: \"16 days\"). Bold, else Small, in its cell: 92 px of three, 142 of two. The mobile app's words (listeningDays).",
+    "context": "Most played's tray (docs/LISTENING-STATS.md 7.6): a window's length, \"7 days\", \"30 days\" (fewer when the card's recent counts hold less than 30 days: \"16 days\"). Bold, else Small, in its cell: 92 px of three, 142 of two. When it is fewer than 30 and that cell is picked, the same words are also the header line under \"Most played\" in place of stats.sub_last30, so the header and the cell name one window: Small, the title's 179 px. The mobile app's words (listeningDays).",
     "room": [
       {
         "font": "Bold",
@@ -3359,6 +3359,10 @@
         "font": "Bold",
         "else": "Small",
         "px": 142
+      },
+      {
+        "font": "Small",
+        "px": 179
       }
     ],
     "placeholders": {

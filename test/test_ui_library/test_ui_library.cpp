@@ -5397,11 +5397,16 @@ void test_stats_header_lines_fit() {
       fits(bold, tr(titles[s]), right - 28);
       const int titleW = bold.width(tr(titles[s]));
       for (uint8_t w = 0; w <= statsvisit::kAllTime; ++w) {
-        for (const uint16_t d : days) {
-          if (!statstext::shelfSub(static_cast<statsview::Shelf>(s), w, d, b, sizeof(b))) continue;
-          TEST_ASSERT_TRUE_MESSAGE(std::strlen(b) < 64, b);
-          const HeaderSub how = headerSub(28, titleW, right, small.width(b), false, true);
-          fits(small, b, how == HeaderSub::Beside ? headerSubRoom(28, titleW, right) : right - 28);
+        // Most played's 30 days also as the days RCNT holds, 1-29 (RCNT
+        // capped: the picked cell's "16 days", S3b's review, finding 8).
+        const bool capped = s == static_cast<uint32_t>(statsview::Shelf::MostPlayed) && w == statsvisit::k30Days;
+        for (uint8_t d30 = capped ? 1 : 30; d30 <= 30; ++d30) {
+          for (const uint16_t d : days) {
+            if (!statstext::shelfSub(static_cast<statsview::Shelf>(s), w, d30, d, b, sizeof(b))) continue;
+            TEST_ASSERT_TRUE_MESSAGE(std::strlen(b) < 64, b);
+            const HeaderSub how = headerSub(28, titleW, right, small.width(b), false, true);
+            fits(small, b, how == HeaderSub::Beside ? headerSubRoom(28, titleW, right) : right - 28);
+          }
         }
       }
     }
@@ -5726,9 +5731,10 @@ void test_stats_value_rows_share_a_baseline() {
 // the day names (Small on 180) under the baseline, inside B; C's two lines
 // (Small on 207 and 225) under its rule at 193, apart, inside C, y 190-239.
 // No line's fill (bg BG) touches a bar, the baseline or the rule. And the
-// texts each look draws in every language: Pending's lines as a list's
-// lone line (Body, kListLineW), the empty state's lines (Small, 304) and
-// its button (Bold 168: empty.try_again's room).
+// texts each look draws in every language: Pending's lines and the card
+// out's No card line as a list's lone line (Body, kListLineW: S3b's
+// review, finding 7), the empty state's lines (Small, 304) and its button
+// (Bold 168: empty.try_again's room).
 void test_stats_week_lines_in_their_regions() {
   const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16), title(kVlwSansBold22);
   struct Line {
@@ -5764,9 +5770,8 @@ void test_stats_week_lines_in_their_regions() {
   for (uistr::Lang l : kAllLangs) {
     if (!uistr::hasCatalogue(l)) continue;
     uistr::setLang(l);
-    for (const S id : {S::stats_counting, S::stats_waiting}) fits(body, tr(id), uitext::kListLineW);
-    for (const S id : {S::stats_no_room, S::stats_unread, S::stats_waiting, S::stats_card_back, S::stats_no_card,
-                       S::stats_needs_dates}) {
+    for (const S id : {S::stats_counting, S::stats_waiting, S::stats_no_card}) fits(body, tr(id), uitext::kListLineW);
+    for (const S id : {S::stats_no_room, S::stats_unread, S::stats_waiting, S::stats_card_back, S::stats_needs_dates}) {
       fits(small, tr(id), uitext::kEmptyLineW);
     }
     fits(bold, tr(S::empty_try_again), 168);

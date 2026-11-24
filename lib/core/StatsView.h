@@ -261,7 +261,11 @@ using WidthFn = int (*)(const char* text, void* ctx);
 // row is absent then: entryDue()), only for a row latched while the boot's
 // fold ran that ended with the stats off (stats.bin or its base unread, a
 // newer major, no memory for the fold: A20). The row stays, since taking
-// it away would move every artist by 42 px.
+// it away would move every artist by 42 px. Folding and nothing played are
+// read from the lifetime itself, whatever the card: a row latched while
+// folding whose fold ended with the card out (RAM's HEAD, whole) reads
+// "Plays show up as you listen" with nothing played, never "0 min since
+// 23 Nov" (S3b's review, finding 6: stateOf()'s No card comes first).
 EntryLine entryLine(const Lifetime& l, WidthFn width, void* ctx, char* out, size_t size);
 // The latched row's line is drawn again in place at the boot fold's end
 // (7.3, 7.10: refreshTopRow), and only then: drawn while folding (Counting)
@@ -341,9 +345,24 @@ struct Control {
   bool holds = false;
 };
 Control controlOf(RowKind k);
-// The hub's header line under its title (7.4: the lifetime one, RAM): none
-// while the boot's fold runs (A19: HEAD partial), with nothing played (7.5:
-// the title alone) or with the stats off.
+// What a tap on hub row `row` does (7.4; LibraryPage::statsTap(), after
+// ListView's tick on a pressable row):
+//   - Ask: Try again, the visit's ask;
+//   - Push: an open row, its page (Last 7 days, or its shelf: shelfOfRow());
+//   - Refused: an open row while the hub can't be shown (hubReachable():
+//     the stats gone off on a shown hub, a remount's re-read failed or a
+//     drop; 4.4's Off has no shelf and no Week, "—"): it opens nothing, the
+//     double buzz and no toast, as the entry row's (S9; S3b's review,
+//     finding 16). The rows stay as drawn (D9 as replaced: no data lines);
+//   - None: a disabled row (its own buzz and toast: onInertTap()), the
+//     status row, past the rows.
+enum class HubTap : uint8_t { None, Ask, Push, Refused };
+HubTap hubTap(const HubLook& h, uint32_t row, const Lifetime& l, bool indexReady, bool synthetic);
+// The hub's header line under its title (7.4: the lifetime one, RAM): only
+// for a whole HEAD with plays, whatever the card (with it out, RAM's
+// lifetime still reads). None while the boot's fold runs (A19: HEAD
+// partial), with nothing played (7.5: the title alone) or with the stats
+// off; the card out hides neither (S3b's review, finding 6).
 bool hubSubDue(const Lifetime& l);
 // The hub can be shown (4.4: not with the stats off, behind the update's
 // fence, nor over uil's synthetic library): console uiSh's refusal, and the
@@ -599,9 +618,14 @@ constexpr uint8_t kShelfLook = 0x07, kShelfCells = 0x18, kShelfWindow = 0x60, kS
 // kind moved, or a short label's days with a new ask's texts.
 bool trayMoved(uint8_t drawnShape, uint8_t nowShape, bool textsMoved);
 // The header's line moved (Most played's window: "last 7 days", "since 1
-// Sep").
-constexpr bool shelfHeaderMoved(uint8_t drawnShape, uint8_t nowShape) {
-  return ((drawnShape ^ nowShape) & kShelfWindow) != 0;
+// Sep"; and at the 30 days the days RCNT holds, as the picked cell names
+// them: "last 30 days" to "16 days" at a capped landing, "16 days" to "15
+// days" with a new ask's texts, statstext::shelfSub(): S3b's review,
+// finding 8).
+constexpr bool shelfHeaderMoved(uint8_t drawnShape, uint8_t nowShape, bool textsMoved) {
+  if ((drawnShape ^ nowShape) & kShelfWindow) return true;
+  if ((nowShape & kShelfWindow) != (statsvisit::k30Days << 5)) return false;
+  return ((drawnShape ^ nowShape) & kShelfShort) || ((nowShape & kShelfShort) && textsMoved);
 }
 // The tray alone moved (its cells: a day that brings it or makes two cells
 // three; the 30-day label's kind with them), the look, the window shown
@@ -632,9 +656,9 @@ bool shelfArg(const char* a, Shelf* shelf, uint8_t* window, bool* windowGiven);
 // ---------------------------------------------------------------------------
 constexpr int kWeekBarPx = 44;  // the top day
 struct WeekLook {
-  PageLook page;        // Served: the figures; Pending: A's value the line, B and C empty; Retry: the empty
-                        // state, its line and Try again's button; NoCard, Closed: the empty state, its line
-                        // alone; Off, NoPlays: no figures, no line
+  PageLook page;        // Served: the figures; Pending, NoCard: A's value the line, B and C empty; Retry:
+                        // the empty state, its line and Try again's button; Closed: the empty state, its
+                        // line alone; Off, NoPlays: no figures, no line
   bool button = false;  // the empty state's Try again
 };
 // As the hub's look; with no clock Closed (stats.needs_dates: never reached,
@@ -665,17 +689,24 @@ uint16_t weekFirstDay(const Snapshot& s);
 // How Week shows each look (7.7 as decided; S3b's S11), as ui's LibraryPage
 // draws it with no items (ListView::drawEmpty()):
 //   - through the list's body hook (7.2 item 6): Served, its figures in A, B
-//     and C; Pending, the phase's line alone in A (B and C empty); Off and
-//     NoPlays, nothing (the band blank: no figures, no line);
-//   - else the firmware's empty state (Retry, NoCard, Closed): the chart's
-//     disc, no title, the look's line (Small, 304 px), and Try again's
-//     button with WeekLook::button (Retry: the card back among it; never
-//     with the card out, the owner's call 3).
+//     and C; Pending and NoCard, the look's line alone in A (B and C empty:
+//     weekBodyLine()); Off and NoPlays, nothing (the band blank: no figures,
+//     no line);
+//   - else the firmware's empty state (Retry, Closed): the chart's disc, no
+//     title, the look's line (Small, 304 px), and Try again's button with
+//     WeekLook::button (Retry: the card back among it, the owner's call 3).
 // Both cover the band whole, so a change of look draws it whole: no strip
 // of the old picture stays (as the list's lone line would leave).
 constexpr bool weekBody(Look k) {
-  return k == Look::Served || k == Look::Pending || k == Look::Off || k == Look::NoPlays;
+  return k == Look::Served || k == Look::Pending || k == Look::NoCard || k == Look::Off || k == Look::NoPlays;
 }
+// The line the body draws alone in A (Body DIM centred on x 160 in
+// uitext::kListLineW, on statstext::kWeekPendingY: a list's lone line):
+// Pending's phase line, and with the card out stats.no_card, the line the
+// hub and the shelves draw then, and nothing else (the owner's call 3: no
+// disc, no button; S3b's review, finding 7). None for Served (its figures),
+// Off and NoPlays (blank), nor the empty state's looks.
+constexpr bool weekBodyLine(Look k) { return k == Look::Pending || k == Look::NoCard; }
 // The header's line under or beside "Last 7 days" ("4–10 Nov (UTC)":
 // statstext::weekSub()) names the figures' days, the snapshot's: its first
 // day while they show (Served, a dated snapshot), else kUnsetDay (the title

@@ -1595,9 +1595,11 @@ void test_the_seven_days_and_the_span() {
 // RCNT's oldest day (7.6's stats.days_n): with RCNT capped, inside the 30
 // days (rank-rcnt-cap; the fixture boot rcnt-cap); the clock unset still
 // reads it; a record's older row moves it. S3b's mark (rcntShort()): DAYS'
-// first played day in the window before RCNT's oldest; a records' DAYS
-// play inside the window gives it, a skip or a day outside doesn't, and the
-// fixture boot's cap (day 288 gone, 289 kept) leaves the window whole.
+// first played day in the window before RCNT's oldest; over a base that
+// isn't short (a records' RCNT row on DAYS' first played day), a records'
+// DAYS play inside the window and older gives it, a skip there or a play
+// on a day outside doesn't, and the fixture boot's cap (day 288 gone, 289
+// kept) leaves the window whole.
 void test_rcnt_first_day_with_rcnt_capped() {
   const minijson::Value& sc = rankScenario("rank-rcnt-cap");
   const RankCard c = rankCard(sc);
@@ -1620,16 +1622,36 @@ void test_rcnt_first_day_with_rcnt_capped() {
       sameTotals(r, sc["totals"], "rank-rcnt-cap");
     }
     // S3b's mark (rcntShort(), the 30-day cell's "13 days"): DAYS played on
-    // the window's days before RCNT's oldest, or not. A records' DAYS row
-    // (the session's) with a play 20 days back marks it; one with only a
-    // skip, or a day before the window, doesn't.
+    // the window's days before RCNT's oldest, or not. The fixture's DAYS
+    // first plays inside the window on day today - 28, so the card alone is
+    // short (RCNT from today - 12).
     if (day >= 0) {
       const uint16_t d30 = rep.days30FirstDay;
-      TEST_ASSERT_EQUAL(d30 != sf::kUnsetDay && d30 < rep.rcntFirstDay, sr::rcntShort(rep));
+      TEST_ASSERT_EQUAL_UINT16(today - 28, d30);
+      TEST_ASSERT_TRUE(sr::rcntShort(rep));
+      // A base that isn't short (S3b's review, finding 15: the fixture's
+      // own is already, so an added play could show nothing): a records'
+      // RCNT row (the session's) on that first played day, so RCNT holds
+      // from it. Then a records' DAYS row (the session's) a day older, still
+      // inside the window (today - 29), marks it with a play; with only a
+      // skip it doesn't (RCNT holds plays only: a skip's day lost nothing),
+      // nor does a play on a day before the window (today - 30).
       const sr::Input keep = s.in;
+      uint8_t rrow[12];
+      cc::put16(rrow, static_cast<uint16_t>(today - 28));
+      cc::put16(rrow + 2, 1);
+      cc::put64(rrow + 4, 0x1234567890ABCDEFull);
+      s.in.rcnt = rrow;
+      s.in.rcntRows = 1;
+      sr::Ranker rb;
+      const sr::Report base = sr::rank(card, s.in, mem.m, rb);
+      TEST_ASSERT_EQUAL_STRING("ok", sr::outcomeName(base.outcome));
+      TEST_ASSERT_EQUAL_UINT16(today - 28, base.rcntFirstDay);
+      TEST_ASSERT_EQUAL_UINT16(today - 28, base.days30FirstDay);
+      TEST_ASSERT_FALSE(sr::rcntShort(base));
       for (const int k : {0, 1, 2}) {
         uint8_t drow[16] = {};
-        cc::put16(drow, static_cast<uint16_t>(k == 2 ? today - 30 : today - 20));
+        cc::put16(drow, static_cast<uint16_t>(k == 2 ? today - 30 : today - 29));
         cc::put16(drow + 2, static_cast<uint16_t>(k == 1 ? 0 : 1));  // plays
         cc::put16(drow + 4, static_cast<uint16_t>(k == 1 ? 1 : 0));  // skips
         cc::put32(drow + 8, 200000);
@@ -1637,15 +1659,12 @@ void test_rcnt_first_day_with_rcnt_capped() {
         s.in.daysRows = 1;
         sr::Ranker rd;
         const sr::Report rr = sr::rank(card, s.in, mem.m, rd);
-        TEST_ASSERT_EQUAL_STRING("ok", sr::outcomeName(rr.outcome));
-        TEST_ASSERT_EQUAL_UINT16(today - 12, rr.rcntFirstDay);
-        if (k == 0) {
-          TEST_ASSERT_EQUAL_UINT16(std::min<int>(today - 20, d30 == sf::kUnsetDay ? today : d30), rr.days30FirstDay);
-          TEST_ASSERT_TRUE(sr::rcntShort(rr));
-        } else {
-          TEST_ASSERT_EQUAL_UINT16(d30, rr.days30FirstDay);
-          TEST_ASSERT_EQUAL(sr::rcntShort(rep), sr::rcntShort(rr));
-        }
+        char m[48];
+        std::snprintf(m, sizeof(m), "records' DAYS row %d", k);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("ok", sr::outcomeName(rr.outcome), m);
+        TEST_ASSERT_EQUAL_UINT16_MESSAGE(today - 28, rr.rcntFirstDay, m);
+        TEST_ASSERT_EQUAL_UINT16_MESSAGE(k == 0 ? today - 29 : today - 28, rr.days30FirstDay, m);
+        TEST_ASSERT_EQUAL_MESSAGE(k == 0, sr::rcntShort(rr), m);
       }
       s.in = keep;
     }

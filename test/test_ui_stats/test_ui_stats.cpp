@@ -102,9 +102,14 @@
 //   the tray and the header are drawn again; the console's uiS<shelf>[w];
 // - Recently played at a new minute: the first row on screen whose "25 min
 //   ago" moved.
+// And S3b's cross-cutting review: the hub's header line and the entry row's
+// with the card out (nothing played, folding: the card hides neither), an
+// Off hub's rows refused (hubTap(): no blank shelf or Week pushed), Most
+// played's header at a capped RCNT naming what the picked cell names.
 // And Last 7 days as the page draws it (S3b's S11): each look through the
-// list's body hook or as the empty state (Try again's button with Retry and
-// the card back, never with the card out), its header's days and when the
+// list's body hook (the card out's No card line alone there, as Pending's)
+// or as the empty state (Try again's button with Retry and the card back),
+// its header's days and when the
 // header is drawn again, its texts (the count, the big day, Auto DJ's rate;
 // none for a week with nothing or an undated one), its columns, and the
 // status band off on it alone. S11's review: a real ask's undated snapshot
@@ -2243,20 +2248,35 @@ void test_the_forms_of_the_lines() {
   TEST_ASSERT_EQUAL_INT(0, std::strncmp(b, "A Very Long Title", 17));
 
   // The shelves' header lines and the tray's labels.
-  st::shelfSub(Shelf::MostPlayed, sv::k7Days, kSince, b, sizeof(b));
+  st::shelfSub(Shelf::MostPlayed, sv::k7Days, 30, kSince, b, sizeof(b));
   TEST_ASSERT_EQUAL_STRING("last 7 days", b);
-  st::shelfSub(Shelf::MostPlayed, sv::k30Days, kSince, b, sizeof(b));
+  st::shelfSub(Shelf::MostPlayed, sv::k30Days, 30, kSince, b, sizeof(b));
   TEST_ASSERT_EQUAL_STRING("last 30 days", b);
-  st::shelfSub(Shelf::MostPlayed, sv::kAllTime, kSince, b, sizeof(b));
+  st::shelfSub(Shelf::MostPlayed, sv::kAllTime, 30, kSince, b, sizeof(b));
   TEST_ASSERT_EQUAL_STRING("since 1 Sep", b);
-  TEST_ASSERT_EQUAL_UINT32(0, st::shelfSub(Shelf::MostPlayed, sv::kAllTime, sf::kUnsetDay, b, sizeof(b)));
-  st::shelfSub(Shelf::NewFinds, sv::kAllTime, kSince, b, sizeof(b));
+  TEST_ASSERT_EQUAL_UINT32(0, st::shelfSub(Shelf::MostPlayed, sv::kAllTime, 30, sf::kUnsetDay, b, sizeof(b)));
+  // RCNT capped (the tray's 30-day cell "16 days"): the header at the 30
+  // days names what the cell names (S3b's review, finding 8); the other
+  // windows and shelves don't read it.
+  st::shelfSub(Shelf::MostPlayed, sv::k30Days, 16, kSince, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("16 days", b);
+  st::shelfSub(Shelf::MostPlayed, sv::k30Days, 1, kSince, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("1 day", b);
+  st::shelfSub(Shelf::MostPlayed, sv::k30Days, 29, kSince, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("29 days", b);
+  st::shelfSub(Shelf::MostPlayed, sv::k7Days, 16, kSince, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("last 7 days", b);
+  st::shelfSub(Shelf::MostPlayed, sv::kAllTime, 16, kSince, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("since 1 Sep", b);
+  st::shelfSub(Shelf::NewFinds, sv::kAllTime, 16, kSince, b, sizeof(b));
   TEST_ASSERT_EQUAL_STRING("first heard in 30 days", b);
-  st::shelfSub(Shelf::OldFavourites, sv::kAllTime, kSince, b, sizeof(b));
+  st::shelfSub(Shelf::NewFinds, sv::kAllTime, 30, kSince, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("first heard in 30 days", b);
+  st::shelfSub(Shelf::OldFavourites, sv::kAllTime, 30, kSince, b, sizeof(b));
   TEST_ASSERT_EQUAL_STRING("not in 30 days", b);
-  st::shelfSub(Shelf::NotPlayed, sv::kAllTime, kSince, b, sizeof(b));
+  st::shelfSub(Shelf::NotPlayed, sv::kAllTime, 30, kSince, b, sizeof(b));
   TEST_ASSERT_EQUAL_STRING("since 1 Sep", b);
-  TEST_ASSERT_EQUAL_UINT32(0, st::shelfSub(Shelf::Recent, sv::kAllTime, kSince, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_UINT32(0, st::shelfSub(Shelf::Recent, sv::kAllTime, 30, kSince, b, sizeof(b)));
   TEST_ASSERT_EQUAL_STRING("", b);
   st::trayLabel(sv::k7Days, 30, b, sizeof(b));
   TEST_ASSERT_EQUAL_STRING("7 days", b);
@@ -2586,16 +2606,28 @@ void test_week_as_the_page_draws_it() {
   // The body or the empty state, every look one of the two.
   const Look looks[] = {Look::Served, Look::Pending, Look::Retry,  Look::NoCard,
                         Look::Off,    Look::NoPlays, Look::Closed};
-  int bodies = 0;
-  for (const Look k : looks) bodies += weekBody(k);
-  TEST_ASSERT_EQUAL_INT(4, bodies);
+  int bodies = 0, lines = 0;
+  for (const Look k : looks) {
+    bodies += weekBody(k);
+    lines += weekBodyLine(k);
+    if (weekBodyLine(k)) TEST_ASSERT_TRUE(weekBody(k));  // (a body's line: never the empty state's)
+  }
+  TEST_ASSERT_EQUAL_INT(5, bodies);
+  TEST_ASSERT_EQUAL_INT(2, lines);
   TEST_ASSERT_TRUE(weekBody(Look::Served));
   TEST_ASSERT_TRUE(weekBody(Look::Pending));
   TEST_ASSERT_TRUE(weekBody(Look::Off));
   TEST_ASSERT_TRUE(weekBody(Look::NoPlays));
   TEST_ASSERT_FALSE(weekBody(Look::Retry));
-  TEST_ASSERT_FALSE(weekBody(Look::NoCard));
   TEST_ASSERT_FALSE(weekBody(Look::Closed));
+  // The card out (S3b's review, finding 7; the owner's call 3: only the No
+  // card line): the list's lone Body line in A, as Pending's and as the hub
+  // and the shelves draw it; not the empty state's disc and Small line.
+  TEST_ASSERT_TRUE(weekBody(Look::NoCard));
+  TEST_ASSERT_TRUE(weekBodyLine(Look::NoCard));
+  TEST_ASSERT_TRUE(weekBodyLine(Look::Pending));
+  for (const Look k : {Look::Served, Look::Off, Look::NoPlays, Look::Retry, Look::Closed})
+    TEST_ASSERT_FALSE(weekBodyLine(k));
 
   // Each phase's look on Week, and its empty state's line and button.
   Snap a;
@@ -2635,8 +2667,14 @@ void test_week_as_the_page_draws_it() {
     snprintf(msg, sizeof(msg), "%s from %s", lookName(c.look), sv::phaseName(c.p.phase));
     TEST_ASSERT_EQUAL_STRING_MESSAGE(lookName(c.look), lookName(w.page.look), msg);
     TEST_ASSERT_EQUAL_MESSAGE(c.button, w.button, msg);
-    if (!weekBody(w.page.look) || w.page.look == Look::Pending)
+    if (!weekBody(w.page.look) || weekBodyLine(w.page.look))
       TEST_ASSERT_EQUAL_MESSAGE(static_cast<int>(c.line), static_cast<int>(w.page.line), msg);
+    // The card out: its line alone in the body, the empty state's never
+    // (no disc, no button: the hub's and the shelves' one line).
+    if (c.look == Look::NoCard) {
+      TEST_ASSERT_TRUE_MESSAGE(weekBody(w.page.look) && weekBodyLine(w.page.look), msg);
+      TEST_ASSERT_EQUAL_MESSAGE(static_cast<int>(S::stats_no_card), static_cast<int>(w.page.line), msg);
+    }
     // The button only on the empty state.
     if (w.button) TEST_ASSERT_FALSE_MESSAGE(weekBody(w.page.look), msg);
     // Its header's days: the snapshot's, with the figures alone.
@@ -3000,10 +3038,63 @@ void test_the_hub_rows_take_a_touch() {
   }
 }
 
+// A hub row's tap (statsTap(): S3b's review, finding 16): Try again asks,
+// an open row pushes its page while the hub is reachable, else it is
+// refused (the stats gone off on a shown hub: no blank shelf or Week); the
+// disabled and status rows and past the rows nothing.
+void test_a_hub_row_s_tap() {
+  const HubLook nc = hubLook(noClock(), phase(Phase::NoRoom, Outcome::NoRoom), nullptr);
+  TEST_ASSERT_EQUAL_UINT32(7, nc.rows);
+  // (pressable() keeps the disabled and status rows off; a disabled row's
+  // buzz is onInertTap()'s.)
+  TEST_ASSERT_EQUAL(HubTap::None, hubTap(nc, 0, noClock(), true, false));  // the status row
+  TEST_ASSERT_EQUAL(HubTap::Push, hubTap(nc, 1, noClock(), true, false));
+  TEST_ASSERT_EQUAL(HubTap::None, hubTap(nc, 2, noClock(), true, false));  // disabled
+  TEST_ASSERT_EQUAL(HubTap::None, hubTap(nc, 3, noClock(), true, false));
+  TEST_ASSERT_EQUAL(HubTap::Ask, hubTap(nc, 6, noClock(), true, false));
+  TEST_ASSERT_EQUAL(HubTap::None, hubTap(nc, 7, noClock(), true, false));
+  TEST_ASSERT_EQUAL(HubTap::None, hubTap(nc, 99, noClock(), true, false));
+  const HubLook working = hubLook(dated(), phase(Phase::Working), nullptr);
+  for (uint32_t i = 0; i < working.rows; ++i)
+    TEST_ASSERT_EQUAL(HubTap::Push, hubTap(working, i, dated(), true, false));
+  // The stats gone off on a shown hub (a remount's re-read failed: S3b's
+  // review, finding 16): its six rows still drawn open (D9 as replaced: no
+  // data lines) and pressed with their tick, but a tap pushes nothing (4.4:
+  // Off reaches no shelf and no Week): refused, the double buzz, as the
+  // entry row's whose hub went off (S9). None asks.
+  Lifetime stopped = dated();
+  stopped.on = false;
+  const HubLook gone = hubLook(stopped, phase(Phase::Idle, Outcome::None, sv::kWhyOff), nullptr);
+  TEST_ASSERT_EQUAL(Look::Off, gone.page.look);
+  TEST_ASSERT_EQUAL_UINT32(6, gone.rows);
+  for (uint32_t i = 0; i < gone.rows; ++i) {
+    TEST_ASSERT_EQUAL(RowKind::Open, gone.item[i].kind);
+    TEST_ASSERT_TRUE(controlOf(gone.item[i].kind).pressable);
+    TEST_ASSERT_EQUAL(HubTap::Refused, hubTap(gone, i, stopped, true, false));
+  }
+  // ... no clock as well (the status row, rows 3-4 disabled: still none).
+  Lifetime offNoClock = noClock();
+  offNoClock.on = false;
+  const HubLook goneNc = hubLook(offNoClock, phase(Phase::Idle, Outcome::None, sv::kWhyOff), nullptr);
+  TEST_ASSERT_EQUAL(HubTap::None, hubTap(goneNc, 0, offNoClock, true, false));
+  TEST_ASSERT_EQUAL(HubTap::Refused, hubTap(goneNc, 1, offNoClock, true, false));
+  TEST_ASSERT_EQUAL(HubTap::None, hubTap(goneNc, 2, offNoClock, true, false));
+  // The same rule as uiSh's and the entry row's (hubReachable()): behind the
+  // update's fence or over uil's library, refused too.
+  TEST_ASSERT_EQUAL(HubTap::Refused, hubTap(working, 1, dated(), false, false));
+  TEST_ASSERT_EQUAL(HubTap::Refused, hubTap(working, 1, dated(), true, true));
+  // The card out: no rows, nothing to tap.
+  Lifetime out = dated();
+  out.cardIn = false;
+  const HubLook pulled = hubLook(out, phase(Phase::NoCard, Outcome::CardAway, sv::kWhyCard), nullptr);
+  TEST_ASSERT_EQUAL(HubTap::None, hubTap(pulled, 0, out, true, false));
+}
+
 // The header line, the hub's reach (uiSh's refusal), and the shape a page
 // polls: it moves with the rows' kinds and count, never with a text alone.
 void test_the_hub_s_sub_reach_and_shape() {
-  // The sub: from RAM, in every state but Off, Folding and Empty.
+  // The sub: from RAM, for a whole HEAD with plays (not Off, Folding or
+  // Empty), whatever the card.
   Lifetime l = dated();
   TEST_ASSERT_TRUE(hubSubDue(l));
   TEST_ASSERT_TRUE(hubSubDue(dated(5)));
@@ -3019,6 +3110,28 @@ void test_the_hub_s_sub_reach_and_shape() {
   l = dated();
   l.on = false;
   TEST_ASSERT_FALSE(hubSubDue(l));
+  // ... and the card out hides neither (S3b's review, finding 6): an empty
+  // card pulled on the empty hub keeps the title alone (not "0 min since
+  // 23 Nov"), and a card held during the boot's fold no part-folded total.
+  l = dated();
+  l.cardIn = false;
+  l.plays = 0;
+  l.listenedMs = 0;
+  TEST_ASSERT_EQUAL(State::NoCard, stateOf(l));
+  TEST_ASSERT_FALSE(hubSubDue(l));
+  l = dated();
+  l.cardIn = false;
+  l.folding = true;
+  TEST_ASSERT_EQUAL(State::NoCard, stateOf(l));
+  TEST_ASSERT_FALSE(hubSubDue(l));
+  // (The sub's bit in the page's shape follows: pulled on the empty hub, the
+  // look moves (the empty state to No card's line), the header doesn't.)
+  Lifetime emptyIn = dated(), emptyOut = dated();
+  emptyIn.plays = emptyOut.plays = 0;
+  emptyOut.cardIn = false;
+  TEST_ASSERT_EQUAL(hubSubDue(emptyIn), hubSubDue(emptyOut));
+  l = dated();
+  l.on = false;
   // Reachable: not Off, an index, not the synthetic library; the card out
   // and nothing played still show it.
   TEST_ASSERT_TRUE(hubReachable(dated(), true, false));
@@ -3321,6 +3434,26 @@ void test_the_entry_row_at_the_fold_s_end() {
   TEST_ASSERT_EQUAL(EntryLine::Unread, entryLine(l, monoWidth, &px, b, sizeof(b)));
   TEST_ASSERT_EQUAL_STRING(uistr::tr(S::stats_unread), b);
   TEST_ASSERT_FALSE(entryDue(l, true, false, 1));  // (never at an enter(): absent then)
+  // The fold ended with the card out (scanAway(): a row latched Counting):
+  // RAM's HEAD, whole, read as it is (S3b's review, finding 6). Nothing
+  // played: "Plays show up as you listen", never "0 min since 23 Nov"; with
+  // plays, the lifetime line; still folding (the card held), Counting.
+  l = dated();
+  l.cardIn = false;
+  l.plays = 0;
+  l.listenedMs = 0;
+  TEST_ASSERT_EQUAL(EntryLine::Empty, entryLine(l, monoWidth, &px, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING(uistr::tr(S::stats_entry_empty), b);
+  l.folding = true;
+  TEST_ASSERT_EQUAL(EntryLine::Counting, entryLine(l, monoWidth, &px, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING(uistr::tr(S::stats_counting), b);
+  l = dated();
+  l.cardIn = false;
+  l.folding = true;
+  TEST_ASSERT_EQUAL(EntryLine::Counting, entryLine(l, monoWidth, &px, b, sizeof(b)));
+  l.folding = false;
+  TEST_ASSERT_EQUAL(EntryLine::Since, entryLine(l, monoWidth, &px, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("74 h 10 min since 1 Sep", b);
 }
 
 // ---------------------------------------------------------------------------
@@ -3519,7 +3652,7 @@ void test_a_shelf_s_touch_place_and_shape() {
   TEST_ASSERT_EQUAL_UINT8(0, pending & kShelfShort);
   const uint8_t served = shapeOf(most, l, kReady, full.s());
   TEST_ASSERT_FALSE(trayMoved(pending, served, true));  // a landing, RCNT whole: the tray as drawn
-  TEST_ASSERT_FALSE(shelfHeaderMoved(pending, served));
+  TEST_ASSERT_FALSE(shelfHeaderMoved(pending, served, true));
   // A landing whose RCNT is capped: "16 days" on the 30-day cell.
   sv::MadeUp capped = fullCard();
   capped.rcntFirstDay = static_cast<uint16_t>(kToday - 15);
@@ -3531,10 +3664,51 @@ void test_a_shelf_s_touch_place_and_shape() {
   TEST_ASSERT_TRUE(trayMoved(pending, shortServed, true));
   TEST_ASSERT_TRUE(trayMoved(shortServed, shortServed, true));    // "16 days" to a new ask's "15 days"
   TEST_ASSERT_FALSE(trayMoved(shortServed, shortServed, false));  // the same
+  // ... at All time the header ("since 1 Sep") doesn't read the days.
+  TEST_ASSERT_FALSE(shelfHeaderMoved(pending, shortServed, true));
+  TEST_ASSERT_FALSE(shelfHeaderMoved(shortServed, shortServed, true));
+  // At the 30 days (S3b's review, finding 8) the header names the window
+  // the picked cell names: "16 days" both, over the 16 days' rows, never
+  // "last 30 days" over them; a whole RCNT "last 30 days" and "30 days".
+  {
+    namespace st = statstext;
+    const uint32_t month = shelfId(Shelf::MostPlayed, sv::k30Days);
+    char sub[64], cell[48];
+    for (const sv::Snapshot* snap : {static_cast<const sv::Snapshot*>(cs.s()), static_cast<const sv::Snapshot*>(full.s())}) {
+      const ShelfLook k = shelfLook(month, l, kReady, snap);
+      const Tray t = trayOf(l, snap);
+      TEST_ASSERT_EQUAL_UINT8(sv::k30Days, k.window);
+      TEST_ASSERT_EQUAL_UINT8(3, t.cells);
+      TEST_ASSERT_EQUAL_UINT8(sv::k30Days, t.window[1]);
+      st::shelfSub(k.shelf, k.window, t.days30, l.sinceDay, sub, sizeof(sub));
+      st::trayLabel(t.window[1], t.days30, cell, sizeof(cell));
+      if (snap == cs.s()) {
+        TEST_ASSERT_EQUAL_UINT8(16, t.days30);
+        TEST_ASSERT_EQUAL_STRING("16 days", cell);
+        TEST_ASSERT_EQUAL_STRING(cell, sub);
+      } else {
+        TEST_ASSERT_EQUAL_STRING("30 days", cell);
+        TEST_ASSERT_EQUAL_STRING("last 30 days", sub);
+      }
+    }
+    // ... and the header is drawn again as the cell is: a capped landing,
+    // a new ask's days ("16 days" to "15 days": its texts), not the same.
+    const uint8_t monthPending = shapeOf(month, l, phase(Phase::Working), nullptr);
+    const uint8_t monthWhole = shapeOf(month, l, kReady, full.s());
+    const uint8_t monthShort = shapeOf(month, l, kReady, cs.s());
+    TEST_ASSERT_EQUAL_UINT8(kShelfShort, monthShort & kShelfShort);
+    TEST_ASSERT_TRUE(shelfHeaderMoved(monthPending, monthShort, true));
+    TEST_ASSERT_TRUE(shelfHeaderMoved(monthPending, monthShort, false));
+    TEST_ASSERT_TRUE(shelfHeaderMoved(monthShort, monthWhole, true));  // a new ask, RCNT whole again
+    TEST_ASSERT_TRUE(shelfHeaderMoved(monthShort, monthShort, true));
+    TEST_ASSERT_FALSE(shelfHeaderMoved(monthShort, monthShort, false));
+    TEST_ASSERT_FALSE(shelfHeaderMoved(monthPending, monthWhole, true));  // "last 30 days" both
+    TEST_ASSERT_FALSE(shelfHeaderMoved(monthWhole, monthWhole, true));
+  }
   // A tray tap: the window, so the tray and the header.
   const uint8_t week = shapeOf(shelfId(Shelf::MostPlayed, sv::k7Days), l, kReady, full.s());
   TEST_ASSERT_TRUE(trayMoved(served, week, false));
-  TEST_ASSERT_TRUE(shelfHeaderMoved(served, week));
+  TEST_ASSERT_TRUE(shelfHeaderMoved(served, week, false));
   // A day that makes two cells three; none under 7 days (no tray: the item
   // comes or goes, staged as any).
   TEST_ASSERT_TRUE(trayMoved(shapeOf(most, dated(29), kReady, full.s()), shapeOf(most, dated(30), kReady, full.s()),
@@ -3729,6 +3903,7 @@ int main(int, char**) {
   RUN_TEST(test_an_undated_snapshot_once_the_clock_is_set);
   RUN_TEST(test_the_stat_value_s_segments);
   RUN_TEST(test_the_hub_rows_take_a_touch);
+  RUN_TEST(test_a_hub_row_s_tap);
   RUN_TEST(test_the_hub_s_sub_reach_and_shape);
   RUN_TEST(test_the_hub_s_lines);
   RUN_TEST(test_a_new_minute);

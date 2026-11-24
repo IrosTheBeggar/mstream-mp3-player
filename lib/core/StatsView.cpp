@@ -209,17 +209,18 @@ size_t dayMonthText(uint16_t day, char* out, size_t size) {
 }
 
 EntryLine entryLine(const Lifetime& l, WidthFn width, void* ctx, char* out, size_t size) {
-  const State st = stateOf(l);
-  if (st == State::Off) {
+  // The lifetime's own fields, not stateOf(): its No card comes before
+  // Folding and Empty, and the card out hides neither here.
+  if (!l.on) {
     // (A row latched while folding, the fold ended with the stats off: A20.)
     uistr::copy(out, size, uistr::tr(S::stats_unread));
     return EntryLine::Unread;
   }
-  if (st == State::Folding) {
+  if (l.folding) {
     uistr::copy(out, size, uistr::tr(S::stats_counting));
     return EntryLine::Counting;
   }
-  if (st == State::Empty) {
+  if (l.plays == 0) {
     uistr::copy(out, size, uistr::tr(S::stats_entry_empty));
     return EntryLine::Empty;
   }
@@ -336,9 +337,18 @@ Control controlOf(RowKind k) {
   return c;
 }
 
+HubTap hubTap(const HubLook& h, uint32_t row, const Lifetime& l, bool indexReady, bool synthetic) {
+  if (row >= h.rows) return HubTap::None;
+  switch (h.item[row].kind) {
+    case RowKind::TryAgain: return HubTap::Ask;
+    case RowKind::Open: return hubReachable(l, indexReady, synthetic) ? HubTap::Push : HubTap::Refused;
+    default: return HubTap::None;
+  }
+}
+
 bool hubSubDue(const Lifetime& l) {
-  const State st = stateOf(l);
-  return st != State::Off && st != State::Folding && st != State::Empty;
+  // (Not stateOf(): the card out would hide Folding and Empty.)
+  return l.on && !l.folding && l.plays > 0;
 }
 
 bool hubReachable(const Lifetime& l, bool indexReady, bool synthetic) {

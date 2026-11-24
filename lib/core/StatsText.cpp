@@ -330,12 +330,13 @@ size_t hubLine(const statsview::HubItem& it, const statsview::Lifetime& l, const
 // ---------------------------------------------------------------------------
 // The shelves
 // ---------------------------------------------------------------------------
-size_t shelfSub(Shelf shelf, uint8_t window, uint16_t sinceDay, char* out, size_t size) {
+size_t shelfSub(Shelf shelf, uint8_t window, uint8_t days30, uint16_t sinceDay, char* out, size_t size) {
   if (!out || size == 0) return 0;
   out[0] = 0;
   switch (shelf) {
     case Shelf::MostPlayed:
       if (window == sv::k7Days) return uistr::copy(out, size, uistr::tr(S::stats_sub_last7));
+      if (window == sv::k30Days && days30 < 30) return trayLabel(window, days30, out, size);
       if (window == sv::k30Days) return uistr::copy(out, size, uistr::tr(S::stats_sub_last30));
       return sinceOnlyLine(sinceDay, out, size);
     case Shelf::NewFinds: return uistr::copy(out, size, uistr::tr(S::stats_first_heard));

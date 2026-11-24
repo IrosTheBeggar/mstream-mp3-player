@@ -212,8 +212,11 @@ size_t hubLine(const statsview::HubItem& it, const statsview::Lifetime& l, const
 // (stats.sub_last7, stats.sub_last30, All time stats.since_only of the
 // first day), New finds' stats.first_heard, Old favourites' stats.not_in_30,
 // Not played yet's stats.since_only; none for Recently played (nor a since
-// with no first day).
-size_t shelfSub(statsview::Shelf shelf, uint8_t window, uint16_t sinceDay, char* out, size_t size);
+// with no first day). At the 30 days with `days30` under 30 (the tray's:
+// RCNT capped, statsview::trayOf()), the picked cell's own words,
+// stats.days_n ("16 days"), so the header and the cell name one window
+// over the same rows (S3b's review, finding 8).
+size_t shelfSub(statsview::Shelf shelf, uint8_t window, uint8_t days30, uint16_t sinceDay, char* out, size_t size);
 // A tray cell's label: stats.days_n of 7, of `days30` for the 30 days (fewer
 // when RCNT is short: "16 days"), stats.window_all. Bold in its cell's room
 // (kTrayLabelW3, kTrayLabelW2), else Small (the drawing's choice).

@@ -454,12 +454,14 @@ Header LibraryPage::statsHeader() const {
     case PageKind::StatsShelf: {
       // Its line under the title (subBelow, 7.6: it stays once the tray
       // scrolls away): Most played's window ("last 7 days", "since 1
-      // Sep"), the others' own; none on Recently played.
+      // Sep"; at the 30 days what the picked cell says, "16 days" with
+      // RCNT capped), the others' own; none on Recently played.
       const sv::Shelf s = sv::shelfOf(id_);
       h.title = tr(sv::shelfTitle(s));
       sv::Lifetime l;
       ui_.statsLifetime(l);
-      st::shelfSub(s, shelfNow(l).window, l.sinceDay, headerSub_, sizeof(headerSub_));
+      st::shelfSub(s, shelfNow(l).window, sv::trayOf(l, ui_.statsSnapshot()).days30, l.sinceDay, headerSub_,
+                   sizeof(headerSub_));
       break;
     }
     default: {
@@ -509,16 +511,25 @@ ListView::Tap LibraryPage::statsTap(uint32_t row) {
   sv::Lifetime l;
   ui_.statsLifetime(l);
   const sv::HubLook h = hubNow(l);
-  if (row >= h.rows) return ListView::Tap::Handled;
-  const sv::HubItem& it = h.item[row];
-  if (it.kind == sv::RowKind::TryAgain) {
-    // The visit asked again (after No room, Unread, Capped, the card back):
-    // queued, its phase on the rows from the next pass (the news).
-    Serial.printf("[ui] stats: Try again (\"%s\")\n", tr(it.text));
-    ui_.statsAsk(sv::UiAsk::Visit);
-    return ListView::Tap::Handled;
+  const LibraryIndex* i = index();
+  switch (sv::hubTap(h, row, l, i != nullptr, !real())) {
+    case sv::HubTap::Ask:
+      // The visit asked again (after No room, Unread, Capped, the card
+      // back): queued, its phase on the rows from the next pass (the news).
+      Serial.printf("[ui] stats: Try again (\"%s\")\n", tr(h.item[row].text));
+      ui_.statsAsk(sv::UiAsk::Visit);
+      return ListView::Tap::Handled;
+    case sv::HubTap::Refused:
+      // The stats gone off on the shown hub (4.4's Off reaches no shelf
+      // and no Week): nothing pushed, the double buzz, as the entry row's.
+      ui_.input().missBuzz();
+      Serial.printf("[ui] stats: %s opens nothing now (the hub isn't reachable: the stats are off)\n",
+                    kHubRowNames[static_cast<uint32_t>(h.item[row].row)]);
+      return ListView::Tap::Handled;
+    case sv::HubTap::Push: break;
+    default: return ListView::Tap::Handled;  // (pressable() kept the others off)
   }
-  if (it.kind != sv::RowKind::Open) return ListView::Tap::Handled;  // (pressable() kept the others off)
+  const sv::HubItem& it = h.item[row];
   if (it.row == sv::HubRow::Week) {
     ui_.push(page(PageKind::StatsWeek, 0));
     return ListView::Tap::Handled;
@@ -594,11 +605,11 @@ const char* LibraryPage::statsEmptyText() {
 
 // The hub with nothing played (7.5, frame NoPlays): the chart on its disc,
 // "No plays yet", the rule and "Your stats stay on this card", and Shuffle
-// all (onEmptyAction()). Last 7 days when its ask came to nothing, the card
-// is out or the clock unset (7.7 as decided): the chart on its disc, no
-// title, the reason as its line (Small, 304 px), and Try again (Bold, 168
-// px) with Retry (the card back among it: the owner's call 3), none with
-// the card out (stats.no_card alone) nor with no clock.
+// all (onEmptyAction()). Last 7 days when its ask came to nothing or the
+// clock is unset (7.7 as decided): the chart on its disc, no title, the
+// reason as its line (Small, 304 px), and Try again (Bold, 168 px) with
+// Retry (the card back among it: the owner's call 3), none with no clock.
+// (The card out is its body's lone No card line: weekBody().)
 bool LibraryPage::statsEmptyState(EmptyState& e) {
   if (kind_ == PageKind::StatsShelf) return false;  // (its line, or its Try again row)
   sv::Lifetime l;
@@ -972,9 +983,9 @@ void LibraryPage::shelfFollow(uint32_t drawn, uint32_t sig, const sv::Lifetime& 
   const uint8_t was = static_cast<uint8_t>(drawn >> 16), now = static_cast<uint8_t>(sig >> 16);
   const bool textsMoved = ((drawn ^ sig) & 0xFFFFu) != 0;
   // Most played's window line (a landing's D7, a day that drops a kept 30
-  // days): the header again while the page shows (else drawn whole when it
-  // does).
-  if (sv::shelfHeaderMoved(was, now) && ui_.pageShowing()) repaintHeader();
+  // days; at the 30 days a capped landing's "16 days"): the header again
+  // while the page shows (else drawn whole when it does).
+  if (sv::shelfHeaderMoved(was, now, textsMoved) && ui_.pageShowing()) repaintHeader();
   const sv::ShelfLook k = shelfNow(l);
   // D7: the window shown is the snapshot's from here (a new ask's loan
   // opened on All time), at a landing with rows or with none in the window
@@ -1046,14 +1057,14 @@ void LibraryPage::recentMinute(const sv::Lifetime& l, uint32_t was) {
 __attribute__((noinline)) void LibraryPage::printShelf(const sv::Lifetime& l) {
   const sv::ShelfLook k = shelfNow(l);
   const statsvisit::Snapshot* snap = ui_.statsSnapshot();
+  const sv::Tray t = sv::trayOf(l, snap);
   char text[160];
-  st::shelfSub(k.shelf, k.window, l.sinceDay, text, sizeof(text));
+  st::shelfSub(k.shelf, k.window, t.days30, l.sinceDay, text, sizeof(text));
   Serial.printf("[ui] stats:   %s, window %s, the header's line \"%s\"; %lu rows%s%s%s%s\n",
                 kHubRowNames[static_cast<uint32_t>(k.shelf) + 1], windowName(k.window), text,
                 static_cast<unsigned long>(k.rows), k.tray ? ", the tray" : "", k.topBar ? ", the top bar" : "",
                 k.tryAgain ? ", Try again" : "", pending() ? " (pending: its place kept in its ref)" : "");
   if (k.tray) {
-    const sv::Tray t = sv::trayOf(l, snap);
     for (int c = 0; c < t.cells; ++c) {
       st::trayLabel(t.window[c], t.days30, text, sizeof(text));
       Serial.printf("[ui] stats:     the tray's cell %d, %s: \"%s\"%s\n", c + 1, windowName(t.window[c]), text,
@@ -1151,7 +1162,9 @@ bool LibraryPage::drawBody(M5Canvas& c, int y0, int h) { return kind_ == PageKin
 // The page's picture (frame Week; 7.7 as decided), its figures the
 // snapshot's week as of the ask (no fold moves it): Served, A, B and C;
 // Pending, the phase's line alone in A, as a list's lone line ("Counting
-// plays…", "Waiting for the card…"); Off and nothing played, the band blank.
+// plays…", "Waiting for the card…"), and the card out its No card line the
+// same way (the hub's and the shelves' one line: the owner's call 3); Off
+// and nothing played, the band blank.
 // Each of the three 56-row strips (the shared strip: not kept between uses)
 // is filled, has whatever of the picture falls in it drawn at its offset,
 // as drawEmptyState() does, and is pushed: every line of the band, so the
@@ -1172,7 +1185,7 @@ bool LibraryPage::weekBody(M5Canvas& c, int y0, int h) {
     if (served) {
       weekStrip(c, top, sh, f);
       weekLines(c, top, sh, *snap, f);
-    } else if (w.page.look == sv::Look::Pending && lineIn(Font::Body, st::kWeekPendingY, top, sh)) {
+    } else if (sv::weekBodyLine(w.page.look) && lineIn(Font::Body, st::kWeekPendingY, top, sh)) {
       Fonts::instance().draw(c, Font::Body, tr(w.page.line), kW / 2, st::kWeekPendingY - top, uitext::kListLineW,
                              col::DIM, col::BG, Fonts::Align::Centre);
     }
@@ -1291,8 +1304,9 @@ __attribute__((noinline)) void LibraryPage::printWeek(const sv::Lifetime& l) {
     return;
   }
   if (w.page.look != sv::Look::Served || !snap) {
-    Serial.printf("[ui] stats:   %s%s%s\n", w.page.look == sv::Look::Pending ? "A: \"" : "nothing drawn (no figures, no line)",
-                  w.page.look == sv::Look::Pending ? tr(w.page.line) : "", w.page.look == sv::Look::Pending ? "\"" : "");
+    const bool line = sv::weekBodyLine(w.page.look);
+    Serial.printf("[ui] stats:   %s%s%s\n", line ? "A: \"" : "nothing drawn (no figures, no line)",
+                  line ? tr(w.page.line) : "", line ? "\"" : "");
     return;
   }
   const sv::WeekFigures f = sv::weekFigures(*snap);
