@@ -56,6 +56,19 @@ const char* rowKindName(sv::RowKind k) {
   }
 }
 
+// uiS's "counting days N ... as latched" tail (7.10's latch, 9.3): the
+// latch keeps kDaysMask at most, past both the tray's and the month's
+// edges, so a held 63 reads "63 or more", not a stale latch (S3b's review
+// of the cross-cutting fixes); marked while taken again. One argument for
+// both marks, so printStats()' frame keeps its size.
+const char* latchedText(uint8_t held) {
+  const bool top = (held & sv::kDaysHeld) && (held & sv::kDaysMask) == sv::kDaysMask;
+  if (held & sv::kDaysRetake)
+    return top ? " or more as latched (taken again at the lifetime's next whole reading)"
+               : " as latched (taken again at the lifetime's next whole reading)";
+  return top ? " or more as latched" : " as latched";
+}
+
 NavModel::PageRef page(PageKind kind, uint32_t id) {
   NavModel::PageRef p;
   p.kind = static_cast<uint8_t>(kind);
@@ -692,10 +705,10 @@ void LibraryPage::printStats() {
   sv::PageLook look;
   const uint32_t sig = statsSigNow(l, &look);
   const bool attached = list.source() == this;
-  // (The counting days as the page latched them, 7.10: the lifetime's own
-  // are Ui's line above.)
+  // (The counting days as the page latched them, 7.10, latchedText(): the
+  // lifetime's own are Ui's line above.)
   Serial.printf("[ui] stats: %s %lu, look %s%s, drawn as 0x%06lX (now 0x%06lX); the list: %s%lu rows drawn (%lu "
-                "now), %lu items, offset %ld px, open row %ld%s; counting days %lu as latched%s\n",
+                "now), %lu items, offset %ld px, open row %ld%s; counting days %lu%s\n",
                 pageKindName(static_cast<uint8_t>(kind_)), static_cast<unsigned long>(id_), sv::lookName(look.look),
                 look.askDue ? " (an ask due)" : "", static_cast<unsigned long>(statsSigDrawn()),
                 static_cast<unsigned long>(sig), attached ? "" : "NOT ATTACHED, ",
@@ -703,7 +716,7 @@ void LibraryPage::printStats() {
                 static_cast<unsigned long>(statsRows()), static_cast<unsigned long>(attached ? list.layout().itemCount() : 0),
                 static_cast<long>(attached ? list.offset() : 0), static_cast<long>(attached ? list.expanded() : -1),
                 attached && list.stagingOnly() ? ", rows still staged" : "", static_cast<unsigned long>(l.countingDays),
-                (days_ & sv::kDaysRetake) ? " (taken again at the lifetime's next whole reading)" : "");
+                latchedText(days_));
   // (Each page's part in a frame of its own, not stacked on this one: a
   // shelf's lines go through the same text chain as its rows.)
   if (kind_ == PageKind::StatsShelf) {

@@ -4020,6 +4020,16 @@ void test_the_counting_days_a_page_holds() {
   TEST_ASSERT_EQUAL_UINT8(kDaysHeld | 5, held);
   monthRows(hub(dated(5), held), RowKind::Disabled, "another card's 5 days");
   TEST_ASSERT_EQUAL(0, cells(dated(5), held));
+  // ... under 30 days: a re-read of a card the page held at 5 reads 5 (the
+  // mark is no day): rows 3-5 disabled, no tray, New finds shut (S3b's
+  // review of the cross-cutting fixes: the marked days read back).
+  const PhaseInfo away = phase(Phase::NoCard, Outcome::CardAway);
+  held = latchDays(latchDays(0, dated(5), true), reread, false);
+  TEST_ASSERT_EQUAL_UINT8(kDaysHeld | kDaysRetake | 5, held);
+  TEST_ASSERT_EQUAL_UINT32(5, seen(reread, held).countingDays);
+  monthRows(hubLook(seen(reread, held), away, nullptr), RowKind::Disabled, "a re-read, 5 days held");
+  TEST_ASSERT_EQUAL(0, cells(reread, held));
+  TEST_ASSERT_EQUAL(Look::Closed, shelfLook(finds, seen(reread, held), away, nullptr).page.look);
   // ... the same marks with the card out, the stats off, HEAD's first day
   // unknown; taken at the next whole reading.
   Lifetime out = dated(40), off = dated(40), noFirst = dated(40);
@@ -4051,6 +4061,20 @@ void test_the_counting_days_a_page_holds() {
   TEST_ASSERT_EQUAL_UINT8(kDaysHeld | kDaysMask, latchDays(0, dated(200), true));
   TEST_ASSERT_EQUAL(State::Ready, stateOf(seen(dated(200), kDaysHeld | kDaysMask)));
   TEST_ASSERT_EQUAL(3, cells(dated(200), kDaysHeld | kDaysMask));
+  // ... and not whole (a page first entered during the boot's fold): the
+  // lifetime's own, marked. Under 30, shut with no tray; past kDaysMask,
+  // clamped, three cells.
+  Lifetime fold5 = dated(5), fold71 = dated(71);
+  fold5.folding = true;
+  fold71.folding = true;
+  TEST_ASSERT_FALSE(daysWhole(fold5));
+  held = latchDays(0, fold5, true);
+  TEST_ASSERT_EQUAL_UINT8(kDaysHeld | kDaysRetake | 5, held);
+  TEST_ASSERT_EQUAL_UINT32(5, seen(fold5, held).countingDays);
+  TEST_ASSERT_EQUAL(0, cells(fold5, held));
+  held = latchDays(0, fold71, true);
+  TEST_ASSERT_EQUAL_UINT8(kDaysHeld | kDaysRetake | kDaysMask, held);
+  TEST_ASSERT_EQUAL(3, cells(fold71, held));
   // The made-up views: uiSx<n> enters the page again, so it takes the
   // view's (view 4's day 5: no tray; view 1's full card: three cells).
   Lifetime v1, v4;
@@ -4060,6 +4084,39 @@ void test_the_counting_days_a_page_holds() {
   TEST_ASSERT_EQUAL(0, cells(v4, held));
   held = latchDays(held, v1, true);
   TEST_ASSERT_EQUAL(3, cells(v1, held));
+  // View 5 (the boot's fold over a full card's lifetime, not whole) after
+  // view 4's pages, as 3b-1 runs them: day 5's held, marked. The hub's rows
+  // 3-5 disabled, opening 30 Sep (view 5's first day, 1 Sep, + 29); Most
+  // played with no tray; New finds, Old favourites and Not played yet shut
+  // on that line; Recently played the phase's (Counting plays…). After view
+  // 1's pages instead: the full card folding (rows 3-5 open, three cells).
+  Lifetime v5;
+  PhaseInfo p5;
+  TEST_ASSERT_TRUE(madeUpState(5, &v5, &p5));
+  TEST_ASSERT_FALSE(daysWhole(v5));
+  held = latchDays(latchDays(kDaysHeld | 40, v4, true), v5, true);
+  TEST_ASSERT_EQUAL_UINT8(kDaysHeld | kDaysRetake | 5, held);
+  const Lifetime f5 = seen(v5, held);
+  TEST_ASSERT_EQUAL_UINT32(5, f5.countingDays);
+  const HubLook h5 = hubLook(f5, p5, nullptr);
+  TEST_ASSERT_EQUAL(Look::Pending, h5.page.look);
+  monthRows(h5, RowKind::Disabled, "view 5 after view 4");
+  TEST_ASSERT_EQUAL_UINT16(kSince + 29, opensDay(f5));  // (30 Sep)
+  TEST_ASSERT_EQUAL(0, trayOf(f5, nullptr).cells);
+  TEST_ASSERT_FALSE(shelfLook(all, f5, p5, nullptr).tray);
+  for (Shelf s : {Shelf::NewFinds, Shelf::OldFavourites, Shelf::NotPlayed}) {
+    const ShelfLook k = shelfLook(shelfId(s), f5, p5, nullptr);
+    TEST_ASSERT_EQUAL(Look::Closed, k.page.look);
+    TEST_ASSERT_EQUAL(S::stats_warming, k.page.line);
+  }
+  const ShelfLook recent5 = shelfLook(shelfId(Shelf::Recent), f5, p5, nullptr);
+  TEST_ASSERT_EQUAL(Look::Pending, recent5.page.look);
+  TEST_ASSERT_EQUAL(S::stats_counting, recent5.page.line);
+  held = latchDays(latchDays(kDaysHeld | 5, v1, true), v5, true);
+  TEST_ASSERT_EQUAL_UINT8(kDaysHeld | kDaysRetake | kDaysMask, held);
+  monthRows(hubLook(seen(v5, held), p5, nullptr), RowKind::Open, "view 5 after view 1");
+  TEST_ASSERT_EQUAL(3, trayOf(seen(v5, held), nullptr).cells);
+  TEST_ASSERT_EQUAL(Look::Pending, shelfLook(finds, seen(v5, held), p5, nullptr).page.look);
 }
 
 // Recently played's shelf at a new minute (7.10): the first row on screen

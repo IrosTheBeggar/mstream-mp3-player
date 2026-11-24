@@ -863,8 +863,14 @@ int foldShelfBars(NavModel& nav);
 //   - Window: Most played's tray, the window shown (its byte in the
 //     snapshot's header, D7): look only, never refused. Its write reaches
 //     only a snapshot the pages are served (Ui::statsSetWindow(): under a
-//     view the view's own, never a real one a console Hv or Hu left held
-//     under it; S3b's review, finding 5).
+//     view the view's own, never a real one a console Hu (or Hv under views
+//     1, 3, 4) left held under it; S3b's review, finding 5). The window
+//     picked stays the shelf's (its id and PageRef, 7.11) past the view's
+//     end: a Most played still showing at uiSx0, or under a page above it
+//     and entered again by Back, shows it over the card's, and D7 writes it
+//     there at that enter() or the next landing, as any window shown (S3b's
+//     review of its fixes). Back to the hub first drops it: the hub's push
+//     reads the snapshot's window.
 // A push opens a page (a hub row, an album, the entry row, the rail and the
 // jump grid): no act. An album page pushed from Not played yet is the
 // card's own album, its acts the card's. A disabled row's buzz and toast,

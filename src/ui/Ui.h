@@ -458,7 +458,9 @@ public:
   // are served one (statsSnapshot(): under a made-up view the view's own,
   // never a real one held under it; with none, a real one over the live
   // index). Else nothing: a look-only tray tap never reaches the card's
-  // (S3b's review, finding 5).
+  // (S3b's review, finding 5). The tap's window stays the shelf's, so a
+  // Most played shown over the card's after the view's end writes it then
+  // (D7, statsEntering()'s or shelfFollow()'s windowOwed()).
   void statsSetWindow(uint8_t window) {
     if (statsSnapshot()) host_.statsSetWindow(window);
   }
