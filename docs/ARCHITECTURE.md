@@ -1630,7 +1630,8 @@ bad. Log lines: `[plays] ...`, one per slot with the time its write took.
 
 **The listening stats** (`/.player/stats.bin` and the base it names;
 [LISTENING-STATS.md](LISTENING-STATS.md), METADATA.md 3.11; that plan's
-S1, reworked by its 5.14: counted and saved, nothing on the screen yet):
+S1, reworked by its 5.14: counted and saved; on the screen since S3b,
+the UI's Library paragraph below):
 every play on the card, from every player that wrote its log, counted
 from the play log into one card container. RAM holds a fixed few
 kilobytes; the aggregate lives in `stats.bin` alone, and each save merges
@@ -3278,7 +3279,8 @@ strings.
   held condition, the card-out mark and the made-up view (RAM only), sit
   in its padding. `LibraryPage` stays 836 B (the entry row's latch, the
   minute, the drawn shape and texts and the counting days held are in its
-  holes), `ListView` 432 B and `ListLayout` 12 B (each a `static_assert`).
+  holes; gdb), and `ListView` 432 B and `ListLayout` 12 B (each a
+  `static_assert`).
   `.iram0.text`, `.dram0.data` and `.dram0.bss` are main's (`StatsLists`
   44 B); flash grows by 35,888 B of `.flash.text` and 26,376 B of
   `.flash.rodata` over main 37ed055, the strings and their nine
@@ -4547,8 +4549,10 @@ Queue, Dance and Output (with its Pair and About pages).
   items, its picture (the week's time and plays, seven bars, the big day
   and Auto DJ's rate) drawn whole in three strips through the list's
   body hook (`drawBody()`). A stats page holds its counting days from one
-  `enter()` to the next, so the hub's rows 3-5 and the tray change when
-  a page is opened again or the screen wakes, never under the finger.
+  `enter()` to the next, so a new UTC day (or the clock set back) never
+  moves the hub's rows 3-5 or the tray under the finger: they follow at
+  the next `enter()` or the wake, or at the lifetime's first whole
+  reading (the boot fold's end, a re-read's end, the clock set).
   The lists are the visit's snapshot, asked as the pages come up and
   released as they go (Library and queue's Listening stats bullet).
 - **The Queue** (spec §6.4, mockups 16-18, with the grafts): opened on the
