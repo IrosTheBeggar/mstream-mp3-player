@@ -393,30 +393,37 @@ private:
 // stats pages, PageKinds StatsHub, StatsShelf and StatsWeek, all this
 // page's. The hub (7.4): six rows (Last 7 days, Most played, New finds, Old
 // favourites, Not played yet, Recently played), each open (a tick and its
-// page), disabled (the double buzz and a toast), or the status row with no
-// clock (nothing), and a Try again row after them when the visit's ask
-// came to nothing; its lines the visit's snapshot's, or the phase's
-// ("Counting plays…"); with nothing played, the empty state and Shuffle all
-// (7.5). What it draws is read anew at each draw (the lifetime, the phase,
-// the snapshot: Ui's accessors), never kept: the stats' news, a change of
-// its rows' shape (the card back among them) and a new minute (row 6's "25
-// min ago") draw it again in place, one row a pass. The snapshot is held
-// while the stats pages show (Ui's held condition), not by the page.
+// page; the stats gone off while it shows, the tick, then the double buzz
+// and nothing pushed), disabled (the double buzz and a toast), or the
+// status row with no clock (nothing), and a Try again row after them when
+// the visit's ask came to nothing or the card is back; its lines the
+// visit's snapshot's, or the phase's ("Counting plays…"); with nothing
+// played, the empty state and Shuffle all (7.5); with the card out, no
+// rows and the No card line. What it draws is read anew at each draw (the
+// lifetime, the phase, the snapshot: Ui's accessors), never kept: the
+// stats' news, a change of its rows' shape (the card back among them) and
+// a new minute (row 6's "25 min ago") draw it again in place, one row a
+// pass. The snapshot is held while the stats pages show (Ui's held
+// condition), not by the page.
 // The shelves (7.6): Most played (its tray of windows over its rows), New
 // finds, Old favourites, Recently played (its rows under their days'
-// headings), each a ranked list of the snapshot's tracks with a top bar;
-// Not played yet, its albums A-Z with covers and the rail. A ranked row's
-// tap opens its bar (Play plays the shelf from it), its hold the track's
-// sheet; they act through the queue's id view over the snapshot (nothing
-// copied). Before the ask lands a shelf has no rows and the phase's line,
-// its place kept in its ref (pending()), the rows then staged in one a
-// pass where it was; a tray tap stages the window's rows the same way.
+// headings; with no clock, This session's, then Earlier's), each a ranked
+// list of the snapshot's tracks with a top bar; Not played yet, its albums
+// A-Z with covers and the rail. A ranked row's tap opens its bar (Play
+// plays the shelf from it), its hold the track's sheet; they act through
+// the queue's id view over the snapshot (nothing copied). Before the ask
+// lands a shelf has no rows and the phase's line, its place kept in its
+// ref (pending()), the rows then staged in one a pass where it was; a
+// tray tap stages the window's rows the same way.
 // Last 7 days (7.7): no items and no top bar, its picture the list's body
 // (drawBody(): "Listening time" and the week's time, "Plays" and its count;
 // seven bars and their days; the big day and Auto DJ's rate), drawn whole
-// in three strips; the phase's line alone while the ask runs; the empty
-// state (the chart's disc, the reason, Try again) when it came to nothing
-// or the card is out. No targets but that button; never the status band.
+// in three strips; the phase's line alone while the ask runs, and the No
+// card line the same way while the card is out; the band blank with the
+// stats off or nothing played; the empty state (the chart's disc, the
+// reason, Try again) when the ask came to nothing or the card is back, its
+// reason alone with no clock (Week shut). No targets but that button;
+// never the status band.
 class LibraryPage : public Page, public ListView::Source, public FilterOwner {
 public:
   explicit LibraryPage(Ui& ui);
@@ -525,7 +532,7 @@ private:
   // shelves' (7.6): Ranked, a track of the visit's snapshot (its id, its
   // row in the snapshot's list); Section, Recently played's heading, drawn
   // as a Disc; StatsTryAgain, a shelf's one row when its ask came to
-  // nothing; Not played yet's albums are Album rows.
+  // nothing or the card is back; Not played yet's albums are Album rows.
   enum class RowKind : uint8_t { None, Artist, Album, AllTracks, Track, Folder, File, Disc, Ranked, Section,
                                  StatsTryAgain };
   struct RowRef {
@@ -539,6 +546,9 @@ private:
   // The card's library (not the synthetic one of 'uil<n>'): the queue and
   // the covers can be used.
   bool real() const;
+  // The root's segment, its PageRef id. A stats shelf's id_ is shelf * 4 +
+  // window (statsview::shelfId()), so ids 0-2 read as segments too: every
+  // use is behind root() or a PageKind test (docs/LISTENING-STATS.md 7.1).
   LibrarySegment segment() const { return static_cast<LibrarySegment>(id_ <= 2 ? id_ : 0); }
   bool root() const { return kind_ == PageKind::Library; }
   bool folderList() const { return kind_ == PageKind::Folder || (root() && segment() == LibrarySegment::Folders); }
@@ -676,7 +686,8 @@ private:
   // ---- Last 7 days (7.7; LibraryStats.cpp, S3b's S11) ----
   // A page of no items and no top bar, its picture the list's body (A's
   // time and plays, B's seven bars and days, C's big day and Auto DJ's
-  // rate, from the snapshot's week), or the empty state (its reason, Try
+  // rate, from the snapshot's week), the phase's or the No card line alone
+  // in A (statsview::weekBodyLine()), or the empty state (its reason, Try
   // again with Retry). Its look as it is now (the lifetime `l`, the phase,
   // the snapshot: Ui's).
   statsview::WeekLook weekNow(const statsview::Lifetime& l) const;
