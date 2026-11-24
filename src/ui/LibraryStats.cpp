@@ -1293,8 +1293,8 @@ void LibraryPage::weekStrip(M5Canvas& c, int top, int h, const sv::WeekFigures& 
 
 // C in the strip from screen row `top`: the DIV rule, the big day (Small
 // SOFT: "Saturday was your big day: 2 h 1 min"; none with nothing in the
-// week; cut with "…" where a language's line is wider than 288 px, as pl,
-// ja and zh are until their translations, S13) and Auto DJ's rate (Small
+// week; cut with "…" where a language's line is wider than 288 px, which
+// none of the ten is since S13's translations) and Auto DJ's rate (Small
 // DIM, only when it started 5 tracks in the week: D11).
 void LibraryPage::weekLines(M5Canvas& c, int top, int h, const statsvisit::Snapshot& s,
                             const sv::WeekFigures& w) {

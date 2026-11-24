@@ -5032,10 +5032,9 @@ void test_filter_empty_line_fits() {
 // the ten languages (S3b's tests, S6): the entry row's line and where it
 // falls back to the time alone, the phases' lines, the hub's lines, the
 // headers' lines, the tray's labels, a ranked row's line with its count
-// kept, Last 7 days' texts and its stat value beside "Plays". Until S13
-// translates the stats' ids, a language draws their English with its own
-// numbers, times, album counts and percent, so for most of them these pass
-// as English does: they are run again after the translations.
+// kept, Last 7 days' texts and its stat value beside "Plays". Each language
+// draws its own translation (S13) with its own numbers, times, album counts
+// and percent.
 
 namespace {
 
@@ -5585,9 +5584,9 @@ void test_stats_row_lines_keep_their_counts() {
 // week's most, 168 h 59 min: its numbers in Title, its words in Small)
 // beside the plays' count (9,999, Title) with kWeekGap between them, as
 // "Listening time" beside "Plays" (this replaces the device row: de, pl
-// and ja, their figures in the report). The big day is the English
-// sentence around each language's own hours until S13: in pl, ja and zh it
-// is wider than 288 px, and it must fit once their translation is in.
+// and ja, their figures in the report). The big day, in each language's
+// own sentence and hours, fits 288 px in all ten (before S13's
+// translations, pl, ja and zh drew the English sentence wider than that).
 void test_stats_week_texts_fit() {
   const Vlw small(kVlwSans13), title(kVlwSansBold22);
   const textfit::Font fSmall = viewOf(small), fTitle = viewOf(title);
@@ -5611,17 +5610,9 @@ void test_stats_week_texts_fit() {
         bigDay = std::max(bigDay, small.width(b));
       }
     }
-    const bool owed = !uistr::translated(S::stats_big_day) &&
-                      (l == uistr::Lang::Pl || l == uistr::Lang::Ja || l == uistr::Lang::Zh);
     char m[192];
-    if (owed) {
-      snprintf(m, sizeof(m), "%s: the big day %d px, over 288 until S13's translation; ", uistr::tag(l), bigDay);
-      TEST_ASSERT_TRUE_MESSAGE(bigDay > statstext::kWeekLineW, m);  // (it fits now: take it off this list)
-      report += m;
-    } else {
-      snprintf(m, sizeof(m), "%s: the big day %d px in 288", uistr::tag(l), bigDay);
-      TEST_ASSERT_TRUE_MESSAGE(bigDay <= statstext::kWeekLineW, m);
-    }
+    snprintf(m, sizeof(m), "%s: the big day %d px in 288", uistr::tag(l), bigDay);
+    TEST_ASSERT_TRUE_MESSAGE(bigDay <= statstext::kWeekLineW, m);
     // A: the value beside the plays, the labels beside each other.
     statstext::StatValue v;
     statstext::statValue(statsHm(168, 59), &v);
