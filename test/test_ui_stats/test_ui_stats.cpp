@@ -122,6 +122,11 @@
 // ask), the snapshot the pages read under a view and with none (a real
 // ask's write clears the mark), and every act refused under a view but the
 // tray's window.
+// And 7.10's "A new UTC day": the counting days a page latches at its
+// enter() and the wake (the hub's rows 3-5, the tray and the window it
+// shows), held across a new day (6 to 7, 29 to 30), the clock set back (30
+// to 29, 7 to 6) and a fold, kept through a re-read and taken again at a
+// lifetime's first whole reading (its end, the clock set).
 // Run: pio test -e native -f test_ui_stats
 #include <unity.h>
 
@@ -3768,7 +3773,8 @@ void test_a_shelf_s_touch_place_and_shape() {
 
 // D7's window written back whenever Most played is served showing another
 // (a landing with no rows in its window too: S10's review), and a restage
-// for the tray alone (a new UTC day: its rows kept, its bar open).
+// for the tray alone (the page's latch taking the counting days again:
+// its rows kept, its bar open).
 void test_most_played_s_window_and_the_tray_alone() {
   Snap full;
   put(full, fullCard());
@@ -3813,8 +3819,10 @@ void test_most_played_s_window_and_the_tray_alone() {
                               full.s()));
   full.s()->setWindow(sv::kAllTime);
 
-  // The tray alone: a day that makes two cells three, or brings the tray
-  // (day 7), with the rows' texts as drawn.
+  // The tray alone: two cells three, or the tray coming (day 7), with the
+  // rows' texts as drawn (the page's latch taking the counting days again
+  // at a lifetime's first whole reading: never a new day while it shows,
+  // test_the_counting_days_a_page_holds).
   auto shapeOf = [](uint32_t id, const Lifetime& life, const sv::Snapshot* snap) {
     return shelfShape(shelfLook(id, life, kReady, snap), trayOf(life, snap));
   };
@@ -3844,6 +3852,150 @@ void test_most_played_s_window_and_the_tray_alone() {
                               shapeOf(all, l, full.s()), false));
   TEST_ASSERT_EQUAL_UINT8(sv::kAllTime << 5, shapeOf(week, dated(6), full.s()) & kShelfWindow);
   TEST_ASSERT_FALSE(trayAlone(shapeOf(week, dated(6), full.s()), shapeOf(week, dated(7), full.s()), false));
+}
+
+// 7.10's "A new UTC day": the hub's disabled rows and the tray (its cells,
+// the window shown) follow the counting days at the next enter(). A page
+// latches them at its enter() (and the wake), holds them across a new day,
+// the clock set back and a fold, and takes them again at the first whole
+// reading after one that wasn't (a re-read's end, the clock set).
+void test_the_counting_days_a_page_holds() {
+  Snap full;
+  put(full, fullCard());
+  const uint32_t all = shelfId(Shelf::MostPlayed, sv::kAllTime), month = shelfId(Shelf::MostPlayed, sv::k30Days);
+  const uint32_t finds = shelfId(Shelf::NewFinds);
+  const int nf = static_cast<int>(HubRow::NewFinds), of = static_cast<int>(HubRow::OldFavourites),
+            np = static_cast<int>(HubRow::NotPlayed);
+  // The page's reading of the lifetime `now` under its latch.
+  auto seen = [](Lifetime now, uint8_t held) {
+    holdDays(now, held);
+    return now;
+  };
+  auto cells = [&](const Lifetime& now, uint8_t held) { return trayOf(seen(now, held), full.s()).cells; };
+  auto shelf = [&](uint32_t id, const Lifetime& now, uint8_t held) {
+    return shelfLook(id, seen(now, held), kReady, full.s());
+  };
+  auto shape = [&](uint32_t id, const Lifetime& now, uint8_t held) {
+    return shelfShape(shelf(id, now, held), trayOf(seen(now, held), full.s()));
+  };
+  auto hub = [&](const Lifetime& now, uint8_t held) { return hubLook(seen(now, held), kReady, full.s()); };
+  auto monthRows = [&](const HubLook& h, RowKind want, const char* msg) {
+    TEST_ASSERT_EQUAL_MESSAGE(want, h.item[nf].kind, msg);
+    TEST_ASSERT_EQUAL_MESSAGE(want, h.item[of].kind, msg);
+    TEST_ASSERT_EQUAL_MESSAGE(want, h.item[np].kind, msg);
+  };
+
+  // Day 6 to 7 while Most played shows: no tray until the next enter(),
+  // nothing for a pass to restage.
+  uint8_t held = latchDays(0, dated(6), true);
+  TEST_ASSERT_EQUAL_UINT8(kDaysHeld | 6, held);
+  held = latchDays(held, dated(7), false);  // (a pass past UTC midnight)
+  TEST_ASSERT_EQUAL_UINT8(kDaysHeld | 6, held);
+  TEST_ASSERT_EQUAL(0, cells(dated(7), held));
+  TEST_ASSERT_FALSE(shelf(all, dated(7), held).tray);
+  TEST_ASSERT_EQUAL_UINT8(shape(all, dated(6), held), shape(all, dated(7), held));
+  held = latchDays(held, dated(7), true);  // the next enter()
+  TEST_ASSERT_EQUAL_UINT8(kDaysHeld | 7, held);
+  TEST_ASSERT_EQUAL(2, cells(dated(7), held));
+  TEST_ASSERT_TRUE(shelf(all, dated(7), held).tray);
+
+  // Day 29 to 30 on the hub and the shelves: rows 3-5 disabled, New finds
+  // shut, two cells (a kept 30 days shown as All time); at the next
+  // enter(), open, three cells, the 30 days shown.
+  held = latchDays(latchDays(0, dated(29), true), dated(30), false);
+  monthRows(hub(dated(30), held), RowKind::Disabled, "29 to 30, held");
+  TEST_ASSERT_EQUAL_UINT8(hubShape(hub(dated(29), held)), hubShape(hub(dated(30), held)));
+  TEST_ASSERT_EQUAL(Look::Closed, shelf(finds, dated(30), held).page.look);
+  TEST_ASSERT_EQUAL(2, cells(dated(30), held));
+  TEST_ASSERT_EQUAL_UINT8(sv::kAllTime, shelf(month, dated(30), held).window);
+  TEST_ASSERT_EQUAL_UINT8(shape(month, dated(29), held), shape(month, dated(30), held));
+  held = latchDays(held, dated(30), true);
+  monthRows(hub(dated(30), held), RowKind::Open, "30, entered");
+  TEST_ASSERT_EQUAL(Look::Served, shelf(finds, dated(30), held).page.look);
+  TEST_ASSERT_EQUAL(3, cells(dated(30), held));
+  TEST_ASSERT_EQUAL_UINT8(sv::k30Days, shelf(month, dated(30), held).window);
+
+  // The clock set back (a computer's @time), 30 to 29 and 7 to 6: as
+  // entered until the next enter().
+  held = latchDays(latchDays(0, dated(30), true), dated(29), false);
+  TEST_ASSERT_EQUAL_UINT8(kDaysHeld | 30, held);
+  monthRows(hub(dated(29), held), RowKind::Open, "30 to 29, held");
+  TEST_ASSERT_EQUAL(3, cells(dated(29), held));
+  TEST_ASSERT_EQUAL_UINT8(sv::k30Days, shelf(month, dated(29), held).window);
+  held = latchDays(held, dated(29), true);
+  monthRows(hub(dated(29), held), RowKind::Disabled, "29, entered");
+  TEST_ASSERT_EQUAL(2, cells(dated(29), held));
+  held = latchDays(latchDays(0, dated(7), true), dated(6), false);
+  TEST_ASSERT_EQUAL(2, cells(dated(6), held));
+  TEST_ASSERT_EQUAL(0, cells(dated(6), latchDays(held, dated(6), true)));
+
+  // A fold while a page shows (plays and time; the first day as it was):
+  // held.
+  Lifetime folded = dated(29);
+  folded.plays += 1;
+  folded.listenedMs += 180000;
+  held = latchDays(0, dated(29), true);
+  TEST_ASSERT_EQUAL_UINT8(held, latchDays(held, folded, false));
+
+  // Not whole: a remount's re-read (HEAD cleared until it is read: its first
+  // day today, one counting day, folding). The days held stay, an enter()
+  // meanwhile among it, marked; so the card back's Try again keeps rows 3-5
+  // open. Its whole end takes the days (another card's 5: shut, no tray).
+  Lifetime reread = dated(71);
+  reread.folding = true;
+  reread.sinceDay = kToday;
+  reread.countingDays = 1;
+  TEST_ASSERT_FALSE(daysWhole(reread));
+  held = latchDays(latchDays(0, dated(71), true), reread, false);
+  TEST_ASSERT_EQUAL_UINT8(kDaysHeld | kDaysRetake | kDaysMask, held);
+  TEST_ASSERT_EQUAL_UINT8(held, latchDays(held, reread, true));
+  const HubLook back = hubLook(seen(reread, held), phase(Phase::NoCard, Outcome::CardAway), nullptr);
+  TEST_ASSERT_EQUAL(Look::Retry, back.page.look);
+  monthRows(back, RowKind::Open, "a re-read under way");
+  held = latchDays(held, dated(5), false);
+  TEST_ASSERT_EQUAL_UINT8(kDaysHeld | 5, held);
+  monthRows(hub(dated(5), held), RowKind::Disabled, "another card's 5 days");
+  TEST_ASSERT_EQUAL(0, cells(dated(5), held));
+  // ... the same marks with the card out, the stats off, HEAD's first day
+  // unknown; taken at the next whole reading.
+  Lifetime out = dated(40), off = dated(40), noFirst = dated(40);
+  out.cardIn = false;
+  off.on = false;
+  noFirst.sinceDay = sf::kUnsetDay;
+  noFirst.countingDays = 0;
+  for (const Lifetime& l : {out, off, noFirst}) {
+    TEST_ASSERT_FALSE(daysWhole(l));
+    TEST_ASSERT_EQUAL_UINT8(kDaysHeld | kDaysRetake | 20, latchDays(kDaysHeld | 20, l, false));
+  }
+  TEST_ASSERT_EQUAL_UINT8(kDaysHeld | 40, latchDays(kDaysHeld | kDaysRetake | 20, dated(40), false));
+  // Entered with no clock: the clock set takes the days (the status row
+  // goes with it, a look the page draws anew anyway).
+  held = latchDays(0, noClock(), true);
+  TEST_ASSERT_EQUAL_UINT8(kDaysHeld | kDaysRetake, held);
+  TEST_ASSERT_EQUAL(0, cells(noClock(), held));
+  held = latchDays(held, dated(40), false);
+  TEST_ASSERT_EQUAL_UINT8(kDaysHeld | 40, held);
+  TEST_ASSERT_EQUAL(3, cells(dated(40), held));
+  // Days held over an undated lifetime read as undated: no tray, the status
+  // row, rows 3-4 "Needs dates".
+  const HubLook undated = hub(noClock(), kDaysHeld | 40);
+  TEST_ASSERT_EQUAL(0, cells(noClock(), kDaysHeld | 40));
+  TEST_ASSERT_EQUAL(RowKind::Status, undated.item[static_cast<int>(HubRow::Week)].kind);
+  lineIs(Line::Text, S::stats_needs_dates, undated.item[nf], "held days, undated");
+  // None held: the lifetime's own. Past kDaysMask, clamped: the edges kept.
+  TEST_ASSERT_EQUAL_UINT32(71, seen(dated(71), 0).countingDays);
+  TEST_ASSERT_EQUAL_UINT8(kDaysHeld | kDaysMask, latchDays(0, dated(200), true));
+  TEST_ASSERT_EQUAL(State::Ready, stateOf(seen(dated(200), kDaysHeld | kDaysMask)));
+  TEST_ASSERT_EQUAL(3, cells(dated(200), kDaysHeld | kDaysMask));
+  // The made-up views: uiSx<n> enters the page again, so it takes the
+  // view's (view 4's day 5: no tray; view 1's full card: three cells).
+  Lifetime v1, v4;
+  TEST_ASSERT_TRUE(madeUpState(1, &v1, nullptr));
+  TEST_ASSERT_TRUE(madeUpState(4, &v4, nullptr));
+  held = latchDays(kDaysHeld | 40, v4, true);
+  TEST_ASSERT_EQUAL(0, cells(v4, held));
+  held = latchDays(held, v1, true);
+  TEST_ASSERT_EQUAL(3, cells(v1, held));
 }
 
 // Recently played's shelf at a new minute (7.10): the first row on screen
@@ -3911,6 +4063,7 @@ int main(int, char**) {
   RUN_TEST(test_a_shelf_s_rows);
   RUN_TEST(test_a_shelf_s_touch_place_and_shape);
   RUN_TEST(test_most_played_s_window_and_the_tray_alone);
+  RUN_TEST(test_the_counting_days_a_page_holds);
   RUN_TEST(test_recently_played_at_a_new_minute);
   return UNITY_END();
 }

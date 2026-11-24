@@ -2442,9 +2442,11 @@ void Ui::setDark(bool on) {
   // page shown follows its look before the draw, so what moved in the dark
   // with no news (a play counted on the empty hub, the card back, that ask)
   // is the layout drawn whole (the dark's attach owes the band: its recount
-  // is a reload()), not a blank band then rows staged a pass each.
+  // is a reload()), not a blank band then rows staged a pass each. The page
+  // takes its counting days again (7.10: a new visit's, drawn whole), so a
+  // UTC day passed in the dark brings its tray and the hub's rows 3-5.
   statsEdge("the wake");
-  statsNewsPass("the wake");
+  statsNewsPass("the wake", true);
   redrawAll();
 }
 
@@ -3257,9 +3259,9 @@ __attribute__((noinline)) bool Ui::statsUndated() {
   return true;
 }
 
-void Ui::statsNewsPass(const char* why) {
+void Ui::statsNewsPass(const char* why, bool wake) {
   if (!started_ || suspended_ || page_ != &libraryPage_ || !libraryPage_.statsShown()) return;
-  if (libraryPage_.statsNews(why)) {
+  if (libraryPage_.statsNews(why, wake)) {
     Serial.println("[ui] stats: the snapshot released under the page: attached again at 0 rows");
     statsReattach(nullptr);
   }
@@ -3274,12 +3276,13 @@ void Ui::statsPrint() {
   host_.statsPhase(hostPhase);
   const statsvisit::Snapshot* s = statsSnapshot();
   const statsvisit::Snapshot* hs = host_.statsSnapshot();
-  Serial.printf("[ui] stats: %s; the held condition %s (the edge as last evaluated: %s); state %s%s; phase %s%s "
-                "(why 0x%02X, outcome %s), version %u; snapshot %s%s\n",
+  Serial.printf("[ui] stats: %s; the held condition %s (the edge as last evaluated: %s); state %s%s, counting days "
+                "%lu; phase %s%s (why 0x%02X, outcome %s), version %u; snapshot %s%s\n",
                 !started_ ? "the UI not started" : suspended_ ? "the UI SUSPENDED" : dark_ ? "DARK" : "lit",
                 statsview::onStatsPages(nav_, dark_, suspended_, browse_ != nullptr) ? "true" : "false",
                 statsHeld_ ? "held" : "not held", statsview::stateName(statsview::stateOf(l)),
-                statsView_ ? " (a made-up view's)" : "", statsvisit::phaseName(p.phase),
+                statsView_ ? " (a made-up view's)" : "", static_cast<unsigned long>(l.countingDays),
+                statsvisit::phaseName(p.phase),
                 statsView_                    ? " (the view's)"
                 : hostPhase.phase != p.phase  ? " (the host's Idle: the held condition rose with the card out)"
                                               : "",

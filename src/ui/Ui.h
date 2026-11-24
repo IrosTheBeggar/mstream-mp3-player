@@ -594,7 +594,9 @@ private:
   // before redrawAll(): a look that moved in the dark with no news (a play
   // counted on the empty hub, the card back, the wake's own ask) is the
   // layout the wake's whole draw uses (7.10: "as the free left it").
-  void statsNewsPass(const char* why);
+  // `wake`: that one; the page takes its counting days again then, as at an
+  // enter() (7.10's "A new UTC day": a new visit, drawn whole).
+  void statsNewsPass(const char* why, bool wake = false);
   // A served snapshot asked with no clock while the clock is set now
   // (statsview::undatedStale(): its week and dated lists aren't the pages'
   // figures): released. Once a pass while the held condition is up, before

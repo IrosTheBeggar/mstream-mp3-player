@@ -19,7 +19,9 @@
 // lines.
 //   - The lifetime and the phase, as the host hands them (UiHost's
 //     statsLifetime(), statsPhase(); the lifetime filled by lifetimeOf()
-//     from HEAD and the clock), and 4.4's state from the lifetime.
+//     from HEAD and the clock), and 4.4's state from the lifetime; the
+//     counting days a page holds from its enter() to its next (7.10's "A
+//     new UTC day": latchDays(), holdDays()).
 //   - The look of a page from its phase (4.4 as decided): the snapshot's
 //     figures, the phase's line (Working, Waiting), a Try again row with
 //     its reason (No room, Unread, Capped, and the card back: the owner's
@@ -91,7 +93,7 @@ struct Lifetime {
   bool dated = false;    // the board's clock set (statsfold::todayOf())
   uint16_t today = statsfold::kUnsetDay;     // with dated
   uint16_t sinceDay = statsfold::kUnsetDay;  // Fold::sinceDayNow()
-  uint32_t countingDays = 0;                 // 0: not known (no clock, no first day)
+  uint32_t countingDays = 0;                 // 0: not known (no clock, no first day); a page's: holdDays()
   uint64_t plays = 0;       // HEAD's (this session's live folds among them)
   uint64_t listenedMs = 0;  // HEAD's
   uint32_t nowMin = 0;      // with dated
@@ -145,6 +147,43 @@ uint16_t opensDay(const Lifetime& l);
 constexpr bool notPlayedOpen(uint32_t countingDays, bool dated, uint32_t datedSpanDays) {
   return statsvisit::notPlayedDays(dated ? countingDays : datedSpanDays);
 }
+
+// ---------------------------------------------------------------------------
+// The counting days a page shows (7.10's "A new UTC day")
+// ---------------------------------------------------------------------------
+// 7.10: "Nothing re-ranked. The hub's disabled rows and the tray follow the
+// counting days at the next enter() (RAM)". What the counting days decide
+// on a page (the hub's rows 3-5 open or disabled, Most played's tray, its
+// cells and with them the window it shows, a shelf the month keeps shut)
+// reads them as the page latched them, so a new UTC day, the clock set
+// back or a fold while a page shows moves nothing on it until the next.
+// The page keeps the latch in a byte (ui's LibraryPage, in its padding): 0
+// none yet; else kDaysHeld with the days (to kDaysMask: the rules' 7 and 30
+// kept apart), and kDaysRetake while they are to be taken again.
+//   - Taken at the page's enter(), each one (a navigation, the console's
+//     uiSh, uiSw and uiS<shelf>, uiSx<n>'s enter again, the dark's and a
+//     release's re-attach), and at the wake, which runs none but draws the
+//     page whole, a new visit's rise: `entering`.
+//   - A lifetime not whole (daysWhole(): the stats off, the card out or
+//     held, the boot's fold or a re-read under way, no clock or no first
+//     day) keeps the days held, an enter() among it, and marks them; its
+//     first whole reading takes them (the boot fold's or a re-read's end,
+//     the card back, the clock set: moments the page's look moves anyway).
+//     So a re-read's HEAD, cleared until it is read (one counting day),
+//     never shuts the hub's rows meanwhile, and another card's days come
+//     with its fold's end. With none held yet, the lifetime's own, marked.
+//   - Else a reading keeps them: a pass changes nothing.
+constexpr uint8_t kDaysHeld = 0x80, kDaysRetake = 0x40, kDaysMask = 0x3F;
+// The lifetime's counting days are whole and known: the stats on, the card
+// in, HEAD whole (no fold under way), dated with a first day.
+bool daysWhole(const Lifetime& l);
+// The latch after a reading of `l` (`entering`: an enter() or the wake).
+uint8_t latchDays(uint8_t held, const Lifetime& l, bool entering);
+// `l` as a page reads it: its counting days the latch's (none held: its
+// own). Every rule that reads them reads `dated` first (the tray, the
+// month's rows, O5, stateOf()), so days held over an undated lifetime
+// change nothing.
+void holdDays(Lifetime& l, uint8_t held);
 
 // ---------------------------------------------------------------------------
 // The look: what a stats page draws for its data (4.4 as decided)
@@ -377,9 +416,10 @@ bool hubReachable(const Lifetime& l, bool indexReady, bool synthetic);
 // shape differ only in their texts (the phase's line, a reason, the data),
 // which move with the version (StatsLists' news). A page polls it each pass
 // (RAM): a change no news brings (the card back: No card's line to Try
-// again; a play counted on the empty hub; the stats off; the clock set; a
-// day that opens rows 3-5) restages it, so no row drawn later disagrees
-// with those on screen. Bit 7 is never set: it is the page's, for its
+// again; a play counted on the empty hub; the stats off; the clock set;
+// rows 3-5 as the page's latch takes the counting days again, latchDays():
+// never a new day while it shows) restages it, so no row drawn later
+// disagrees with those on screen. Bit 7 is never set: it is the page's, for its
 // header's line (kShapeSub).
 uint8_t hubShape(const HubLook& h);
 // The bit a page ORs into the hub's shape when its header draws the
@@ -613,9 +653,11 @@ constexpr bool shelfArrives(Look drawn, Look now, uint32_t rows) {
 uint8_t shelfShape(const ShelfLook& k, const Tray& t);
 constexpr uint8_t kShelfLook = 0x07, kShelfCells = 0x18, kShelfWindow = 0x60, kShelfShort = 0x80;
 // The tray drawn again in place (ListView::recountStaged()'s leadChanged,
-// 7.6: a landing's "16 days", a day that makes two cells three): there
-// before and after, and its cells, the window picked or the 30-day label's
-// kind moved, or a short label's days with a new ask's texts.
+// 7.6: a landing's "16 days"; two cells three as the page's latch takes
+// the counting days again, latchDays(), never at a new day while it
+// shows): there before and after, and its cells, the window picked or the
+// 30-day label's kind moved, or a short label's days with a new ask's
+// texts.
 bool trayMoved(uint8_t drawnShape, uint8_t nowShape, bool textsMoved);
 // The header's line moved (Most played's window: "last 7 days", "since 1
 // Sep"; and at the 30 days the days RCNT holds, as the picked cell names
@@ -627,13 +669,17 @@ constexpr bool shelfHeaderMoved(uint8_t drawnShape, uint8_t nowShape, bool texts
   if ((nowShape & kShelfWindow) != (statsvisit::k30Days << 5)) return false;
   return ((drawnShape ^ nowShape) & kShelfShort) || ((nowShape & kShelfShort) && textsMoved);
 }
-// The tray alone moved (its cells: a day that brings it or makes two cells
-// three; the 30-day label's kind with them), the look, the window shown
-// and the texts as drawn: every row is the one it was. Its restage keeps
-// the bar open and a finger's press, and owes the rows nothing of their
-// own (ListView::recountStaged()'s expanded, keepPresses, changedRow past
-// them). (A tray that comes or goes still moves every item under it by
-// one: ListView stages items at the place they had.)
+// The tray alone moved (its cells, the 30-day label's kind with them), the
+// look, the window shown and the texts as drawn: every row is the one it
+// was. Its restage keeps the bar open and a finger's press, and owes the
+// rows nothing of their own (ListView::recountStaged()'s expanded,
+// keepPresses, changedRow past them). The cells move between two passes
+// only as the page's latch takes the counting days again at a lifetime's
+// first whole reading (latchDays(): a re-read's end under the card back's
+// Try again, the tray coming as the days are read), never at a new UTC day
+// or the clock set back (7.10: the next enter()). (A tray that comes or
+// goes still moves every item under it by one: ListView stages items at
+// the place they had.)
 constexpr bool trayAlone(uint8_t drawnShape, uint8_t nowShape, bool textsMoved) {
   return !textsMoved && drawnShape != nowShape &&
          ((drawnShape ^ nowShape) & static_cast<uint8_t>(~(kShelfCells | kShelfShort))) == 0;
@@ -642,7 +688,9 @@ constexpr bool trayAlone(uint8_t drawnShape, uint8_t nowShape, bool textsMoved) 
 // and a bare uiS0 open on it), owed whenever the shelf is served showing
 // another window than the snapshot's: at enter(), and at a landing with
 // rows or without ("Nothing in this period.": a new ask's loan opened on
-// All time, its page on 7 days).
+// All time, its page on 7 days). (The window shown is the tray's as the
+// page latched the counting days, latchDays(): a kept 30 days falls back
+// to All time at an enter() under 30 days, never at a pass.)
 bool windowOwed(const ShelfLook& k, const Snapshot* snap);
 // The console's uiS<shelf>[w] (9.3): a shelf 0-4 (Most played, New finds,
 // Old favourites, Not played yet, Recently played), Most played's window

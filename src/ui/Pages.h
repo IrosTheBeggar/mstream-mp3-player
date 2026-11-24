@@ -498,8 +498,10 @@ public:
   // 0 rows (Ui's, after closing what reads the snapshot): a page that drew
   // the snapshot's rows has none to draw now (S3a released it). `why`: its
   // [ui] words ("the stats' news"; "the wake": Ui::setDark()'s, before the
-  // wake's whole draw).
-  bool statsNews(const char* why);
+  // wake's whole draw). `wake`: that one, a new visit's rise drawn whole
+  // next, so the page takes its counting days again (7.10: as at an
+  // enter(), statsview::latchDays()).
+  bool statsNews(const char* why, bool wake = false);
   // uiS: the page's part (its kind, look, the rows drawn and their lines;
   // the Artists root's entry row).
   void printStats();
@@ -585,9 +587,16 @@ private:
   void drawEntryRow(ListView::Row& r);
   // Its tap: the hub, while it can be shown (statsview::hubReachable()).
   void entryTap();
-  // A stats page entered: its shape, the minute, an ask due (D9 as
-  // replaced: Idle with nothing served and the stats on).
+  // A stats page entered: its counting days latched (7.10), its shape, the
+  // minute, an ask due (D9 as replaced: Idle with nothing served and the
+  // stats on).
   void statsEntering();
+  // The lifetime as a stats page reads it (Ui's, its counting days as the
+  // page latched them: statsview::holdDays()), and the same read that
+  // keeps the latch up first (statsview::latchDays(): `entering` at
+  // enter() and the wake, else a pass's or the news's reading).
+  void statsLife(statsview::Lifetime& l) const;
+  void statsLatch(statsview::Lifetime& l, bool entering);
   // update()'s part: a new shape restages the page (no news brings the
   // card back), a new minute redraws row 6, the entry row's line at the
   // boot fold's end.
@@ -722,6 +731,10 @@ private:
   // A long press's row, for its sheet.
   RowRef held_;
   bool heldDj_ = false;  // its sheet has "Auto DJ from here" (the first row)
+  // A stats page's counting days as latched (statsview::latchDays(), 7.10:
+  // taken at its enter() and the wake, held to the next; in the hole after
+  // heldDj_, so LibraryPage stays 836 B).
+  uint8_t days_ = 0;
   // The Album page's disc dividers (read at enter()).
   librarytext::Discs discs_;
   // The Albums list's mood filter (4.6), the albums that fit it, the last

@@ -77,6 +77,28 @@ uint16_t opensDay(const Lifetime& l) {
 }
 
 // ---------------------------------------------------------------------------
+// The counting days a page shows
+// ---------------------------------------------------------------------------
+static_assert(kDaysMask >= sv::kNotPlayedDays && kDaysMask >= kTrayDays,
+              "the days held keep the month's and the tray's edges apart");
+
+bool daysWhole(const Lifetime& l) { return l.on && l.cardIn && !l.folding && l.countingDays > 0; }
+
+uint8_t latchDays(uint8_t held, const Lifetime& l, bool entering) {
+  const uint8_t days = static_cast<uint8_t>(l.countingDays < kDaysMask ? l.countingDays : kDaysMask);
+  if (!daysWhole(l)) {
+    // (Kept, to be taken at the first whole reading; none held: its own.)
+    return static_cast<uint8_t>((held & kDaysHeld) ? held | kDaysRetake : kDaysHeld | kDaysRetake | days);
+  }
+  if (entering || !(held & kDaysHeld) || (held & kDaysRetake)) return static_cast<uint8_t>(kDaysHeld | days);
+  return held;
+}
+
+void holdDays(Lifetime& l, uint8_t held) {
+  if (held & kDaysHeld) l.countingDays = held & kDaysMask;
+}
+
+// ---------------------------------------------------------------------------
 // The look
 // ---------------------------------------------------------------------------
 const char* lookName(Look k) {

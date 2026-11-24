@@ -172,9 +172,23 @@ uint32_t LibraryPage::statsSigNow(const sv::Lifetime& l, sv::PageLook* look) con
   return static_cast<uint32_t>(shape) << 16 | sv::lookText(k, snap);
 }
 
-void LibraryPage::statsEntering() {
-  sv::Lifetime l;
+void LibraryPage::statsLife(sv::Lifetime& l) const {
   ui_.statsLifetime(l);
+  sv::holdDays(l, days_);
+}
+
+void LibraryPage::statsLatch(sv::Lifetime& l, bool entering) {
+  ui_.statsLifetime(l);
+  days_ = sv::latchDays(days_, l, entering);
+  sv::holdDays(l, days_);
+}
+
+void LibraryPage::statsEntering() {
+  // The counting days as of now, held to the next enter() (7.10's "A new
+  // UTC day": the hub's rows 3-5, the tray and the window it shows), before
+  // the shape is kept and the list attached (its tray, its rows).
+  sv::Lifetime l;
+  statsLatch(l, true);
   minute_ = static_cast<uint16_t>(l.nowMin);
   sv::PageLook look;
   keepSig(statsSigNow(l, &look));
@@ -245,26 +259,30 @@ void LibraryPage::statsFollow(const sv::Lifetime& l, const char* why) {
   }
 }
 
-bool LibraryPage::statsNews(const char* why) {
+bool LibraryPage::statsNews(const char* why, bool wake) {
   // A page that drew the snapshot's rows (a shelf served: its tracks, its
   // albums) has none now: attached again at 0 rows, by the Ui (what reads
-  // the snapshot closed first: its sheet, the jump grid). (A Try again row
-  // isn't the snapshot's: restaged as any.) The hub and Week read the
-  // snapshot at each draw: drawn again.
+  // the snapshot closed first: its sheet, the jump grid; its enter() takes
+  // the counting days again). (A Try again row isn't the snapshot's:
+  // restaged as any.) The hub and Week read the snapshot at each draw:
+  // drawn again.
   if (kind_ == PageKind::StatsShelf && ui_.list().source() == this && ui_.list().layout().rows() > 0 &&
       static_cast<sv::Look>(statsShape_ & sv::kShelfLook) == sv::Look::Served && !ui_.statsSnapshot()) {
     return true;
   }
+  // (The wake: the counting days taken again, as at an enter(): the page
+  // is drawn whole next, a new visit's, so a day passed in the dark brings
+  // its tray and rows with it. Else a reading: 7.10's next enter().)
   sv::Lifetime l;
-  ui_.statsLifetime(l);
+  statsLatch(l, wake);
   statsFollow(l, why);
   return false;
 }
 
 void LibraryPage::statsUpdate() {
   sv::Lifetime l;
-  ui_.statsLifetime(l);
   if (entry_ == EntryRow::Counting) {
+    ui_.statsLifetime(l);
     // The Artists root's row at the boot fold's end (7.3, 7.10, A20): its
     // line drawn again in place, once.
     if (!sv::entryFoldEnded(sv::EntryLine::Counting, l.folding)) return;
@@ -276,8 +294,12 @@ void LibraryPage::statsUpdate() {
   }
   if (!statsShown()) return;
   // What no news brings (the card back, a play counted on the empty hub,
-  // the clock set, a day): drawn again in place. (What the news brought
-  // under a modal or in the dark was drawn whole as the page came back.)
+  // the clock set): drawn again in place. (What the news brought under a
+  // modal or in the dark was drawn whole as the page came back.) A new UTC
+  // day, the clock set back or a fold moves no counting day it shows (the
+  // latch, 7.10: the next enter()); a lifetime's first whole reading after
+  // one that wasn't takes them (a re-read's end, the clock set).
+  statsLatch(l, false);
   const uint32_t drawn = statsSigDrawn();
   statsFollow(l, "its look moved");
   if (statsSigDrawn() != drawn) return;
@@ -308,7 +330,7 @@ void LibraryPage::statsFrame() {
     if (kind_ == PageKind::StatsWeek) {
       // (Its picture whole, three strips: what was drawn of it is no more.)
       sv::Lifetime l;
-      ui_.statsLifetime(l);
+      statsLife(l);
       Serial.printf("[ui] stats: %s: its %s drawn whole in place\n", name,
                     sv::weekBody(weekNow(l).page.look) ? "body" : "empty state");
       return;
@@ -327,7 +349,7 @@ void LibraryPage::statsFrame() {
     // (The hub has no lead items: its item is its row, named as hubLook()
     // has it now: the status row with no clock, Try again at index 6.)
     sv::Lifetime l;
-    ui_.statsLifetime(l);
+    statsLife(l);
     const sv::HubLook h = hubNow(l);
     if (c.item < h.rows) {
       const sv::HubItem& it = h.item[c.item];
@@ -360,7 +382,7 @@ void LibraryPage::statsFrame() {
 
 uint32_t LibraryPage::statsRows() {
   sv::Lifetime l;
-  ui_.statsLifetime(l);
+  statsLife(l);
   switch (kind_) {
     case PageKind::StatsHub: return hubNow(l).rows;
     case PageKind::StatsShelf: return shelfNow(l).rows;  // (its tracks, its headings, its albums; Try again)
@@ -390,7 +412,7 @@ size_t LibraryPage::hubLineOf(const sv::HubItem& it, const sv::Lifetime& l, cons
 void LibraryPage::drawStatsRow(ListView::Row& r) {
   if (kind_ != PageKind::StatsHub) return;  // (a shelf's rows: drawShelfRow())
   sv::Lifetime l;
-  ui_.statsLifetime(l);
+  statsLife(l);
   sv::PhaseInfo p;
   ui_.statsPhase(p);
   const statsvisit::Snapshot* snap = ui_.statsSnapshot();
@@ -447,7 +469,7 @@ Header LibraryPage::statsHeader() const {
       // The lifetime line (RAM), none while the boot's fold runs (A19) or
       // with nothing played (7.5: the title alone).
       sv::Lifetime l;
-      ui_.statsLifetime(l);
+      statsLife(l);
       if (sv::hubSubDue(l)) st::hubSub(l.listenedMs, l.sinceDay, headerSub_, sizeof(headerSub_));
       break;
     }
@@ -459,7 +481,7 @@ Header LibraryPage::statsHeader() const {
       const sv::Shelf s = sv::shelfOf(id_);
       h.title = tr(sv::shelfTitle(s));
       sv::Lifetime l;
-      ui_.statsLifetime(l);
+      statsLife(l);
       st::shelfSub(s, shelfNow(l).window, sv::trayOf(l, ui_.statsSnapshot()).days30, l.sinceDay, headerSub_,
                    sizeof(headerSub_));
       break;
@@ -471,7 +493,7 @@ Header LibraryPage::statsHeader() const {
       // (statsview::weekHeaderDay()).
       h.title = tr(S::stats_last7);
       sv::Lifetime l;
-      ui_.statsLifetime(l);
+      statsLife(l);
       const uint16_t first = sv::weekHeaderDay(weekNow(l).page.look, ui_.statsSnapshot());
       if (first != statsfold::kUnsetDay) st::weekSub(first, headerSub_, sizeof(headerSub_));
       break;
@@ -497,7 +519,7 @@ ListView::Tap LibraryPage::statsTap(uint32_t row) {
       case RowKind::Album: ui_.push(page(PageKind::Album, rr.id)); return ListView::Tap::Handled;
       case RowKind::StatsTryAgain: {
         sv::Lifetime l;
-        ui_.statsLifetime(l);
+        statsLife(l);
         const sv::ShelfLook k = shelfNow(l);
         Serial.printf("[ui] stats: Try again (\"%s\"): %s\n", tr(k.page.line),
                       k.ask == sv::UiAsk::NotPlayed ? "Not played yet's lean ask" : "the visit's ask");
@@ -509,7 +531,7 @@ ListView::Tap LibraryPage::statsTap(uint32_t row) {
   }
   if (kind_ != PageKind::StatsHub) return ListView::Tap::Handled;  // (Week has no rows)
   sv::Lifetime l;
-  ui_.statsLifetime(l);
+  statsLife(l);
   const sv::HubLook h = hubNow(l);
   const LibraryIndex* i = index();
   switch (sv::hubTap(h, row, l, i != nullptr, !real())) {
@@ -549,7 +571,7 @@ sv::Control LibraryPage::statsControl(uint32_t row) {
   if (kind_ == PageKind::StatsShelf) return sv::shelfControlOf(shelfItemAt(row).kind);
   if (kind_ != PageKind::StatsHub) return sv::Control{};
   sv::Lifetime l;
-  ui_.statsLifetime(l);
+  statsLife(l);
   const sv::HubLook h = hubNow(l);
   return row < h.rows ? sv::controlOf(h.item[row].kind) : sv::Control{};
 }
@@ -560,7 +582,7 @@ bool LibraryPage::inert(uint32_t row) { return statsShown() && statsControl(row)
 void LibraryPage::onInertTap(uint32_t row) {
   if (kind_ != PageKind::StatsHub) return;
   sv::Lifetime l;
-  ui_.statsLifetime(l);
+  statsLife(l);
   const sv::HubLook h = hubNow(l);
   if (row >= h.rows || h.item[row].kind != sv::RowKind::Disabled) return;
   ui_.input().missBuzz();
@@ -577,7 +599,7 @@ void LibraryPage::onInertTap(uint32_t row) {
 // (uiS's: the list draws Week's body or its empty state, never this line).
 const char* LibraryPage::statsEmptyText() {
   sv::Lifetime l;
-  ui_.statsLifetime(l);
+  statsLife(l);
   sv::PhaseInfo p;
   ui_.statsPhase(p);
   const statsvisit::Snapshot* snap = ui_.statsSnapshot();
@@ -613,7 +635,7 @@ const char* LibraryPage::statsEmptyText() {
 bool LibraryPage::statsEmptyState(EmptyState& e) {
   if (kind_ == PageKind::StatsShelf) return false;  // (its line, or its Try again row)
   sv::Lifetime l;
-  ui_.statsLifetime(l);
+  statsLife(l);
   if (kind_ == PageKind::StatsWeek) {
     const sv::WeekLook w = weekNow(l);
     if (sv::weekBody(w.page.look)) return false;  // (its picture: drawBody())
@@ -658,19 +680,22 @@ void LibraryPage::printStats() {
     return;
   }
   sv::Lifetime l;
-  ui_.statsLifetime(l);
+  statsLife(l);
   sv::PageLook look;
   const uint32_t sig = statsSigNow(l, &look);
   const bool attached = list.source() == this;
+  // (The counting days as the page latched them, 7.10: the lifetime's own
+  // are Ui's line above.)
   Serial.printf("[ui] stats: %s %lu, look %s%s, drawn as 0x%06lX (now 0x%06lX); the list: %s%lu rows drawn (%lu "
-                "now), %lu items, offset %ld px, open row %ld%s\n",
+                "now), %lu items, offset %ld px, open row %ld%s; counting days %lu as latched%s\n",
                 pageKindName(static_cast<uint8_t>(kind_)), static_cast<unsigned long>(id_), sv::lookName(look.look),
                 look.askDue ? " (an ask due)" : "", static_cast<unsigned long>(statsSigDrawn()),
                 static_cast<unsigned long>(sig), attached ? "" : "NOT ATTACHED, ",
                 static_cast<unsigned long>(attached ? list.layout().rows() : 0),
                 static_cast<unsigned long>(statsRows()), static_cast<unsigned long>(attached ? list.layout().itemCount() : 0),
                 static_cast<long>(attached ? list.offset() : 0), static_cast<long>(attached ? list.expanded() : -1),
-                attached && list.stagingOnly() ? ", rows still staged" : "");
+                attached && list.stagingOnly() ? ", rows still staged" : "", static_cast<unsigned long>(l.countingDays),
+                (days_ & sv::kDaysRetake) ? " (taken again at the lifetime's next whole reading)" : "");
   // (Each page's part in a frame of its own, not stacked on this one: a
   // shelf's lines go through the same text chain as its rows.)
   if (kind_ == PageKind::StatsShelf) {
@@ -720,7 +745,7 @@ sv::ShelfLook LibraryPage::shelfNow(const sv::Lifetime& l) const {
 
 sv::ShelfItem LibraryPage::shelfItemAt(uint32_t row, uint32_t* nowMin) const {
   sv::Lifetime l;
-  ui_.statsLifetime(l);
+  statsLife(l);
   if (nowMin) *nowMin = l.nowMin;
   sv::PhaseInfo p;
   ui_.statsPhase(p);
@@ -812,7 +837,7 @@ ListView::Row* LibraryPage::drawShelfRow(ListView::Row& r) {
 bool LibraryPage::statsTopBar() {
   if (kind_ != PageKind::StatsShelf) return false;  // (the hub, Week: none)
   sv::Lifetime l;
-  ui_.statsLifetime(l);
+  statsLife(l);
   return shelfNow(l).topBar;
 }
 
@@ -822,7 +847,7 @@ bool LibraryPage::statsTopBar() {
 uint32_t LibraryPage::statsRailRows() {
   if (sv::shelfOf(id_) != sv::Shelf::NotPlayed) return 0;
   sv::Lifetime l;
-  ui_.statsLifetime(l);
+  statsLife(l);
   const sv::ShelfLook k = shelfNow(l);
   return k.page.look == sv::Look::Served && !k.tryAgain ? k.rows : 0;
 }
@@ -830,7 +855,7 @@ uint32_t LibraryPage::statsRailRows() {
 int32_t LibraryPage::statsPlayingRow() const {
   if (kind_ != PageKind::StatsShelf || playTrack_ == LibraryIndex::kNone) return -1;
   sv::Lifetime l;
-  ui_.statsLifetime(l);
+  statsLife(l);
   const sv::ShelfLook k = shelfNow(l);
   // Not played yet: its album's place in albumsAZ() (once a push, at most
   // the index's albums).
@@ -854,7 +879,7 @@ bool LibraryPage::pending() {
 
 __attribute__((noinline)) bool LibraryPage::statsActIds(const RowRef& r, IdView* ids, const char** name) {
   sv::Lifetime l;
-  ui_.statsLifetime(l);
+  statsLife(l);
   const sv::ShelfLook k = shelfNow(l);
   const statsvisit::Snapshot* snap = ui_.statsSnapshot();
   const LibraryIndex* i = index();
@@ -904,7 +929,7 @@ void LibraryPage::statsAct(const RowRef& r, int action) {
 bool LibraryPage::leadRow() {
   if (kind_ != PageKind::StatsShelf) return false;
   sv::Lifetime l;
-  ui_.statsLifetime(l);
+  statsLife(l);
   return shelfNow(l).tray;
 }
 
@@ -915,7 +940,7 @@ bool LibraryPage::leadRow() {
 void LibraryPage::drawLeadRow(ListView::Row& r) {
   if (kind_ != PageKind::StatsShelf) return;
   sv::Lifetime l;
-  ui_.statsLifetime(l);
+  statsLife(l);
   const sv::ShelfLook k = shelfNow(l);
   const sv::Tray t = sv::trayOf(l, ui_.statsSnapshot());
   if (!k.tray || t.cells == 0) return;
@@ -953,7 +978,7 @@ void LibraryPage::onLeadRowTap(int x, bool rightEdge) {
   if (kind_ != PageKind::StatsShelf) return;
   const uint32_t t0 = micros();
   sv::Lifetime l;
-  ui_.statsLifetime(l);
+  statsLife(l);
   const sv::ShelfLook k = shelfNow(l);
   const sv::Tray t = sv::trayOf(l, ui_.statsSnapshot());
   const int cell = k.tray ? sv::trayCellAt(t, x, rightEdge) : -1;
@@ -982,9 +1007,10 @@ void LibraryPage::shelfFollow(uint32_t drawn, uint32_t sig, const sv::Lifetime& 
   if (list.source() != this) return;  // (not attached: drawn whole at its next enter())
   const uint8_t was = static_cast<uint8_t>(drawn >> 16), now = static_cast<uint8_t>(sig >> 16);
   const bool textsMoved = ((drawn ^ sig) & 0xFFFFu) != 0;
-  // Most played's window line (a landing's D7, a day that drops a kept 30
-  // days; at the 30 days a capped landing's "16 days"): the header again
-  // while the page shows (else drawn whole when it does).
+  // Most played's window line (a landing's D7; a kept 30 days dropped as
+  // the latch takes the counting days again under 30, never at a new day;
+  // at the 30 days a capped landing's "16 days"): the header again while
+  // the page shows (else drawn whole when it does).
   if (sv::shelfHeaderMoved(was, now, textsMoved) && ui_.pageShowing()) repaintHeader();
   const sv::ShelfLook k = shelfNow(l);
   // D7: the window shown is the snapshot's from here (a new ask's loan
@@ -1014,13 +1040,14 @@ void LibraryPage::shelfFollow(uint32_t drawn, uint32_t sig, const sv::Lifetime& 
       }
     }
   }
-  // The tray alone moved (a new UTC day: two cells three, or the tray
-  // coming on day 7; S10's departure 3, at once rather than 7.10's next
-  // enter()): every row is the one it was, so the bar stays open, a press
-  // stays on an item still where it was, and no row is owed for itself
-  // (changedRow past them). A tray that comes still moves the items under
-  // it down by one, staged one a pass (ListView stages each item at the
-  // place it had: listlayout::staging()).
+  // The tray alone moved (two cells three, or the tray coming, as the latch
+  // takes the counting days again at a lifetime's first whole reading: a
+  // re-read's end under the card back's Try again; never a new UTC day
+  // while the page shows, 7.10's next enter()): every row is the one it
+  // was, so the bar stays open, a press stays on an item still where it
+  // was, and no row is owed for itself (changedRow past them). A tray that
+  // comes still moves the items under it down by one, staged one a pass
+  // (ListView stages each item at the place it had: listlayout::staging()).
   const bool alone = sv::trayAlone(was, now, textsMoved);
   Serial.printf("[ui] stats: %s drawn again in place (%s): %s, %lu rows%s%s\n",
                 pageKindName(static_cast<uint8_t>(kind_)), why, sv::lookName(k.page.look),
@@ -1172,7 +1199,7 @@ bool LibraryPage::drawBody(M5Canvas& c, int y0, int h) { return kind_ == PageKin
 // snapshot read now (D6), each draw.
 bool LibraryPage::weekBody(M5Canvas& c, int y0, int h) {
   sv::Lifetime l;
-  ui_.statsLifetime(l);
+  statsLife(l);
   const sv::WeekLook w = weekNow(l);
   if (!sv::weekBody(w.page.look)) return false;  // (the empty state: statsEmptyState())
   const statsvisit::Snapshot* snap = ui_.statsSnapshot();
@@ -1285,7 +1312,7 @@ void LibraryPage::weekFollow(uint32_t drawn, uint32_t sig, sv::Look now, const c
 // nothing.
 void LibraryPage::weekTryAgain() {
   sv::Lifetime l;
-  ui_.statsLifetime(l);
+  statsLife(l);
   const sv::WeekLook w = weekNow(l);
   if (!w.button) return;
   Serial.printf("[ui] stats: Last 7 days, Try again (\"%s\")\n", tr(w.page.line));
