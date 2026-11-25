@@ -474,8 +474,20 @@ void LibraryPage::drawStatsRow(ListView::Row& r) {
                     : it.kind == sv::RowKind::TryAgain ? r.right - 26
                                                        : r.right - 8;
   const char* title = tr(sv::hubTitle(it));
-  ListView::lines(r, kTextX, right, title, strlen(title), line, strlen(line),
-                  it.kind == sv::RowKind::Disabled ? col::DIM : col::TXT);
+  const uint16_t titleInk = it.kind == sv::RowKind::Disabled ? col::DIM : col::TXT;
+  if (!line[0]) {
+    // A row whose data line is empty keeps the recipe's title at y 13 (7.4),
+    // so the titles don't move when the lines come: openLine()'s Line::None
+    // (No room, Unread, Capped, the card back, an Off hub), and a served
+    // line that comes out empty (Recently played or Most played with no
+    // rows, a since day unset). Only open rows get here: a disabled row and
+    // Try again always have a line. ListView::lines() would centre a lone
+    // title on y 21 (F1, S3b's device pass; the owner's "Fix F1",
+    // 2026-11-25).
+    Fonts::instance().draw(r.c, Font::Body, title, strlen(title), kTextX, 13, right - kTextX, titleInk, r.bg);
+    return;
+  }
+  ListView::lines(r, kTextX, right, title, strlen(title), line, strlen(line), titleInk);
 }
 
 Header LibraryPage::statsHeader() const {
