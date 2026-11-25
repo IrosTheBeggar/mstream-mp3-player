@@ -1,6 +1,7 @@
 # v0.15.0 pre-release device checks
 
-**A plan, not run yet: no result below is measured.** Sections 1 and 3
+**Sections 1 and 3 run on 2026-11-25 (the owner's "Upgrade check
+only"); sections 4 and 5 not run (section 8).** Sections 1 and 3
 to 5 say what to run and what must show; their results go in beside
 them, as in docs/RELEASE-0.14.0-CHECKS.md. Section 2 lists what the
 PRs' own device passes already covered, with their records. Once these
@@ -86,22 +87,27 @@ settings checked are the ones the board has. Then:
   headphones' name; the logs, the copies and the screenshots stay off
   the repository.
 
-## 1. The build (to run)
+## 1. The build (run 2026-11-25: main e8515f2's CI build)
 
 Either main e8515f2's CI build (`firmware.yml`'s core2 image) or a
 local build at `release/0.15.0`'s head, from PowerShell with MSYSTEM
-removed and no `local.ini`; both are the same firmware code.
+removed and no `local.ini`; both are the same firmware code. Read from
+main e8515f2's CI run (`firmware.yml`, the build job's log and its
+artifact, every file checked against its `SHA256SUMS`); the image that
+sections 3 to 5 write is that artifact's `-full.bin`.
 
 | | Expected (from S3b's builds; `firmware.bin` also from this candidate's CI build) | Result |
 |---|---|---|
-| Build, `core2` and `core2-dio` | SUCCESS, every guard: `iram_diet` 51 of 51, `cache_guard` and `flash_guard` ok, `shadow_guard` | |
-| `version:` | `v0.14.0-24x-g<sha>`, its ELF | |
-| `flash_guard:` | 75 % of the 6 MB slot (74 % at main 37ed055) | |
-| `firmware.bin` | 4,696,144 B in main e8515f2's CI build (`flash_guard`: `firmware.factory.bin` ends at 0x48a850, the app from 0x10000; core2-dio 4,696,176 B; 0efc69c's the same). S3b measured 4,696,128 B at 4f67d31 (`docs/LISTENING-STATS.md` section 1). F1 adds 56 B of `.flash.text` over that figure, and 7248aae's clean builds give `.flash.rodata` the same total as the figure. The release's build at the tag may read 16 B less: 0.14.0's candidate 5ea8d34 built 4,523,920 B both locally and in CI, and its published `-app.bin` is 4,523,904 B. | |
-| RAM | `.dram0.data` 25,112 B and `.dram0.bss` 36,392 B, S3b's (main 37ed055's) | |
+| Build, `core2` and `core2-dio` | SUCCESS, every guard: `iram_diet` 51 of 51, `cache_guard` and `flash_guard` ok, `shadow_guard` | Both SUCCESS (166 s each), every guard as expected: `iram_diet` 51 of 51 (`sections.ld` 140,237 to 121,839 bytes), `cache_guard` ok, `flash_guard` ok, `shadow_guard` on 227 files; the host tests before them: 2,531 of 2,531 |
+| `version:` | `v0.14.0-24x-g<sha>`, its ELF | `v0.14.0-242-ge8515f2`, ELF b1d7416b (core2-dio: ELF 2020f38f); the ELF file's SHA-256 begins b1d7416b |
+| `flash_guard:` | 75 % of the 6 MB slot (74 % at main 37ed055) | 4.48 MB, 75 % of the 6.00 MB slot; `firmware.factory.bin` ends at 0x48a850 (core2-dio 0x48a870); QIO at 80 MHz (core2-dio DIO at 40 MHz) |
+| `firmware.bin` | 4,696,144 B in main e8515f2's CI build (`flash_guard`: `firmware.factory.bin` ends at 0x48a850, the app from 0x10000; core2-dio 4,696,176 B; 0efc69c's the same). S3b measured 4,696,128 B at 4f67d31 (`docs/LISTENING-STATS.md` section 1). F1 adds 56 B of `.flash.text` over that figure, and 7248aae's clean builds give `.flash.rodata` the same total as the figure. The release's build at the tag may read 16 B less: 0.14.0's candidate 5ea8d34 built 4,523,920 B both locally and in CI, and its published `-app.bin` is 4,523,904 B. | The artifact's `-app.bin` 4,696,144 B (core2-dio's image 32 B longer), as expected |
+| RAM | `.dram0.data` 25,112 B and `.dram0.bss` 36,392 B, S3b's (main 37ed055's) | The CI ELF: `.dram0.data` 25,112 B, `.dram0.bss` 36,392 B (PlatformIO's RAM line: 61,504 B used, their sum) |
 
 The notes' "about 4.70 MB, 75 %" is checked against this row; the
-release workflow's own build gives the figure that ships.
+release workflow's own build gives the figure that ships. Checked:
+4,696,144 B is 4.70 MB (`flash_guard`'s 4.48 counts MiB) and 75 % of
+the slot, so the notes' figures hold.
 
 ## 2. Already run on the device (each PR's own pass)
 
@@ -121,7 +127,7 @@ unless the row says a real stream, with nobody's finger on the screen;
 | #68 (S3b) | 9.7, "S3b: device runs", its "As run 2026-11-25" | spare | a064a19, then 4c3e613 (this candidate's code) for 3b-f1 and 3b-x; main 37ed055 | 13 scripted runs and 79 shots; the hub's push 46.9 ms idle, its ask 1,602 ms idle and 2,331 ms with an MP3; the lists let go and asked again; F1 fixed; the fence with a snapshot held; the short-RCNT header; a scroll kept |
 | #69 (S5a, S5b) | 9.9, "As run 2026-11-25" | the owner's music card | main 0efc69c's CI image (this candidate's code) | 15 slots folded, generation 2 compacted, as statsref predicted field for field; the owner's sync; the next boot's trim; the six lists equal statsref's; `Hw` 19,671 tracks in 319 ms |
 
-## 3. The upgrade: the published 0.14.0, then 0.15.0 (to run; the spare)
+## 3. The upgrade: the published 0.14.0, then 0.15.0 (run 2026-11-25; the spare)
 
 The question: does a board and a card 0.14.0 used take 0.15.0 cleanly,
 with the settings, the headphones, the queue and the library kept, and
@@ -130,15 +136,15 @@ section 3, a card is in the slot throughout.
 
 | Step | Do | Must show | Result |
 |---|---|---|---|
-| 3.0 The board, read | The settings partition and the image area read and verified into the backup folder (the rules), the board left in its bootloader; then the music card taken out | Two files and their SHA-256s; never written back | |
-| 3.1 The spare, as 0.14.0 left cards | In the PC's reader: copies taken (the rules); then `stats.bin`, `stats-*.bin` and any `stats.tmp` or `stats.bad` moved off the card into that copy, so it holds the play history and no stats, as a card 0.14.0 used does | The card's `/.player` without stats files; `playlog.py read`'s slots, and ACKS's seq from the root's copy | |
-| 3.2 0.14.0 written | The full image attached to the v0.14.0 GitHub release, its `SHA256SUMS` line checked, written at 0x0 with no erase | "Hash of data verified" | |
-| 3.3 0.14.0's boot | The spare in, boot, `z`, `@status`, `q`, `s`; then three tracks by `qp<n>`: two past 30 s, one ended by `n` under 30 s | `v0.14.0 (commit bc29b54 ...)`; `[nvs] schema 6`, no migration; the settings lines (language, repeat, Auto DJ, haptics, Touch when off), the paired headphones and the clock as the board had them; the play log's line, its next seq at or over the board's last; any trim as ACKS predicts; three `[plays] seq` lines | |
-| 3.4 Predicted | The spare in the PC's reader: copies again; `playlog.py read`, `statsref.py boot` | The slots 0.15.0's first boot will fold, its save (generation 1 and its base), its trim, HEAD (plays, skips, time, since day), the next seq | |
-| 3.5 The candidate written | Section 1's image, at 0x0 with no erase | "Hash of data verified" | |
-| 3.6 Its first boot | The spare in, boot, `z`, `@status`, `q`, `H`, `Hm`, `Hd` | The version; `[nvs] schema 6`, no migration; every settings line as in 3.3; the queue as 0.14.0 left it; `library.idx` read, no build; `[listen]`: `stats.bin` absent, every slot statsref named folded, 0 twice, saved, then the trim statsref named, with each line's ms; the next seq over MARK's and ACKS's; `H` and `Hm` statsref's; the Listening stats row once the fold ends; no `[heap] FAILED`, Guru, panic, backtrace, `task_wdt` or LOW stack | |
-| 3.7 The files compared | The spare in the PC's reader: `stats.bin` and its base copied | Equal to statsref's prediction field for field (as S5a's boot 1); the other `/.player` files byte for byte 3.4's copies but for `device.txt`'s firmware line and the trimmed files | |
-| 3.8 A second boot | The spare in, boot, `z`, `H` | Nothing folded; `[listen] saved (boot): nothing new`, so no compaction (a compaction is a save's step) | |
+| 3.0 The board, read | The settings partition and the image area read and verified into the backup folder (the rules), the board left in its bootloader; then the music card taken out | Two files and their SHA-256s; never written back | Read and verified on 2026-11-25 with the board parked on main 0efc69c's CI image (both reads' `verify-flash` digests matched; this board's MAC; "Staying in bootloader"); their SHA-256s in the backup folder's README, off the repository; never written back. The music card then taken out, the board parked |
+| 3.1 The spare, as 0.14.0 left cards | In the PC's reader: copies taken (the rules); then `stats.bin`, `stats-*.bin` and any `stats.tmp` or `stats.bad` moved off the card into that copy, so it holds the play history and no stats, as a card 0.14.0 used does | The card's `/.player` without stats files; `playlog.py read`'s slots, and ACKS's seq from the root's copy | The spare proven (cardcheck, and its volume serial) and copied (10 files, each copy's SHA-256 checked); `stats.bin` (61,056 B) and `stats-00000002.bin` (457,968 B) moved off, each copy proven equal first, the card flushed. The history: 6,680 slots in 2 files (6,537 made-up plays of another device; this board's own 142 test plays, to seq 737; a drop note); ACKS this board's to seq 519, the other's to 1,000: no file ACKed whole, so 0.14.0 trims none |
+| 3.2 0.14.0 written | The full image attached to the v0.14.0 GitHub release, its `SHA256SUMS` line checked, written at 0x0 with no erase | "Hash of data verified" | `v0.14.0`'s `-full.bin` (its `SHA256SUMS` line checked) written at 0x0: "Hash of data verified", and `verify-flash`'s "digest matched"; this board's MAC; left in its bootloader |
+| 3.3 0.14.0's boot | The spare in, boot, `z`, `@status`, `q`, `s`; then three tracks by `qp<n>`: two past 30 s, one ended by `n` under 30 s | `v0.14.0 (commit bc29b54 ...)`; `[nvs] schema 6`, no migration; the settings lines (language, repeat, Auto DJ, haptics, Touch when off), the paired headphones and the clock as the board had them; the play log's line, its next seq at or over the board's last; any trim as ACKS predicts; three `[plays] seq` lines | One boot: `v0.14.0 (commit bc29b54, 2026-11-10), ELF 08a671e0`; `[nvs] schema 6`, no migration; the settings lines recorded (English; CPU 240 MHz; Bluetooth power Normal; the touch controller; the idle power-off 10 min; repeat off; Auto DJ's; calibrated, haptics and rail ticks on; off after 15 s, Touch when off: Track; the clock from the RTC), the remembered headphones first paged 11.3 s into the boot (the board's own stamp; 0.14.0's 10 s wait); `ready: boot 180 ..., the next seq 738; ... 6680 slots of 2 files ...; 0 files trimmed`, as predicted (NVS 737, the log 737). Long Silence: seq 738 skipped at 0:36 and 739 at 0:35 (plays), 740 at 0:15 (a skip); track 4 paused, its resume point 0:05; the settle (`gs`: the scan idle, the worker not running) before the board was parked; no BAD line, no person. 21 checks PASS |
+| 3.4 Predicted | The spare in the PC's reader: copies again; `playlog.py read`, `statsref.py boot` | The slots 0.15.0's first boot will fold, its save (generation 1 and its base), its trim, HEAD (plays, skips, time, since day), the next seq | 0.14.0's three slots appended to `plays.jnl` (seqs 738-740, as its log), the rest of both log files byte for byte; no stats file; `queue.txt` and `device.txt` (firmware 0.14.0) its only other writes; `/.mstream` untouched. statsref (the board's clock taken as 22:01 UTC): 6,682 slots folded (0 twice, gap 1,519); generation 1, 51,136 B (RCNT 3,962), compacted into `stats-00000001.bin` (2,510 rows, 60,312 B); no trim; HEAD 5,889 plays, 777 skips, 289 h 56 min, 6,682 slots, since 31 Oct; MARK 740 for this board; the next seq 741 or more. The log alone gives the same figures |
+| 3.5 The candidate written | Section 1's image, at 0x0 with no erase | "Hash of data verified" | main e8515f2's CI `-full.bin` written at 0x0: "Hash of data verified", `verify-flash`'s "digest matched"; this board's MAC |
+| 3.6 Its first boot | The spare in, boot, `z`, `@status`, `q`, `H`, `Hm`, `Hd` | The version; `[nvs] schema 6`, no migration; every settings line as in 3.3; the queue as 0.14.0 left it; `library.idx` read, no build; `[listen]`: `stats.bin` absent, every slot statsref named folded, 0 twice, saved, then the trim statsref named, with each line's ms; the next seq over MARK's and ACKS's; `H` and `Hm` statsref's; the Listening stats row once the fold ends; no `[heap] FAILED`, Guru, panic, backtrace, `task_wdt` or LOW stack | One boot: `v0.14.0-242-ge8515f2 (commit e8515f2)`, ELF b1d7416b; `[nvs] schema 6`, no migration; every settings line as 0.14.0's, the headphones' paging aside: the same headphones, first paged 1.6 s into the boot (the board's stamp), each page's outcome logged (#62); the queue restored, 7 of 7 at 4 of 7, the resume point 0:05; `library.idx` loaded (1,504 ms), no build. `[listen]`: "none on the card ...: a fresh start" (5 ms); the fold 6,682 slots, 0 twice, gap 1,519, in 53 passes and 1,695 ms on the loop with the save (S1's full log: 3,773 ms with its 2,584 ms save; the overflow's peak 262,080 B); saved (boot) generation 1, 51,136 B, in 1,071 ms, compacted (2,510 rows, 60,312 B); then `ready: boot 181 ..., the next seq 741 ...; 0 files trimmed`. `H`'s HEAD, since and rows and `Hm` statsref's to the line (MARK 740, the card's the same, ACKS 519); `H`'s RAM and last save the boot's own figures (the records 0, MARK 2 rows; boot, 51,136 B, generation 1); the Listening stats row "289 h 56 min since 31 Oct"; nothing played; the settle; no BAD line, no person. 50 checks PASS, 1 LOOK (the paging's lines: #62) |
+| 3.7 The files compared | The spare in the PC's reader: `stats.bin` and its base copied | Equal to statsref's prediction field for field (as S5a's boot 1); the other `/.player` files byte for byte 3.4's copies but for `device.txt`'s firmware line and the trimmed files | Taken after 3.8 (one card swap fewer; 3.8 wrote no stats file): `stats.bin` and `stats-00000001.bin` byte for byte statsref's (SHA-256); both log files unchanged; no other stats or log file; `device.txt` (its firmware line) the one other change, `queue.txt` unchanged; `/.mstream` untouched. 10 checks PASS |
+| 3.8 A second boot | The spare in, boot, `z`, `H` | Nothing folded; `[listen] saved (boot): nothing new`, so no compaction (a compaction is a save's step) | Run right after 3.6: generation 1 loaded (121 ms); 0 slots folded; "saved (boot): nothing new since the card's stats.bin (nothing written; 0 ms)"; 0 trimmed; the next seq 741 (boot 182); `H`'s HEAD, rows and since and `Hm`'s MARK rows boot 1's to the line (its own gap 0); the queue and every setting boot 1's; the settle. 36 checks PASS |
 
 A full history's first start (13,106 slots) is not repeated here: S1
 measured it with a seeded log (section 2). If wanted on this build,
@@ -151,7 +157,7 @@ rotation at its first play would delete one file's slots uncounted.
 Then the first boot's `[listen]` lines and a `qp` sent during its scan
 are read against S1's figures.
 
-## 4. The stats pages, a quick look (to run; the spare, after section 3)
+## 4. The stats pages, a quick look (not run: section 8)
 
 | Step | Do | Must show | Result |
 |---|---|---|---|
@@ -166,7 +172,7 @@ candidate's boot, `z`, `H`, then 4.1-4.3 without `D`'s comparison and
 without statsref's (3.7's copies are the spare's); the shots kept off
 the repository.
 
-## 5. Going back to 0.14.0, and returning (to run; the spare, after section 4)
+## 5. Going back to 0.14.0, and returning (not run: section 8)
 
 | Step | Do | Must show | Result |
 |---|---|---|---|
@@ -187,6 +193,13 @@ the repository.
   (main's code, as since S5a), never 0.14.0.
 - The release notes' "Tested on" bullet gains sections 3-5 as run
   (dates, what each showed), and "Not checked" loses what ran.
+
+As run (2026-11-25): the candidate's image written and verified (3.5)
+and the board parked on it after 3.8; the settings partition moved
+forward only (boot 182 of its epoch, the next seq 741; 3.0's copy
+never written back); the spare left with 0.15.0's stats of its test
+history (6,537 made-up slots and the board's own 145) and the queue
+at track 4; the owner puts the music card back. The release notes' bullets brought up to date from section 3.
 
 ## 7. Optional: the owner's hands or word
 
@@ -211,7 +224,10 @@ owner's to run or leave:
 
 ## 8. Not run for this release
 
-- The above, where the owner leaves it;
+- Sections 4 and 5 (the stats pages' quick look, and going back to
+  0.14.0 and returning): the owner's "Upgrade check only" (the stats
+  pages ran in S3b, section 2; going back is from the code alone);
+- Section 7's, where the owner leaves it;
 - a full history's first start on this build, and a boot save with a
   track playing through it (S1 measured the first with a seeded log
   and a held start, section 2);

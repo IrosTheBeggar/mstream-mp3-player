@@ -116,11 +116,20 @@ Source for this binary: {{SOURCE_URL}}, and with its libraries in
   begun counting: the 15 tracks it had logged since counted (12 of them
   plays), a sync, the history's file cleared at the next start, and the
   track lists, each as worked out beforehand on a PC from copies of the
-  card (Not played yet counted on the player alone).
-  **Not checked on the Core2 for this release:** the update from 0.14.0
-  on a card with no stats yet (the full history's start was measured on
-  made-up plays, over made-up stats already on the card) and going back
-  to 0.14.0; a real finger on the stats pages, and their haptics; a card
+  card (Not played yet counted on the player alone). Last, the update
+  itself (2026-11-25), on the spare card with its stats files taken off
+  as 0.14.0 leaves cards: the published 0.14.0 played three tracks
+  from it and paused a fourth; this release's first start then counted
+  the 6,682 tracks the history held (5,889 of them plays and 777 skips;
+  6,537 made up on a PC, the other 145 this Core2's own test plays) and
+  saved them in 1.7 s (the save 1.1 s of it), its stats files equal
+  byte for byte to those worked out beforehand on a PC, with the
+  settings, the paired headphones, the queue at its paused second and
+  the library kept; the next start changed nothing.
+  **Not checked on the Core2 for this release:** going back to 0.14.0;
+  the update with a full history (about 13,000 tracks) on a card with
+  no stats yet (that start was measured over made-up stats already on
+  the card); a real finger on the stats pages, and their haptics; a card
   pulled and put back with a stats page open; the clock set while a
   page shows, a UTC midnight on a page, and the stats with the clock
   unset (drawn only from made-up figures); the nine other languages on
