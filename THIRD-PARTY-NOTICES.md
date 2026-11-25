@@ -452,25 +452,42 @@ It contains:
 
 The nine translations of the UI's texts (i18n/de.json, es, fr, it, ja, pl,
 pt, ru and zh; the firmware holds them in lib/core/UiStringsData.cpp) are
-machine translations made for this project by Fable agents (Claude), not
-yet reviewed by native speakers (docs/I18N.md, phase 3, "The
-translations"). Where they had the text or its words, they take them from
-two apps by the same author as this firmware (IrosTheBeggar), so that
-mStream's apps say the same thing; each file's `@@note` says what it took:
+machine translations made for this project by Fable agents (Claude), and
+their listening stats' texts (November 2026) by Claude agents (Claude
+Opus 5.5), not yet reviewed by native speakers (docs/I18N.md, phase 3,
+"The translations"). Where they had the text or its words, they take
+them from two apps by the same author as this firmware (IrosTheBeggar),
+so that mStream's apps say the same thing; each file's `@@note` says
+what it took:
 
 - **The mStream mobile app** (mstream_music), `lib/l10n/app_<lang>.arb`,
   branch master at commit bdb174e0ea3a6333f820b593888d5a662c9ae976
   (2026-09-21); the mood filters' words (its `mood*` keys and `clear`:
   the `mood.*` texts; its `autoDjSeedNoMatch` and `moodFilters`:
   `autodj.status_waits_fit`; its `autoDjMoodTitle`, `autoDjAny` and
-  `autoDjNoMoodData`: Auto DJ's Smart filters row) at commit
+  `autoDjNoMoodData`: Auto DJ's Smart filters row) and the listening
+  stats' words (its `listeningTitle`, `listeningPeriodAll`,
+  `listeningDays`, `listeningPlays`, `listeningEmptyTitle`,
+  `listeningEmptyPeriod`, `listeningToday`, `listeningYesterday`,
+  `listeningTilePlays`, `listeningTileTime` and `autoDjRecentlyPlayed`:
+  the `stats.*` texts docs/LISTENING-STATS.md 8.1 lists; for the short
+  forms of those too wide for their rooms, its `listeningRecent`,
+  `listeningByTime`, `autoDjFirstSongRecent` and `discoverPageWindowAll`;
+  and, for the stats' other texts, 8.2's, its words where it had them:
+  its `listeningEmptyDevice`, `listeningMostOnDay`,
+  `listeningTileSessions`, `listeningTileSubCounted`,
+  `listeningScopeSheetDevice`, `agoMinutes`, `agoHours`,
+  `songInfoLastPlayed`, `discoverPageTitle`, `discoverPageWidened`,
+  `discoverPageBasedOnLast`, `discoverNetworkNothingNew` and
+  `queueEmptyDjRandom`) at commit
   d17c3fa561da2b7ba3f575d132c3682177b83009 (2026-11-01), which bdb174e
   predates. Licence: GPL-3.0 (its LICENSE). Its translations are machine
   translations (its README says so). Source:
   https://github.com/IrosTheBeggar/mstream_music
 - **The mStream terminal player** (mstream-terminal-player, mstream-player
   0.12.1), `locales/<lang>.yml`, chiefly its MP3-player tab's words for
-  this device, branch main at commit
+  this device (and for the listening stats its stats tab's, `sta.*`, and
+  its Most played, `gui.nav.most_played`), branch main at commit
   b89ad0a97d4add4d47ac0c7404953cc6a0147679 (2026-10-10). Licence:
   GPL-3.0-only (its Cargo.toml; LICENSE is the GPL-3 text). Its
   translations are machine translations (its docs say so). Source:

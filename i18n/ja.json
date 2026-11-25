@@ -1,7 +1,7 @@
 {
   "@@locale": "ja",
   "@@autonym": "日本語",
-  "@@note": "Machine translation, not yet reviewed by a native speaker. Made from the mobile app's (mstream_music, lib/l10n/app_ja.arb, master at bdb174e) and the terminal player's (mstream-terminal-player, locales/ja.yml, main at b89ad0a) Japanese where they had the text or the phrase, both GPL-3.0 by this repository's owner; the rest translated by a Fable agent (Claude), in their words and register, then reviewed message by message by a second Fable agent. Fullwidth punctuation written as ASCII, as the device draws it. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_ja.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' Auto DJ text (November 2026, docs/MOOD-FILTERS.md 8.2: autodj.status_waits_fit) was made the same way: the mobile app's autoDjSeedNoMatch and its word for the filters (moodFilters), from mstream_music master at d17c3fa5, fitted to en.json's room, not yet reviewed by a native speaker. The mood filters' Auto DJ page (November 2026, docs/MOOD-FILTERS.md 8, S5): mood.smart_filters, mood.any and mood.no_data are the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_ja.arb: autoDjMoodTitle, autoDjAny, autoDjNoMoodData); autodj.smart_sub, autodj.status_fits, autodj.status_coverage_mood, autodj.status_few, autodj.status_few_sub, toast.autodj_few, toast.autodj_no_close, toast.autodj_plays_once, toast.autodj_no_mood and empty.no_track_fits were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjNoMoodData for the mood, autoDjSeedNoMatch, mainSync for a sync), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The screen's touch setting (November 2026, Output > Touch when off and the glance it can show: settings.screen_touch, its three values and their lines, glance.hint; settings.screen_off_sub rewritten, since a touch no longer wakes the screen unless the setting says so) was translated by a Fable agent (Claude), in this file's words for the screen's other settings, fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker.",
+  "@@note": "Machine translation, not yet reviewed by a native speaker. Made from the mobile app's (mstream_music, lib/l10n/app_ja.arb, master at bdb174e) and the terminal player's (mstream-terminal-player, locales/ja.yml, main at b89ad0a) Japanese where they had the text or the phrase, both GPL-3.0 by this repository's owner; the rest translated by a Fable agent (Claude), in their words and register, then reviewed message by message by a second Fable agent. Fullwidth punctuation written as ASCII, as the device draws it. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_ja.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' Auto DJ text (November 2026, docs/MOOD-FILTERS.md 8.2: autodj.status_waits_fit) was made the same way: the mobile app's autoDjSeedNoMatch and its word for the filters (moodFilters), from mstream_music master at d17c3fa5, fitted to en.json's room, not yet reviewed by a native speaker. The mood filters' Auto DJ page (November 2026, docs/MOOD-FILTERS.md 8, S5): mood.smart_filters, mood.any and mood.no_data are the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_ja.arb: autoDjMoodTitle, autoDjAny, autoDjNoMoodData); autodj.smart_sub, autodj.status_fits, autodj.status_coverage_mood, autodj.status_few, autodj.status_few_sub, toast.autodj_few, toast.autodj_no_close, toast.autodj_plays_once, toast.autodj_no_mood and empty.no_track_fits were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjNoMoodData for the mood, autoDjSeedNoMatch, mainSync for a sync), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The screen's touch setting (November 2026, Output > Touch when off and the glance it can show: settings.screen_touch, its three values and their lines, glance.hint; settings.screen_off_sub rewritten, since a touch no longer wakes the screen unless the setting says so) was translated by a Fable agent (Claude), in this file's words for the screen's other settings, fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The listening stats' words (November 2026, docs/LISTENING-STATS.md 8.1: stats.title, stats.plays_n, stats.recent, stats.window_all, stats.days_n, stats.today, stats.yesterday, stats.shelf_empty, stats.listened, stats.plays_label, stats.empty_title) are the mobile app's from mstream_music at d17c3fa5 (lib/l10n/app_ja.arb: its listening* keys and autoDjRecentlyPlayed), as it writes them. The listening stats' other texts (November 2026, docs/LISTENING-STATS.md 8.2: toast.stats_needs_dates, toast.stats_needs_month, the rest of stats.*, format.day_month, format.weekday_date, format.day_range, format.day_range_month, day.* and month.*) take the mobile app's words from mstream_music at d17c3fa5 where it has them (lib/l10n/app_ja.arb: listeningEmptyDevice, listeningMostOnDay, listeningTileSessions, agoMinutes, agoHours, songInfoLastPlayed, discoverPageWidened's 直近 and discoverNetworkNothingNew's 新しい発見) and the terminal player's from mstream-terminal-player at b89ad0a (locales/ja.yml: gui.top.mp3 for the MP3 Player tab, gui.nav.most_played, and sta.day_label, sta.day_key, sta.weekdays_short, sta.weekdays_plural and sta.months_short for the dates); the rest were translated by a Claude agent (Claude Opus 5.5), in the apps' and this file's words, then reviewed by a second, fitted to en.json's rooms and to test_ui_library's with ライブラリ's crumb (a note says where a room made a text shorter), not yet reviewed by a native speaker. Japanese needed no short form for the eleven words of 8.1 (the sentence before): all fit their rooms as the app writes them, so none departs from the app.",
   "boot.touch_hint": "タッチがおかしい? 画面を長押し",
   "coach.header_tip": "ヒント {0}/{1}",
   "coach.header_hint": "タップで次へ",
@@ -85,6 +85,8 @@
     "note": "With a ': ' to split at: one line is 298 px in Body, the toast's line 284."
   },
   "toast.autodj_no_mood": "ムードデータなし: mStream でカードを同期してください",
+  "toast.stats_needs_dates": "日付が必要: {0}",
+  "toast.stats_needs_month": "1 か月分の再生が必要: {0}",
   "hud.bluetooth": "Bluetooth: {0}",
   "hud.bluetooth_connecting": "Bluetooth: 接続中...",
   "hud.speaker_paused": "スピーカー、一時停止: B で再生",
@@ -269,6 +271,113 @@
   "mood.smart_filters": "スマートフィルター",
   "mood.any": "指定なし",
   "mood.no_data": "ムードデータなし",
+  "stats.title": "再生統計",
+  "stats.entry_empty": "聴くと再生が記録されます",
+  "@stats.entry_empty": {
+    "note": "The mobile app's listeningEmptyDevice, its first sentence without ここに (here): '聴くとここに再生が記録されます' is 240 px in Small, the entry row's line 204."
+  },
+  "stats.counting": "再生を集計中…",
+  "stats.waiting": "カードを待機中…",
+  "stats.no_room": "今はメモリが足りません",
+  "stats.unread": "再生統計を読めません",
+  "@stats.unread": {
+    "note": "Present, as card.unknown_title and autodj.status_unreadable say it: '再生統計を読めませんでした' is 208 px in Small, the entry row's line 204."
+  },
+  "stats.card_back": "カードが戻りました",
+  "stats.no_card": "カードなし: 再生を記録できません",
+  "stats.since": "{1}から {0}",
+  "@stats.since": {
+    "note": "The day before から with no space, as a date ending in 日 is written (stats.since_only, stats.warming and stats.warming_short too): with a space ('{1} から {0}') the widest is 235 px in Small, the Not played yet row's line 232."
+  },
+  "stats.since_only": "{0}から",
+  "stats.last7": "直近 7 日間",
+  "@stats.last7": {
+    "note": "直近 for 'the last', the mobile app's (discoverPageWidened: 直近 {window}); stats.sub_last7 and stats.sub_last30 the same."
+  },
+  "stats.time_plays": "{0} · {1}",
+  "stats.plays_n": {
+    "other": "{0} 回再生"
+  },
+  "stats.most_played": "よく再生した曲",
+  "@stats.most_played": {
+    "note": "The terminal player's よく再生 (gui.nav.most_played), with した曲 as stats.recent (the mobile app's 最近再生した曲): the shelf holds tracks."
+  },
+  "stats.new_finds": "新しい発見",
+  "@stats.new_finds": {
+    "note": "新しい発見 (new discoveries), as the mobile app says it (discoverNetworkNothingNew); no app word for the shelf. 発見 again in stats.found_autodj and stats.found_shuffle."
+  },
+  "stats.new_finds_sub": {
+    "other": "30 日で初めて聴いた {0} 曲"
+  },
+  "stats.new_finds_sub_short": {
+    "other": "30 日で新たに {0} 曲"
+  },
+  "stats.old_favourites": "懐かしの曲",
+  "@stats.old_favourites": {
+    "note": "懐かしの曲 (tracks one used to play, a fond word): no app or device word for a favourite; 昔のお気に入り (119 px in Bold, the title's room 162) would fit too."
+  },
+  "stats.old_favourites_sub": {
+    "other": "以前はよく再生した {0} 曲"
+  },
+  "@stats.old_favourites_sub": {
+    "note": "以前はよく再生した (that one used to play often: は sets it against now), in stats.new_finds_sub's form: 'よく聴いたが最近は聴いていない {0} 曲' is 272 px in Small, the line 232 (else the count alone)."
+  },
+  "stats.not_played": "未再生のアルバム",
+  "stats.recent": "最近再生した曲",
+  "stats.no_dates": "まだ日付なし: 時計が未設定",
+  "stats.clock_fix": "「MP3プレーヤー」タブで接続",
+  "@stats.clock_fix": {
+    "note": "MP3プレーヤー as the terminal player names its tab (gui.top.mp3), spelt as it spells it, in 「」 as this file names a control (bt.forget_body, queue.clear_confirm_body). で (connect in that tab, 219 px in Small 250): 「MP3プレーヤー」タブに接続 (219 px) would plug the player into the tab; 「MP3プレーヤー」タブを開いて接続 (open the tab and connect) is 267 px, 'パソコンの「MP3プレーヤー」タブに接続' (on the computer's) 299, in the status row's line 250."
+  },
+  "stats.needs_dates": "日付が必要",
+  "stats.warming": "{0}から利用可能 (1 か月の再生後)",
+  "@stats.warming": {
+    "note": "1 か月の再生後 (after a month of plays): '1 か月分の再生後', as toast.stats_needs_month says it, is 312 px in Body, the closed shelf's line 300. The hub row's Small 250 never holds the long form (282 px): it draws stats.warming_short."
+  },
+  "stats.warming_short": "{0}から利用可能",
+  "stats.window_all": "全期間",
+  "stats.days_n": {
+    "other": "{0} 日"
+  },
+  "stats.sub_last7": "直近 7 日間",
+  "stats.sub_last30": "直近 30 日間",
+  "stats.first_heard": "30 日で初めて聴いた",
+  "@stats.first_heard": {
+    "note": "30 日で (in 30 days): '直近 30 日間に初めて聴いた' is 200 px in Small, the line under the title 162 (beside ライブラリ's crumb)."
+  },
+  "stats.not_in_30": "30 日間再生なし",
+  "stats.found_autodj": "Auto DJ で発見",
+  "stats.found_shuffle": "シャッフルで発見",
+  "@stats.found_shuffle": {
+    "note": "で発見 as stats.found_autodj. From 1,000 plays the pair gives way to the count alone ('シャッフルで発見 · 9,999 回再生' is 228 px in Small: with ' · ' and the artist's 32 px it passes the row's 264); 'シャッフルから' (212 px) would keep the pair."
+  },
+  "stats.last_on": "前回 {0}",
+  "stats.ago_min": "{0} 分前",
+  "stats.ago_h": "{0} 時間前",
+  "stats.today": "今日",
+  "stats.yesterday": "昨日",
+  "stats.this_session": "このセッション",
+  "stats.earlier": "それ以前",
+  "stats.shelf_empty": "この期間には何もありません。",
+  "stats.utc": "{0} UTC",
+  "@stats.utc": {
+    "note": "UTC without its parentheses: '10月26日–11月1日 (UTC)' is 168 px in Small, the line under the title 162 (beside ライブラリ's crumb); 158 px without them."
+  },
+  "stats.listened": "再生時間",
+  "stats.plays_label": "再生",
+  "stats.big_day": "最多は{0}: {1}",
+  "@stats.big_day": {
+    "note": "The mobile app's listeningMostOnDay (最多は {date}: ..., its colon in ASCII), with the day in full (day.monday ... day.sunday: the terminal player's sta.weekdays_plural) and the time for its plays. No space before the day: its name is all kanji, and the space is for digits or Latin beside kana or kanji."
+  },
+  "stats.autodj_right": "Auto DJ の的中率: {0}",
+  "@stats.autodj_right": {
+    "note": "的中率 (hit rate): the share of Auto DJ's picks played rather than skipped."
+  },
+  "stats.empty_title": "まだ再生がありません",
+  "stats.empty_rule": "再生は 30 秒か曲の半分でカウント",
+  "stats.empty_rule_short": "再生は 30 秒でカウント",
+  "stats.empty_card": "再生統計はこのカードに保存されます",
+  "stats.made_up": "架空の統計: 閲覧のみ",
   "card.another": "別のカード: 再起動します",
   "card.back": "カードが戻りました: 再起動します",
   "queue_cap.full": {
@@ -772,5 +881,38 @@
   "format.mb": "{0} MB",
   "format.khz": "{0} kHz",
   "format.hz": "{0} Hz",
-  "format.list_sep": "、"
+  "format.list_sep": "、",
+  "format.day_month": "{1}{0}日",
+  "@format.day_month": {
+    "note": "The terminal player's date (sta.day_label: %{month}%{day}日, its months_short), written solid as Japanese dates are; format.weekday_date is its sta.day_key, the weekday last in ASCII parentheses."
+  },
+  "format.weekday_date": "{1}({0})",
+  "format.day_range": "{0}–{1}",
+  "format.day_range_month": "{2}{0}日–{1}日",
+  "day.mon": "月",
+  "day.tue": "火",
+  "day.wed": "水",
+  "day.thu": "木",
+  "day.fri": "金",
+  "day.sat": "土",
+  "day.sun": "日",
+  "day.monday": "月曜日",
+  "day.tuesday": "火曜日",
+  "day.wednesday": "水曜日",
+  "day.thursday": "木曜日",
+  "day.friday": "金曜日",
+  "day.saturday": "土曜日",
+  "day.sunday": "日曜日",
+  "month.jan": "1月",
+  "month.feb": "2月",
+  "month.mar": "3月",
+  "month.apr": "4月",
+  "month.may": "5月",
+  "month.jun": "6月",
+  "month.jul": "7月",
+  "month.aug": "8月",
+  "month.sep": "9月",
+  "month.oct": "10月",
+  "month.nov": "11月",
+  "month.dec": "12月"
 }

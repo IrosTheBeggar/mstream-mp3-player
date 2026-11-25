@@ -459,16 +459,28 @@ public:
   void update(uint32_t nowMs);
 
   // ---- the queue's edits, with what they do to playback ----
+  // The edits that add tracks take them as a u32 array or as an id view
+  // (IdView.h: a stats shelf's u16 ids read in place, as QueueModel's
+  // edits take them; docs/LISTENING-STATS.md 7.6). The array forms are
+  // views of the array. The queue copies the ids, so what the view reads
+  // may go once the call returns.
+  //
   // Play: the queue becomes `tracks`, and the one at `start` plays
   // (shuffled: first, the rest shuffled after it; kAnyStart: a random one,
   // or the first when not shuffled).
-  bool playNow(const uint32_t* tracks, uint32_t n, uint32_t start) { return playNow(tracks, n, start, shuffle()); }
+  bool playNow(const uint32_t* tracks, uint32_t n, uint32_t start) {
+    return playNow(IdView::of(tracks, n), start, shuffle());
+  }
+  bool playNow(IdView tracks, uint32_t start) { return playNow(tracks, start, shuffle()); }
   // Play with the shuffle mode set as part of it (Shuffle all: on): one
   // edit (QueueModel::replace(.., shuffled)), so undo() puts the queue and
   // the mode back. Out of memory: false, and neither changed. Past the
   // queue's cap (QueueModel::kMaxEntries), 5,000 of the tracks: the first
   // (or the window that holds `start`), or shuffled a random 5,000.
-  bool playNow(const uint32_t* tracks, uint32_t n, uint32_t start, bool shuffle);
+  bool playNow(const uint32_t* tracks, uint32_t n, uint32_t start, bool shuffle) {
+    return playNow(IdView::of(tracks, n), start, shuffle);
+  }
+  bool playNow(IdView tracks, uint32_t start, bool shuffle);
   // As many as fit under the cap (QueueModel::room()), the first ones,
   // after pushing out the entries that already played to make room
   // (QueueModel::pushedBy(): the heard ones before the current entry,
@@ -477,8 +489,10 @@ public:
   // the add did is read off the queue after the call
   // (queueview::addOutcome()): the call takes a heard join first, which
   // moves the current entry.
-  bool playNext(const uint32_t* tracks, uint32_t n);
-  bool addToQueue(const uint32_t* tracks, uint32_t n);
+  bool playNext(const uint32_t* tracks, uint32_t n) { return playNext(IdView::of(tracks, n)); }
+  bool addToQueue(const uint32_t* tracks, uint32_t n) { return addToQueue(IdView::of(tracks, n)); }
+  bool playNext(IdView tracks);
+  bool addToQueue(IdView tracks);
   QueueModel::Removed remove(const uint32_t* positions, uint32_t n);
   bool moveNext(const uint32_t* positions, uint32_t n);
   bool clearUpNext();

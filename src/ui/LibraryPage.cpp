@@ -74,6 +74,8 @@ const LibraryIndex* LibraryPage::index() const {
 bool LibraryPage::real() const { return !ui_.browsingSynthetic(); }
 
 LibraryPage::RowRef LibraryPage::rowAt(uint32_t row) const {
+  // A stats shelf's rows are the visit's snapshot's (LibraryStats.cpp).
+  if (kind_ == PageKind::StatsShelf) return statsRowAt(row);
   RowRef r;
   const LibraryIndex* i = index();
   if (!i) return r;
@@ -255,7 +257,8 @@ bool LibraryPage::playing(const RowRef& r) const {
     case RowKind::Artist: return r.id == playArtist_;
     case RowKind::Album: return r.id == playAlbum_;
     case RowKind::Track:
-    case RowKind::File: return r.id == playTrack_;
+    case RowKind::File:
+    case RowKind::Ranked: return r.id == playTrack_;
     case RowKind::Folder:
       for (int k = 0; k < playDepth_; ++k) {
         if (playFolders_[k] == r.id) return true;
@@ -269,6 +272,9 @@ bool LibraryPage::playing(const RowRef& r) const {
 // the page's rows: at most the list's length, once, when a page opens.
 int32_t LibraryPage::playingRow() const {
   if (playTrack_ == LibraryIndex::kNone) return -1;
+  // A stats page's: a shelf's first ranked row with the track, or its
+  // album's on Not played yet (the snapshot's ids, not a walk of rowAt()).
+  if (statsShown()) return statsPlayingRow();
   const uint32_t n = const_cast<LibraryPage*>(this)->rows();
   for (uint32_t r = 0; r < n; ++r) {
     if (playing(rowAt(r))) return static_cast<int32_t>(r);
@@ -294,9 +300,15 @@ void LibraryPage::enter(NavModel::PageRef& ref) {
     trnf(playAll_, sizeof(playAll_), S::library_play_all, n, n);
   }
   enterFilter(ref);
+  // The Artists root's entry row, decided now for this visit (7.3); a stats
+  // page's shape and minute as it comes up, and an ask due made (D9).
+  latchEntry();
+  if (statsShown()) statsEntering();
   repaintHeader();
   const bool showPlaying = ref.scrollPx == kShowPlaying;
-  if (showPlaying) ref.scrollPx = -1;
+  // (A stats shelf whose rows are pending keeps it in its ref, 7.2: its
+  // rows' arrival finds the playing one, statsFollow().)
+  if (showPlaying && !pending()) ref.scrollPx = -1;
   ListView& list = ui_.list();
   list.attach(this, &ref, 0);
   // From Now Playing: the playing track's row (or what holds it) on
@@ -378,6 +390,7 @@ void LibraryPage::switchSegment(LibrarySegment seg) {
     trnf(playAll_, sizeof(playAll_), S::library_play_all, n, n);
   }
   if (seg == LibrarySegment::Albums) albumsShowing(*ref_);
+  latchEntry();  // (Artists' first row: decided as the segment comes up, as at enter())
   drawSegments();
   list.attach(this, ref_, 0);
   Serial.printf("[ui] library: %s\n", kSegmentNames[static_cast<int>(seg)]);
@@ -387,6 +400,7 @@ void LibraryPage::switchSegment(LibrarySegment seg) {
 bool LibraryPage::crumb() const { return ui_.nav().depth() > 2; }
 
 Header LibraryPage::header() const {
+  if (statsShown()) return statsHeader();
   char* sub = headerSub_;
   char* path = headerPath_;
   const size_t subSize = sizeof(headerSub_), pathSize = sizeof(headerPath_);
@@ -474,7 +488,10 @@ bool LibraryPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
     // whose mark changed: those are rendered again when they come on.)
     list.forgetHidden();
   }
+  // The stats page's shape and minute, the entry row's fold (RAM, us).
+  if (statsShown() || entry_ == EntryRow::Counting) statsUpdate();
   const bool frame = ui_.list().update(nowMs, frameDue, wholeRows);
+  if (frame && statsShown()) statsFrame();
   // The Albums segment's dot comes and goes once the list rests, never a
   // header push in the middle of a fling (7.5).
   if (root() && !ui_.list().animating() && dotDue() != drawnDot_) drawSegments();
@@ -545,7 +562,17 @@ void LibraryPage::describe(char* buf, size_t size) const {
                          root() ? kSegmentNames[static_cast<int>(segment())] : "",
                          static_cast<unsigned long>(const_cast<LibraryPage*>(this)->rows()),
                          playTrack_ == LibraryIndex::kNone ? -1L : static_cast<long>(playTrack_));
-  if (!moodRow() || n < 0 || static_cast<size_t>(n) >= size) return;
+  if (n < 0 || static_cast<size_t>(n) >= size) return;
+  // The stats pages (uiS says more), and Artists' entry row.
+  if (statsShown()) {
+    snprintf(buf + n, size - n, ", the listening stats' page (uiS: its look and lines)");
+    return;
+  }
+  if (entry_ != EntryRow::None) {
+    snprintf(buf + n, size - n, ", the listening stats' row first (%s)", headerSub_);
+    return;
+  }
+  if (!moodRow()) return;
   // The Albums list's first row: its filter and what it holds (uiM says more).
   if (!filter_.active()) {
     snprintf(buf + n, size - n, ", the filters row (no filter)");
@@ -559,6 +586,7 @@ void LibraryPage::describe(char* buf, size_t size) const {
 // ---- the list ----
 
 uint32_t LibraryPage::rows() {
+  if (statsShown()) return statsRows();  // (from RAM and the snapshot, not the index)
   const LibraryIndex* i = index();
   if (!i) return 0;
   switch (kind_) {
@@ -583,12 +611,21 @@ uint16_t LibraryPage::accent() { return accent::Library; }
 
 bool LibraryPage::topBar() {
   if (!index()) return false;
+  // The stats pages: no container bar on the hub or Last 7 days (7.4, 7.7);
+  // a shelf's comes with its rows (7.6: none with none landed, on Try
+  // again, nor on Not played yet).
+  if (statsShown()) return statsTopBar();
   // Albums: the mood filters' first row, on a card with mood data (4.2).
   if (root() && segment() == LibrarySegment::Albums) return moodRow();
+  // Artists: the listening stats' row while latched (7.3: reload() asks
+  // again, and gets the same).
+  if (root() && segment() == LibrarySegment::Artists) return entry_ != EntryRow::None;
   return !root() || segment() == LibrarySegment::Folders;
 }
 
-bool LibraryPage::topBarIsRow() { return root() && segment() == LibrarySegment::Albums; }
+bool LibraryPage::topBarIsRow() {
+  return root() && (segment() == LibrarySegment::Albums || segment() == LibrarySegment::Artists);
+}
 
 bool LibraryPage::alphabetical() { return railRows() > 0; }
 
@@ -598,6 +635,7 @@ uint32_t LibraryPage::railRows() {
   if (root() && segment() == LibrarySegment::Artists) return i->artistCount();
   if (root() && segment() == LibrarySegment::Albums) return albumsShown(*i).count;  // (30 or under: no rail)
   if (folderList()) return i->subfolders(folderId()).count;  // its files after them aren't in the grid
+  if (kind_ == PageKind::StatsShelf) return statsRailRows();  // (Not played yet's albums, A-Z)
   return 0;
 }
 
@@ -633,6 +671,7 @@ char LibraryPage::railKey(uint32_t row) { return textfold::railKey(railName(row)
 
 const char* LibraryPage::jumpTitle() {
   if (root()) return tr(kSegments[static_cast<int>(segment())]);
+  if (kind_ == PageKind::StatsShelf) return tr(statsview::shelfTitle(statsview::shelfOf(id_)));  // (Not played yet)
   const LibraryIndex* i = index();
   return i && kind_ == PageKind::Folder ? i->folderName(id_) : "";
 }
@@ -640,6 +679,7 @@ const char* LibraryPage::jumpTitle() {
 bool LibraryPage::tinted(uint32_t row) { return playing(rowAt(row)); }
 
 const char* LibraryPage::emptyText() {
+  if (statsShown()) return statsEmptyText();
   if (real() && ui_.state().libraryFenced) return tr(S::library_updating_list);  // (the status line says it too)
   const LibraryIndex* i = const_cast<Ui&>(ui_).browseIndex();
   if (!i || !i->ready()) return tr(S::library_empty_no_music);
@@ -651,6 +691,7 @@ const char* LibraryPage::emptyText() {
 // The root with nothing to show (spec §7): no card, or a card without
 // music; both with Try again.
 bool LibraryPage::emptyState(EmptyState& e) {
+  if (statsShown()) return statsEmptyState(e);
   if (!root() || !real()) return false;
   const AppState& s = ui_.state();
   if (s.libraryFenced) return false;  // the library update's fence: emptyText()'s line, not "No music"
@@ -671,6 +712,21 @@ bool LibraryPage::emptyState(EmptyState& e) {
 }
 
 void LibraryPage::onEmptyAction(int i) {
+  // By the page's kind (7.5): the hub with nothing played has one button,
+  // Shuffle all (its toast, toast.shuffling, is shuffleAll()'s); Last 7
+  // days', Try again (7.7: the visit asked again); the root's are the
+  // card's (Try again, Format...) or the music's (Try again).
+  if (kind_ == PageKind::StatsHub) {
+    // (View 2's empty hub, a made-up view: look only, uiSx<n>.)
+    if (ui_.statsLookOnly(statsview::Act::ShuffleAll, "Shuffle all")) return;
+    ui_.shuffleAll();
+    return;
+  }
+  if (kind_ == PageKind::StatsWeek) {
+    weekTryAgain();
+    return;
+  }
+  if (statsShown()) return;  // (a shelf has none: its line, or its Try again row)
   const AppState& s = ui_.state();
   if (!s.card && s.libraryTracks == 0) {
     if (i == 1) {
@@ -684,7 +740,27 @@ void LibraryPage::onEmptyAction(int i) {
   ui_.host().rescanLibrary();  // the Library starts over (libraryChanged)
 }
 
+// The stats pages' rows and the rest, each in a frame of its own, side by
+// side under this one (32 B): neither's buffers stack on the other's under
+// the glyph store's draw, the loop task's deepest text path. (A shelf's
+// row that is the Library's own, Not played yet's album, is drawn by
+// drawLibraryRow() once drawShelfRow() has returned.)
 void LibraryPage::drawRow(ListView::Row& r) {
+  switch (kind_) {
+    case PageKind::StatsHub: drawStatsRow(r); return;
+    case PageKind::StatsShelf: {
+      // (The row handed back, not `r` kept across the call: this frame
+      // stays 32 B, no spill.)
+      ListView::Row* const own = drawShelfRow(r);
+      if (own) drawLibraryRow(*own);
+      return;
+    }
+    case PageKind::StatsWeek: return;  // (no rows: its body, drawBody())
+    default: drawLibraryRow(r); return;
+  }
+}
+
+void LibraryPage::drawLibraryRow(ListView::Row& r) {
   const LibraryIndex* i = index();
   if (!i) return;
   const RowRef rr = rowAt(r.row);
@@ -709,10 +785,12 @@ void LibraryPage::drawRow(ListView::Row& r) {
       const uint16_t* px = real() && thumbs.hasCover(rr.id) ? thumbs.get(rr.id, ThumbCache::Size::Small) : nullptr;
       const int x = ListView::thumb(r, px);
       const int right = ListView::chevron(r);
-      // The root's A-Z: its artist line and year; an artist's (newest
-      // first): its year and its tracks.
-      librarytext::albumSub(*i, rr.id, root() ? librarytext::AlbumPlace::AZ : librarytext::AlbumPlace::OfArtist, sub,
-                            sizeof(sub));
+      // The root's A-Z (and Not played yet's, A-Z too: 7.6): its artist
+      // line and year; an artist's (newest first): its year and its tracks.
+      librarytext::albumSub(*i, rr.id,
+                            root() || kind_ == PageKind::StatsShelf ? librarytext::AlbumPlace::AZ
+                                                                    : librarytext::AlbumPlace::OfArtist,
+                            sub, sizeof(sub));
       const char* shown = librarytext::albumShown(*i, rr.id);
       ListView::lines(r, x, right, shown, strlen(shown), sub, strlen(sub), titleInk, titleFont);
       break;
@@ -787,7 +865,7 @@ int LibraryPage::actions(int32_t row, const char* labels[3]) {
   return 3;
 }
 
-void LibraryPage::act(LibraryIndex::Span span, int32_t start, int action, const char* name) {
+void LibraryPage::act(const IdView& span, int32_t start, int action, const char* name) {
   if (!real()) {
     ui_.toast(tr(S::library_synthetic), false);
     return;
@@ -810,14 +888,13 @@ void LibraryPage::act(LibraryIndex::Span span, int32_t start, int action, const 
       // A tapped track plays first; a container's Play (an artist, an
       // album, a folder, "Play all N") starts on the first, or, while
       // shuffled, on a random track (docs/QUEUE-MODES.md section 2.5).
-      ok = p.playNow(span.ids, span.count,
-                     start >= 0 ? static_cast<uint32_t>(start) : PlaybackController::kAnyStart);
+      ok = p.playNow(span, start >= 0 ? static_cast<uint32_t>(start) : PlaybackController::kAnyStart);
       break;
     case 1:
-      ok = p.playNext(span.ids, span.count);
+      ok = p.playNext(span);
       break;
     default:
-      ok = p.addToQueue(span.ids, span.count);
+      ok = p.addToQueue(span);
       break;
   }
   // The queue's cap (QueueModel::kMaxEntries, docs/QUEUE-MODES.md 15): a
@@ -906,20 +983,33 @@ void LibraryPage::act(LibraryIndex::Span span, int32_t start, int action, const 
   ui_.toast(ok ? text : tr(S::toast_no_memory), ok, viewKey);
 }
 
-void LibraryPage::onRowAction(const RowRef& r, int action) {
+void LibraryPage::onRowAction(const RowRef& r, int action, bool topBar) {
+  // A stats page's Play, Play next, + Queue (a ranked row's bar, the top
+  // bar, a sheet's choices, Not played yet's album's sheet) under a made-up
+  // view: look only (uiSx<n>, as uil<n>'s library), the toast says so.
+  if (statsShown() && ui_.statsLookOnly(statsview::Act::Queue, "Play, Play next or + Queue")) return;
   LibraryIndex::Span span;
   const char* name = "";
   if (container(r, &span, &name)) {
-    act(span, -1, action, name);
+    act(IdView::of(span.ids, span.count), -1, action, name);
+    return;
+  }
+  // A stats shelf's ranked row, and its top bar (the page's own, `topBar`:
+  // onAction(-1)'s alone): the queue's view over the visit's snapshot
+  // (LibraryStats.cpp). A row that reads None from a bar (its look moved
+  // under it, in the pass before the restage) is refused there, never
+  // taken for the top bar's whole list (S3b's review, finding 4).
+  if (r.kind == RowKind::Ranked || (r.kind == RowKind::None && kind_ == PageKind::StatsShelf)) {
+    statsAct(r, action, topBar);
     return;
   }
   if (r.kind != RowKind::Track && r.kind != RowKind::File) return;
   if (action == 0) {
-    act(pageTracks(), static_cast<int32_t>(r.index), 0, "");  // its album or folder, from it
+    const LibraryIndex::Span t = pageTracks();
+    act(IdView::of(t.ids, t.count), static_cast<int32_t>(r.index), 0, "");  // its album or folder, from it
   } else {
     uint32_t one = r.id;
-    LibraryIndex::Span single{&one, 1};
-    act(single, -1, action, "");
+    act(IdView::of(&one, 1), -1, action, "");
   }
 }
 
@@ -931,10 +1021,11 @@ void LibraryPage::onAction(int32_t row, int action) {
   // The top bar: the page's own container. The Folders root has two
   // buttons: Play all, + Queue.
   if (root() && action == 1) action = 2;
-  onRowAction(RowRef{}, action);
+  onRowAction(RowRef{}, action, true);
 }
 
 ListView::Tap LibraryPage::onTap(uint32_t row) {
+  if (statsShown()) return statsTap(row);
   const RowRef r = rowAt(row);
   switch (r.kind) {
     case RowKind::Artist: ui_.push(page(PageKind::Artist, r.id)); return ListView::Tap::Handled;
@@ -950,18 +1041,24 @@ ListView::Tap LibraryPage::onTap(uint32_t row) {
 // Every row but a disc divider holds: the same three actions in a sheet,
 // without opening it.
 bool LibraryPage::holds(uint32_t row) {
+  if (statsShown()) return statsControl(row).holds;  // (the hub: none, 7.4; a shelf's tracks and albums: 7.6)
   const RowKind k = rowAt(row).kind;
   return k != RowKind::None && k != RowKind::Disc;
 }
 
 // A disc divider is no control (3.7): no highlight under the finger, no
-// tick, nothing on a tap or a hold.
-bool LibraryPage::pressable(uint32_t row) { return rowAt(row).kind != RowKind::Disc; }
+// tick, nothing on a tap or a hold. (The stats hub's rows by their kind:
+// statsview::controlOf(); a shelf's, shelfControlOf(): its headings none.)
+bool LibraryPage::pressable(uint32_t row) {
+  if (statsShown()) return statsControl(row).pressable;
+  return rowAt(row).kind != RowKind::Disc;
+}
 
 void LibraryPage::onHold(uint32_t row) {
   held_ = rowAt(row);
   const LibraryIndex* i = index();
-  if (!i || held_.kind == RowKind::None || held_.kind == RowKind::Disc) {
+  if (!i || held_.kind == RowKind::None || held_.kind == RowKind::Disc || held_.kind == RowKind::Section ||
+      held_.kind == RowKind::StatsTryAgain) {
     held_ = RowRef{};
     return;
   }
@@ -982,10 +1079,10 @@ void LibraryPage::onHold(uint32_t row) {
   // Play, Play next and + Queue stay where a 3-row sheet has them, and a
   // tap from habit never lands on another action (as the 4th, it would sit
   // where + Queue is on an album's sheet, and Play would be where Play
-  // next is).
+  // next is). A stats shelf's ranked row is a track too (7.6).
   const AppState& s = ui_.state();
-  heldDj_ = (held_.kind == RowKind::Track || held_.kind == RowKind::File) && real() && s.autoDj.usable &&
-            !s.libraryFenced && ui_.host().autoDjHasNeighbours(held_.id);
+  heldDj_ = (held_.kind == RowKind::Track || held_.kind == RowKind::File || held_.kind == RowKind::Ranked) && real() &&
+            s.autoDj.usable && !s.libraryFenced && ui_.host().autoDjHasNeighbours(held_.id);
   const char* const rows[4] = {tr(S::library_autodj_here), tr(kActions[0]), tr(kActions[1]), tr(kActions[2])};
   if (heldDj_) {
     ui_.openSheet(this, title, rows, 4, nullptr, /*primary=*/1);  // Play
@@ -1014,6 +1111,8 @@ void LibraryPage::autoDjFromHere(uint32_t track) {
     ui_.toast(tr(S::library_synthetic), false);
     return;
   }
+  // (A stats shelf's ranked row under a made-up view: look only, uiSx<n>.)
+  if (statsShown() && ui_.statsLookOnly(statsview::Act::AutoDj, "Auto DJ from here")) return;
   if (ui_.state().libraryFenced) {
     ui_.toast(tr(S::library_updating_wait), false);
     return;
@@ -1101,6 +1200,10 @@ bool LibraryPage::dotDue() {
 // beside the rail, 312 beside the scroll bar, 320 with neither.
 void LibraryPage::drawTopRow(ListView::Row& r) {
   namespace fg = filtergrid;
+  if (root() && segment() == LibrarySegment::Artists) {
+    drawEntryRow(r);  // (the listening stats' way in: 7.3)
+    return;
+  }
   topRight_ = r.right;
   const LibraryIndex* i = index();
   if (!i) return;
@@ -1136,6 +1239,13 @@ void LibraryPage::drawTopRow(ListView::Row& r) {
 // The cross clears the filter (no Undo: 3.2) and the list reloads at its
 // top; the rest of the row opens the editor (7.4).
 void LibraryPage::onTopRowTap(int x, bool rightEdge) {
+  if (root() && segment() == LibrarySegment::Artists) {
+    // The listening stats' row (7.3): the hub, after the tap's tick, while
+    // it can be shown. It asks nothing itself: the held condition's rise
+    // does (Ui::showTop()).
+    entryTap();
+    return;
+  }
   if (!moodRow()) return;
   switch (filtergrid::topHit(x, rightEdge, topRight_, filter_.active())) {
     case filtergrid::Top::Cross:

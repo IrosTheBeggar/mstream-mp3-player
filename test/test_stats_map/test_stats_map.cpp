@@ -459,6 +459,7 @@ std::unique_ptr<Ranked> rankOf(const Files& files, int today, Set set, const std
   in.baseCrc = r->fold.head().baseCrc;
   in.hasToday = today >= 0;
   in.today = static_cast<uint16_t>(today >= 0 ? today : 0);
+  in.liveRound = r->fold.liveRound();  // (as the firmware's prepare(): a session that boots on the card)
   const uint32_t rows = in.baseRows + 4096;  // (the played rows at most: TRKD's under it)
   sr::Memory mem;
   mem.work = r->work.p();

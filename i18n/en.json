@@ -904,6 +904,42 @@
     },
     "bytes": 128
   },
+  "toast.stats_needs_dates": "Needs dates: {0}",
+  "@toast.stats_needs_dates": {
+    "context": "Note (amber) on a tap on a hub row disabled while the clock isn't set (docs/LISTENING-STATS.md 4.5: New finds, Old favourites): what sets the clock. stats.needs_dates' words before the ': ', stats.clock_fix after it.",
+    "room": {
+      "font": "Body",
+      "px": 284,
+      "layout": "toast",
+      "two_line_px": 284
+    },
+    "placeholders": {
+      "0": {
+        "means": "stats.clock_fix",
+        "type": "message",
+        "worst": "stats.clock_fix"
+      }
+    },
+    "bytes": 128
+  },
+  "toast.stats_needs_month": "Needs a month of plays: {0}",
+  "@toast.stats_needs_month": {
+    "context": "Note (amber) on a tap on a hub row disabled in the stats' first month (docs/LISTENING-STATS.md 4.5): the day it opens (stats.warming_short) after the ': '.",
+    "room": {
+      "font": "Body",
+      "px": 284,
+      "layout": "toast",
+      "two_line_px": 284
+    },
+    "placeholders": {
+      "0": {
+        "means": "stats.warming_short",
+        "type": "message",
+        "worst": "stats.warming_short"
+      }
+    },
+    "bytes": 128
+  },
   "hud.bluetooth": "Bluetooth: {0}",
   "@hud.bluetooth": {
     "context": "The HUD over the tab bar after a B hold moved the output to the headphones: their name, or hud.connecting.",
@@ -2043,7 +2079,7 @@
     "other": "{0} tracks"
   },
   "@library.tracks_n": {
-    "context": "A count of tracks: an album's row and header (\"2001 · 14 tracks\"), the Output tab's Library row when 'Library: N tracks' doesn't fit, About's library.",
+    "context": "A count of tracks: an album's row and header (\"2001 · 14 tracks\"), the Output tab's Library row when 'Library: N tracks' doesn't fit, About's library, the line of the listening stats' Old favourites row when stats.old_favourites_sub doesn't fit (Small, 232 px).",
     "room": [
       {
         "font": "Small",
@@ -2846,6 +2882,753 @@
       "const": "uitext::kAutoDjLineW"
     }
   },
+  "stats.title": "Listening stats",
+  "@stats.title": {
+    "context": "The listening stats' name (docs/LISTENING-STATS.md 7.3-7.5): the title of Library > Artists' first row (Body, the 204 px between its bars and its chevron) and of the hub's header (Bold, from x 28 to the header's right; its empty state's too). The mobile app's words (listeningTitle), in the house's sentence case.",
+    "room": [
+      {
+        "font": "Body",
+        "px": 204
+      },
+      {
+        "font": "Bold",
+        "px": 282
+      }
+    ]
+  },
+  "stats.entry_empty": "Plays show up as you listen",
+  "@stats.entry_empty": {
+    "context": "The line under Library > Artists' first row's title (docs/LISTENING-STATS.md 7.3) when nothing has been played yet (4.4's Empty): each play counts from now on. Small, 204 px.",
+    "room": {
+      "font": "Small",
+      "px": 204
+    },
+    "bytes": 64
+  },
+  "stats.counting": "Counting plays…",
+  "@stats.counting": {
+    "context": "While the stats are worked out (docs/LISTENING-STATS.md 4.4: Working, an ask under way; Folding, the boot's count of the card's plays): a line of the hub's rows (Small, 232 px), the lone line of a shelf or the hub with no rows yet (Body, the list's width less 20), and the line of Library > Artists' first row while the boot's count runs (Small, 204 px).",
+    "room": [
+      {
+        "font": "Small",
+        "px": 232
+      },
+      {
+        "font": "Body",
+        "px": 300,
+        "const": "uitext::kListLineW"
+      },
+      {
+        "font": "Small",
+        "px": 204
+      }
+    ],
+    "bytes": 64
+  },
+  "stats.waiting": "Waiting for the card…",
+  "@stats.waiting": {
+    "context": "While the stats wait for the card, busy with another job, or for the player, busy playing (docs/LISTENING-STATS.md 4.4, Waiting): a line of the hub's rows (Small, 232 px) and a shelf's lone line (Body, 300 px). When a visit waited too long (Capped), the reason under the hub's and the shelves' Try again row (Small, 232 px), and Last 7 days' empty state's line (Small, 304 px, which the 232 px covers).",
+    "room": [
+      {
+        "font": "Small",
+        "px": 232
+      },
+      {
+        "font": "Body",
+        "px": 300,
+        "const": "uitext::kListLineW"
+      }
+    ]
+  },
+  "stats.no_room": "Not enough memory right now",
+  "@stats.no_room": {
+    "context": "The reason under the stats pages' Try again row (docs/LISTENING-STATS.md 4.4, No room): the player hadn't the memory to work the stats out just then; Try again asks again. Small, 232 px on the hub and the shelves; Last 7 days' empty state draws it as its line (Small, 304 px, which the 232 px covers); Body, 300 px, as a list's lone line.",
+    "room": [
+      {
+        "font": "Small",
+        "px": 232
+      },
+      {
+        "font": "Body",
+        "px": 300,
+        "const": "uitext::kListLineW"
+      }
+    ]
+  },
+  "stats.unread": "Couldn't read the stats",
+  "@stats.unread": {
+    "context": "The reason under the stats pages' Try again row when the stats on the card couldn't be read (docs/LISTENING-STATS.md 4.4, Unread: a read fault, never a wait). Small, 232 px on the hub and the shelves (Last 7 days' empty state: its line, 304 px); Body, 300 px, as a list's lone line; Small, 204 px, as the line of Library > Artists' first row.",
+    "room": [
+      {
+        "font": "Small",
+        "px": 232
+      },
+      {
+        "font": "Body",
+        "px": 300,
+        "const": "uitext::kListLineW"
+      },
+      {
+        "font": "Small",
+        "px": 204
+      }
+    ],
+    "bytes": 64
+  },
+  "stats.card_back": "The card is back",
+  "@stats.card_back": {
+    "context": "The reason under the stats pages' Try again row once the card is in again after it went (docs/LISTENING-STATS.md 4.4, No card): taken out and put back, or mounted again. Try again reads the stats from it; nothing asks by itself. While the card is out, the page shows stats.no_card alone. Small, 232 px on the hub and the shelves; Last 7 days' empty state's line, Small, 304 px.",
+    "room": [
+      {
+        "font": "Small",
+        "px": 232
+      },
+      {
+        "font": "Small",
+        "px": 304,
+        "const": "uitext::kEmptyLineW"
+      }
+    ]
+  },
+  "stats.no_card": "No card: plays can't be counted",
+  "@stats.no_card": {
+    "context": "The stats pages' one line while the card is out or held (docs/LISTENING-STATS.md 4.4, No card): the hub, a shelf and Last 7 days show it alone, with no Try again until the card is back (then stats.card_back). Body, the list's width less 20.",
+    "room": {
+      "font": "Body",
+      "px": 300,
+      "const": "uitext::kListLineW"
+    }
+  },
+  "stats.since": "{0} since {1}",
+  "@stats.since": {
+    "context": "Since the stats began (docs/LISTENING-STATS.md 7.3, 7.4): the lifetime line, \"74 h 10 min since 1 Sep\", on Library > Artists' first row (Small, 204 px, drawn only when it fits: else the time alone, format.hours_minutes) and as the hub's header line, under its title (Small, from x 28 to the header's right); and the line of the hub's Not played yet row, \"612 albums since 1 Sep\" (Small, 232 px).",
+    "room": [
+      {
+        "font": "Small",
+        "px": 282
+      },
+      {
+        "font": "Small",
+        "px": 232
+      },
+      {
+        "font": "Small",
+        "px": 204,
+        "optional": true
+      }
+    ],
+    "placeholders": {
+      "0": {
+        "means": "the time listened (format.hours_minutes; under an hour, format.minutes), or the albums not played yet (library.albums_n)",
+        "type": "message",
+        "worst": "format.hours_minutes",
+        "or": [
+          "format.minutes",
+          "library.albums_n"
+        ]
+      },
+      "1": {
+        "means": "the first day the stats counted (format.day_month)",
+        "type": "message",
+        "worst": "format.day_month"
+      }
+    },
+    "bytes": 64
+  },
+  "stats.since_only": "since {0}",
+  "@stats.since_only": {
+    "context": "A shelf's header line under its title (docs/LISTENING-STATS.md 7.6: Most played at All time, Not played yet; Small, the title's 179 px), and the line of the hub's Not played yet row before its albums are counted (7.4; Small, 232 px): \"since 1 Sep\".",
+    "room": [
+      {
+        "font": "Small",
+        "px": 179
+      },
+      {
+        "font": "Small",
+        "px": 232
+      }
+    ],
+    "placeholders": {
+      "0": {
+        "means": "the first day the stats counted (format.day_month)",
+        "type": "message",
+        "worst": "format.day_month"
+      }
+    },
+    "bytes": 64
+  },
+  "stats.last7": "Last 7 days",
+  "@stats.last7": {
+    "context": "The hub's first row (docs/LISTENING-STATS.md 7.4; its title, Body, 232 px) and the title of the page it opens, the last seven days' listening (7.7; Bold, from x 28 to the crumb, 179 px).",
+    "room": [
+      {
+        "font": "Body",
+        "px": 232
+      },
+      {
+        "font": "Bold",
+        "px": 179
+      }
+    ]
+  },
+  "stats.time_plays": "{0} · {1}",
+  "@stats.time_plays": {
+    "context": "The line of the hub's Last 7 days row (docs/LISTENING-STATS.md 7.4): the seven days' listening time and plays, \"7 h 37 min · 118 plays\". Small, 232 px.",
+    "room": {
+      "font": "Small",
+      "px": 232
+    },
+    "placeholders": {
+      "0": {
+        "means": "the time listened in the 7 days (format.hours_minutes, three digits of hours at most: 168 h a player; under an hour, format.minutes). Its worst here is English's: test_ui_library measures each language's",
+        "type": "text",
+        "worst": "168 h 59 min"
+      },
+      "1": {
+        "means": "the plays (stats.plays_n)",
+        "type": "message",
+        "worst": "stats.plays_n"
+      }
+    },
+    "translate": "maybe"
+  },
+  "stats.plays_n": {
+    "one": "{0} play",
+    "other": "{0} plays"
+  },
+  "@stats.plays_n": {
+    "context": "A count of plays: in the hub's Last 7 days line (stats.time_plays), and after the artist in a shelf's ranked row (\"Lumen Ferry · 12 plays\": docs/LISTENING-STATS.md 7.6; Small, in the line's 264 px: the count is measured first and never cut, the artist is cut to what it leaves). The mobile app's words (listeningPlays).",
+    "room": null,
+    "placeholders": {
+      "0": {
+        "means": "the plays (a track's, or the 7 days')",
+        "type": "grouped",
+        "worst": 9999
+      }
+    },
+    "count": "0",
+    "note": "Every form must leave stats.time_plays's line within its Small 232 px with the language's own format.hours_minutes at 168 h 59 min and 9,999 plays (test_ui_library measures it). The mobile app's Russian (\"{0} прослушиваний\") is 248 px there, and still 236 px at 118 plays, so ru draws English until a shorter form is written."
+  },
+  "stats.most_played": "Most played",
+  "@stats.most_played": {
+    "context": "A shelf (docs/LISTENING-STATS.md 4.3, 7.6): the tracks played most in the last 7 days, 30 days or all time. The title of the hub's second row (Body, 232 px) and of the shelf's header (Bold, from x 28 to the crumb, 179 px).",
+    "room": [
+      {
+        "font": "Body",
+        "px": 232
+      },
+      {
+        "font": "Bold",
+        "px": 179
+      }
+    ]
+  },
+  "stats.new_finds": "New finds",
+  "@stats.new_finds": {
+    "context": "A shelf (docs/LISTENING-STATS.md 4.3, 7.6): the tracks first heard in the last 30 days, the most played first. The title of the hub's third row (Body, 232 px) and of the shelf's header (Bold, 179 px).",
+    "room": [
+      {
+        "font": "Body",
+        "px": 232
+      },
+      {
+        "font": "Bold",
+        "px": 179
+      }
+    ]
+  },
+  "stats.new_finds_sub": {
+    "one": "{0} track first heard in 30 days",
+    "other": "{0} tracks first heard in 30 days"
+  },
+  "@stats.new_finds_sub": {
+    "context": "The line of the hub's New finds row (docs/LISTENING-STATS.md 7.4): how many tracks were first heard in the last 30 days (all of them, not only the shelf's 50: 4.2). Small, 232 px, drawn only when it fits: else stats.new_finds_sub_short.",
+    "room": {
+      "font": "Small",
+      "px": 232,
+      "optional": true
+    },
+    "placeholders": {
+      "0": {
+        "means": "the tracks",
+        "type": "grouped",
+        "worst": 99999
+      }
+    },
+    "count": "0"
+  },
+  "stats.new_finds_sub_short": {
+    "one": "{0} new in 30 days",
+    "other": "{0} new in 30 days"
+  },
+  "@stats.new_finds_sub_short": {
+    "context": "stats.new_finds_sub's short form, the line when that doesn't fit: \"12 new in 30 days\". Small, 232 px.",
+    "room": {
+      "font": "Small",
+      "px": 232
+    },
+    "placeholders": {
+      "0": {
+        "means": "the tracks",
+        "type": "grouped",
+        "worst": 99999
+      }
+    },
+    "count": "0"
+  },
+  "stats.old_favourites": "Old favourites",
+  "@stats.old_favourites": {
+    "context": "A shelf (docs/LISTENING-STATS.md 4.3, 7.6): tracks played often (5 times or more) but not in the last 30 days. The title of the hub's fourth row (Body, 232 px) and of the shelf's header (Bold, 179 px).",
+    "room": [
+      {
+        "font": "Body",
+        "px": 232
+      },
+      {
+        "font": "Bold",
+        "px": 179
+      }
+    ]
+  },
+  "stats.old_favourites_sub": {
+    "one": "{0} track, played often, not lately",
+    "other": "{0} tracks, played often, not lately"
+  },
+  "@stats.old_favourites_sub": {
+    "context": "The line of the hub's Old favourites row (docs/LISTENING-STATS.md 7.4): how many tracks were played often but not lately (all of them, not only the shelf's 200: 4.2). Small, 232 px, drawn only when it fits: else the count alone, library.tracks_n (\"1,204 tracks\").",
+    "room": {
+      "font": "Small",
+      "px": 232,
+      "optional": true
+    },
+    "placeholders": {
+      "0": {
+        "means": "the tracks",
+        "type": "grouped",
+        "worst": 99999
+      }
+    },
+    "count": "0"
+  },
+  "stats.not_played": "Not played yet",
+  "@stats.not_played": {
+    "context": "A shelf (docs/LISTENING-STATS.md 4.3, 7.6): the albums with no track played since the stats began, A to Z. The title of the hub's fifth row (Body, 232 px) and of the shelf's header (Bold, 179 px).",
+    "room": [
+      {
+        "font": "Body",
+        "px": 232
+      },
+      {
+        "font": "Bold",
+        "px": 179
+      }
+    ]
+  },
+  "stats.recent": "Recently played",
+  "@stats.recent": {
+    "context": "A shelf (docs/LISTENING-STATS.md 4.3, 7.6): the tracks played lately, the latest first. The title of the hub's sixth row (Body, 232 px) and of the shelf's header (Bold, from x 28 to the crumb, 179 px). The mobile app's words (autoDjRecentlyPlayed).",
+    "room": [
+      {
+        "font": "Body",
+        "px": 232
+      },
+      {
+        "font": "Bold",
+        "px": 179
+      }
+    ]
+  },
+  "stats.no_dates": "No dates yet: the clock isn't set",
+  "@stats.no_dates": {
+    "context": "The hub's status row, in its first row's place, while the player's clock isn't set (docs/LISTENING-STATS.md 4.4 No dates, 7.4): plays are counted, but not on which day. Its first line, Small, amber, 250 px; stats.clock_fix under it.",
+    "room": {
+      "font": "Small",
+      "px": 250
+    }
+  },
+  "stats.clock_fix": "Plug in to the MP3 Player tab",
+  "@stats.clock_fix": {
+    "context": "How the clock gets set (docs/LISTENING-STATS.md 7.4): the terminal player's MP3 Player tab sets it when the player is plugged in to the computer. The hub's status row's second line (Small, 250 px), and the rest of toast.stats_needs_dates after its ': ' (Body, else Small, 284 px). 'The MP3 Player tab' is the terminal player's own name for that tab, in its words for the language (its locales/<lang>.yml).",
+    "room": [
+      {
+        "font": "Small",
+        "px": 250
+      },
+      {
+        "font": "Body",
+        "else": "Small",
+        "px": 284
+      }
+    ]
+  },
+  "stats.needs_dates": "Needs dates",
+  "@stats.needs_dates": {
+    "context": "Why a hub row is disabled while the clock isn't set (docs/LISTENING-STATS.md 4.4 No dates: New finds, Old favourites, and Not played yet while the card's days aren't known): the row's line (Small, 250 px: a disabled row has no chevron). Also Not played yet's lone line when it can't open for want of dates (Body, 300 px), and the words before the ': ' of toast.stats_needs_dates.",
+    "room": [
+      {
+        "font": "Small",
+        "px": 250
+      },
+      {
+        "font": "Body",
+        "px": 300,
+        "const": "uitext::kListLineW"
+      }
+    ]
+  },
+  "stats.warming": "Opens {0}, after a month of plays",
+  "@stats.warming": {
+    "context": "Why a hub row is disabled in the stats' first month (docs/LISTENING-STATS.md 4.4 First month: New finds, Old favourites, Not played yet): the day it opens, 30 days after the stats began. The row's line, Small, 250 px; and the shelf's lone line when it is reached closed (Body, the list's width less 20); each drawn only when it fits: else stats.warming_short.",
+    "room": [
+      {
+        "font": "Small",
+        "px": 250,
+        "optional": true
+      },
+      {
+        "font": "Body",
+        "px": 300,
+        "const": "uitext::kListLineW",
+        "optional": true
+      }
+    ],
+    "placeholders": {
+      "0": {
+        "means": "the day the row opens (format.day_month)",
+        "type": "message",
+        "worst": "format.day_month"
+      }
+    }
+  },
+  "stats.warming_short": "Opens on {0}",
+  "@stats.warming_short": {
+    "context": "stats.warming's short form (the disabled row's line when that doesn't fit: Small, 250 px; a closed shelf's lone line: Body, 300 px), and the rest of toast.stats_needs_month after its ': ' (Body, else Small, 284 px).",
+    "room": [
+      {
+        "font": "Small",
+        "px": 250
+      },
+      {
+        "font": "Body",
+        "px": 300,
+        "const": "uitext::kListLineW"
+      },
+      {
+        "font": "Body",
+        "else": "Small",
+        "px": 284
+      }
+    ],
+    "placeholders": {
+      "0": {
+        "means": "the day the row opens (format.day_month)",
+        "type": "message",
+        "worst": "format.day_month"
+      }
+    }
+  },
+  "stats.window_all": "All time",
+  "@stats.window_all": {
+    "context": "Most played's tray (docs/LISTENING-STATS.md 7.6): the window of every play since the stats began, beside the 7 and 30 days' (stats.days_n). Bold, else Small, in its cell: 92 px of three, 142 of two. The mobile app's words (listeningPeriodAll).",
+    "room": [
+      {
+        "font": "Bold",
+        "else": "Small",
+        "px": 92
+      },
+      {
+        "font": "Bold",
+        "else": "Small",
+        "px": 142
+      }
+    ]
+  },
+  "stats.days_n": {
+    "one": "{0} day",
+    "other": "{0} days"
+  },
+  "@stats.days_n": {
+    "context": "Most played's tray (docs/LISTENING-STATS.md 7.6): a window's length, \"7 days\", \"30 days\" (fewer when the card's recent counts hold less than 30 days: \"16 days\"). Bold, else Small, in its cell: 92 px of three, 142 of two. When it is fewer than 30 and that cell is picked, the same words are also the header line under \"Most played\" in place of stats.sub_last30, so the header and the cell name one window: Small, the title's 179 px. The mobile app's words (listeningDays).",
+    "room": [
+      {
+        "font": "Bold",
+        "else": "Small",
+        "px": 92
+      },
+      {
+        "font": "Bold",
+        "else": "Small",
+        "px": 142
+      },
+      {
+        "font": "Small",
+        "px": 179
+      }
+    ],
+    "placeholders": {
+      "0": {
+        "means": "the days (up to 30)",
+        "type": "digits",
+        "worst": 30
+      }
+    },
+    "count": "0"
+  },
+  "stats.sub_last7": "last 7 days",
+  "@stats.sub_last7": {
+    "context": "Most played's header line under its title at the 7 days' window (docs/LISTENING-STATS.md 7.6). Small, the title's 179 px.",
+    "room": {
+      "font": "Small",
+      "px": 179
+    },
+    "bytes": 64
+  },
+  "stats.sub_last30": "last 30 days",
+  "@stats.sub_last30": {
+    "context": "Most played's header line under its title at the 30 days' window (docs/LISTENING-STATS.md 7.6). Small, the title's 179 px.",
+    "room": {
+      "font": "Small",
+      "px": 179
+    },
+    "bytes": 64
+  },
+  "stats.first_heard": "first heard in 30 days",
+  "@stats.first_heard": {
+    "context": "New finds' header line under its title (docs/LISTENING-STATS.md 7.6): what the shelf holds. Small, the title's 179 px.",
+    "room": {
+      "font": "Small",
+      "px": 179
+    },
+    "bytes": 64
+  },
+  "stats.not_in_30": "not in 30 days",
+  "@stats.not_in_30": {
+    "context": "Old favourites' header line under its title (docs/LISTENING-STATS.md 7.6): not played in the last 30 days. Small, the title's 179 px.",
+    "room": {
+      "font": "Small",
+      "px": 179
+    },
+    "bytes": 64
+  },
+  "stats.found_autodj": "found by Auto DJ",
+  "@stats.found_autodj": {
+    "context": "A part of a New finds row's line, after the artist (docs/LISTENING-STATS.md 7.6): the track's first play was Auto DJ's pick (\"Sefa Ilmar · found by Auto DJ · 9 plays\"). Small, in the line's 264 px: the artist is cut to what the other parts leave. Auto DJ is the feature's name.",
+    "room": null
+  },
+  "stats.found_shuffle": "found by shuffle",
+  "@stats.found_shuffle": {
+    "context": "A part of a New finds row's line, after the artist (docs/LISTENING-STATS.md 7.6): the track's first play came from a shuffle (\"Sefa Ilmar · found by shuffle · 9 plays\"). Small, in the line's 264 px: the artist is cut to what the other parts leave.",
+    "room": null
+  },
+  "stats.last_on": "last {0}",
+  "@stats.last_on": {
+    "context": "A part of an Old favourites row's line, after its plays (docs/LISTENING-STATS.md 7.6): the day of its last play (\"Halvard Moss · 9 plays · last 14 Sep\"). Small, in the line's 264 px.",
+    "room": null,
+    "placeholders": {
+      "0": {
+        "means": "the day of the last play (format.day_month)",
+        "type": "message",
+        "worst": "format.day_month"
+      }
+    }
+  },
+  "stats.ago_min": "{0} min ago",
+  "@stats.ago_min": {
+    "context": "How long ago a track was played, under an hour (docs/LISTENING-STATS.md 7.6: Recently played's rows, \"Lumen Ferry · 25 min ago\", and the line of the hub's Recently played row). Small, after the artist or the title (in 264 px on the shelf, 232 on the hub): the name is cut to what it leaves.",
+    "room": null,
+    "placeholders": {
+      "0": {
+        "means": "the minutes (1 to 59)",
+        "type": "digits",
+        "worst": 59
+      }
+    }
+  },
+  "stats.ago_h": "{0} h ago",
+  "@stats.ago_h": {
+    "context": "How long ago a track was played, an hour to a day (docs/LISTENING-STATS.md 7.6), as stats.ago_min. Small, after the artist or the title.",
+    "room": null,
+    "placeholders": {
+      "0": {
+        "means": "the hours (1 to 23)",
+        "type": "digits",
+        "worst": 23
+      }
+    }
+  },
+  "stats.today": "Today",
+  "@stats.today": {
+    "context": "A section row in Recently played (docs/LISTENING-STATS.md 4.3, 7.6): the tracks played today. Bold, in the Library's violet, from 12 px into the row to 8 px short of its right. The mobile app's word (listeningToday).",
+    "room": {
+      "font": "Bold",
+      "px": 300,
+      "const": "uitext::kDiscTextW"
+    }
+  },
+  "stats.yesterday": "Yesterday",
+  "@stats.yesterday": {
+    "context": "A section row in Recently played (docs/LISTENING-STATS.md 4.3, 7.6): the tracks played yesterday. Bold, 300 px. The mobile app's word (listeningYesterday).",
+    "room": {
+      "font": "Bold",
+      "px": 300,
+      "const": "uitext::kDiscTextW"
+    }
+  },
+  "stats.this_session": "This session",
+  "@stats.this_session": {
+    "context": "A section row in Recently played while the clock isn't set (docs/LISTENING-STATS.md 4.3, 7.6): the tracks played since the player was switched on (stats.earlier after them). Bold, 300 px.",
+    "room": {
+      "font": "Bold",
+      "px": 300,
+      "const": "uitext::kDiscTextW"
+    }
+  },
+  "stats.earlier": "Earlier",
+  "@stats.earlier": {
+    "context": "A section row in Recently played (docs/LISTENING-STATS.md 4.3, 7.6): with no clock, the tracks played before this session; with one, those played with no date, after the dated days. Bold, 300 px.",
+    "room": {
+      "font": "Bold",
+      "px": 300,
+      "const": "uitext::kDiscTextW"
+    }
+  },
+  "stats.shelf_empty": "Nothing in this period.",
+  "@stats.shelf_empty": {
+    "context": "A shelf's lone line when it has no rows (docs/LISTENING-STATS.md 7.6): nothing played in the window picked. Body, the list's width less 20. The mobile app's words (listeningEmptyPeriod).",
+    "room": {
+      "font": "Body",
+      "px": 300,
+      "const": "uitext::kListLineW"
+    }
+  },
+  "stats.utc": "{0} (UTC)",
+  "@stats.utc": {
+    "context": "Last 7 days' header line (docs/LISTENING-STATS.md 7.7): the seven days shown, \"4–10 Nov (UTC)\": the days are UTC's, as the card's stats keep them. Beside the title from x 140 when it fits there, else under it (Small, the title's 179 px). UTC is a name: keep it.",
+    "room": {
+      "font": "Small",
+      "px": 179
+    },
+    "placeholders": {
+      "0": {
+        "means": "the seven days (format.day_range_month in one month, \"4–10 Nov\"; format.day_range across a month's end, \"28 Sep–4 Oct\")",
+        "type": "message",
+        "worst": "format.day_range",
+        "or": [
+          "format.day_range_month"
+        ]
+      }
+    },
+    "bytes": 64
+  },
+  "stats.listened": "Listening time",
+  "@stats.listened": {
+    "context": "Last 7 days (docs/LISTENING-STATS.md 7.7): the label over the week's listening time, at the left. Small, 150 px. The mobile app's words (listeningTileTime).",
+    "room": {
+      "font": "Small",
+      "px": 150
+    }
+  },
+  "stats.plays_label": "Plays",
+  "@stats.plays_label": {
+    "context": "Last 7 days (docs/LISTENING-STATS.md 7.7): the label over the week's count of plays, at the right. Small, 100 px. The mobile app's word (listeningTilePlays).",
+    "room": {
+      "font": "Small",
+      "px": 100
+    }
+  },
+  "stats.big_day": "{0} was your big day: {1}",
+  "@stats.big_day": {
+    "context": "Last 7 days' first line under the bars (docs/LISTENING-STATS.md 4.2, 7.7): the weekday listened to most, and how long (\"Saturday was your big day: 2 h 1 min\"). Small, 288 px. Put the day and the time where the language wants them; the day is day.monday to day.sunday as written here (its case, its article, as the sentence needs).",
+    "room": {
+      "font": "Small",
+      "px": 288
+    },
+    "placeholders": {
+      "0": {
+        "means": "the day (day.monday ... day.sunday)",
+        "type": "message",
+        "worst": "day.wednesday",
+        "or": [
+          "day.monday",
+          "day.tuesday",
+          "day.thursday",
+          "day.friday",
+          "day.saturday",
+          "day.sunday"
+        ]
+      },
+      "1": {
+        "means": "its listening time (format.hours_minutes, under a day: the language's own is measured by test_ui_library)",
+        "type": "text",
+        "worst": "23 h 59 min"
+      }
+    },
+    "note": "{1}'s worst here is English's \"23 h 59 min\", so test_ui_strings measures every language with it. The line drawn has the language's own format.hours_minutes, and it must fit 288 px with that at 23 h 59 min and the longest day (test_ui_library measures it). Until this text is translated, the English sentence with the language's own hours is too wide in pl (303 px, Wednesday), ja and zh (291 px): their translations must be shorter than that."
+  },
+  "stats.autodj_right": "Auto DJ got it right {0} of the time",
+  "@stats.autodj_right": {
+    "context": "Last 7 days' second line (docs/LISTENING-STATS.md 4.2, 7.7), when 5 or more of Auto DJ's picks were played or skipped in the week: the share of them played rather than skipped (\"Auto DJ got it right 80% of the time\"). Small, 288 px. Auto DJ is the feature's name.",
+    "room": {
+      "font": "Small",
+      "px": 288
+    },
+    "placeholders": {
+      "0": {
+        "means": "the share (format.percent)",
+        "type": "message",
+        "worst": "format.percent"
+      }
+    }
+  },
+  "stats.empty_title": "No plays yet",
+  "@stats.empty_title": {
+    "context": "The hub when nothing has been played yet (docs/LISTENING-STATS.md 7.5): the empty state's title, under the chart. Title, 304 px. The mobile app's words (listeningEmptyTitle).",
+    "room": {
+      "font": "Title",
+      "px": 304,
+      "const": "uitext::kEmptyTitleW"
+    }
+  },
+  "stats.empty_rule": "Plays count from 30 s or half a track",
+  "@stats.empty_rule": {
+    "context": "The empty state's first line under stats.empty_title (docs/LISTENING-STATS.md 7.5): a play counts once 30 seconds or half the track (whichever is less) have played (4.1). Small, 304 px, drawn only when it fits: else stats.empty_rule_short.",
+    "room": {
+      "font": "Small",
+      "px": 304,
+      "optional": true,
+      "const": "uitext::kEmptyLineW"
+    }
+  },
+  "stats.empty_rule_short": "Plays count from 30 s",
+  "@stats.empty_rule_short": {
+    "context": "stats.empty_rule's short form, the line when that doesn't fit. Small, 304 px.",
+    "room": {
+      "font": "Small",
+      "px": 304,
+      "const": "uitext::kEmptyLineW"
+    }
+  },
+  "stats.empty_card": "Your stats stay on this card",
+  "@stats.empty_card": {
+    "context": "The empty state's second line (docs/LISTENING-STATS.md 7.5): the stats are kept on the microSD card, not in the player. Small, 304 px.",
+    "room": {
+      "font": "Small",
+      "px": 304,
+      "const": "uitext::kEmptyLineW"
+    }
+  },
+  "stats.made_up": "Made-up stats: look only",
+  "@stats.made_up": {
+    "context": "Toast when Play, Play next, + Queue, Auto DJ from here, Shuffle all or Try again is tapped on a listening stats page while a made-up test view is on (console command uiSx<n>, docs/LISTENING-STATS.md 9.3): the figures are invented, so nothing is played or asked. As library.synthetic.",
+    "room": {
+      "font": "Body",
+      "px": 284,
+      "layout": "toast",
+      "two_line_px": 284
+    },
+    "translate": "dev",
+    "bytes": 128
+  },
   "card.another": "Another card: restarting",
   "@card.another": {
     "context": "Toast before the player restarts because another microSD card was put in.",
@@ -3576,11 +4359,17 @@
   },
   "empty.try_again": "Try again",
   "@empty.try_again": {
-    "context": "The one button of the no-card and no-music screens: look for the card / the music again.",
-    "room": {
-      "font": "Bold",
-      "px": 168
-    }
+    "context": "The one button of the no-card and no-music screens: look for the card / the music again. Also the listening stats' (docs/LISTENING-STATS.md 7.4-7.7): the button of Last 7 days' empty state (Bold, 168 px), and the title of the Try again row on the hub and the shelves, its reason under it (Body, 232 px).",
+    "room": [
+      {
+        "font": "Bold",
+        "px": 168
+      },
+      {
+        "font": "Body",
+        "px": 232
+      }
+    ]
   },
   "empty.no_music_title": "No music found",
   "@empty.no_music_title": {
@@ -8253,7 +9042,7 @@
   },
   "format.hours_minutes": "{0} h {1} min",
   "@format.hours_minutes": {
-    "context": "Hours and minutes: Device info's uptime (\"2 h 05 min\"), the Queue's time up next (\"2 h 5 min\").",
+    "context": "Hours and minutes: Device info's uptime (\"2 h 05 min\"), the Queue's time up next (\"2 h 5 min\"), and the listening stats' times (docs/LISTENING-STATS.md 4.1, 7.3-7.7: \"74 h 10 min\", up to 99,999 hours). Alone, it is the line of Library > Artists' first row when stats.since doesn't fit there or the stats have no first day yet (Small, 204 px), and the hub's header line when they have none (Small, 282 px). It is also inside stats.since, stats.time_plays and stats.big_day, and it is Last 7 days' figure, its numbers in Title and its words in Small (test_ui_library measures that one).",
     "room": [
       {
         "font": "Body",
@@ -8265,13 +9054,21 @@
         "font": "Small",
         "px": 169,
         "optional": true
+      },
+      {
+        "font": "Small",
+        "px": 204
+      },
+      {
+        "font": "Small",
+        "px": 282
       }
     ],
     "placeholders": {
       "0": {
-        "means": "the hours",
-        "type": "digits",
-        "worst": 99
+        "means": "the hours (the listening stats write them grouped, as a count: \"1,204 h\")",
+        "type": "grouped",
+        "worst": 99999
       },
       "1": {
         "means": "the minutes (Device info: two digits)",
@@ -8377,5 +9174,273 @@
     "room": null,
     "translate": "maybe",
     "note": "Japanese and Chinese may use 、."
+  },
+  "format.day_month": "{0} {1}",
+  "@format.day_month": {
+    "context": "A day and its month, short (\"1 Sep\": docs/LISTENING-STATS.md 8.2), in the listening stats' lines (stats.since, stats.since_only, stats.warming, stats.last_on), Last 7 days' days across a month's end (format.day_range) and Recently played's sections (format.weekday_date). Ordered, and marked, as the language writes a date.",
+    "room": null,
+    "placeholders": {
+      "0": {
+        "means": "the day of the month",
+        "type": "digits",
+        "worst": 30
+      },
+      "1": {
+        "means": "the month (month.jan ... month.dec)",
+        "type": "message",
+        "worst": "month.sep",
+        "or": [
+          "month.jan",
+          "month.feb",
+          "month.mar",
+          "month.apr",
+          "month.may",
+          "month.jun",
+          "month.jul",
+          "month.aug",
+          "month.oct",
+          "month.nov",
+          "month.dec"
+        ]
+      }
+    }
+  },
+  "format.weekday_date": "{0} {1}",
+  "@format.weekday_date": {
+    "context": "A section row in Recently played for an older day (docs/LISTENING-STATS.md 4.3, 7.6): its weekday, short, and its date, \"Sun 8 Nov\". Bold, in the Library's violet, 300 px. Ordered as the language wants (Japanese and Chinese put the weekday last).",
+    "room": {
+      "font": "Bold",
+      "px": 300,
+      "const": "uitext::kDiscTextW"
+    },
+    "placeholders": {
+      "0": {
+        "means": "the weekday (day.mon ... day.sun)",
+        "type": "message",
+        "worst": "day.wed",
+        "or": [
+          "day.mon",
+          "day.tue",
+          "day.thu",
+          "day.fri",
+          "day.sat",
+          "day.sun"
+        ]
+      },
+      "1": {
+        "means": "the date (format.day_month)",
+        "type": "message",
+        "worst": "format.day_month"
+      }
+    }
+  },
+  "format.day_range": "{0}–{1}",
+  "@format.day_range": {
+    "context": "Last 7 days' seven days (docs/LISTENING-STATS.md 7.7), in stats.utc, when they run across a month's end: the first and the last, each with its month, \"28 Sep–4 Oct\". In one month, format.day_range_month is drawn instead. Small, 179 px.",
+    "room": {
+      "font": "Small",
+      "px": 179
+    },
+    "placeholders": {
+      "0": {
+        "means": "the first day (format.day_month)",
+        "type": "message",
+        "worst": "format.day_month"
+      },
+      "1": {
+        "means": "the last day (format.day_month)",
+        "type": "message",
+        "worst": "format.day_month"
+      }
+    }
+  },
+  "format.day_range_month": "{0}–{1} {2}",
+  "@format.day_range_month": {
+    "context": "Last 7 days' seven days (docs/LISTENING-STATS.md 7.7), in stats.utc, when both are in one month: the first day's number, the last's, and their month once, \"4–10 Nov\" (across a month's end, format.day_range). Small, 179 px. Ordered, and marked, as the language writes such a span of dates: the month may come first, before both days.",
+    "room": {
+      "font": "Small",
+      "px": 179
+    },
+    "placeholders": {
+      "0": {
+        "means": "the first day of the month",
+        "type": "digits",
+        "worst": 25
+      },
+      "1": {
+        "means": "the last day of the month",
+        "type": "digits",
+        "worst": 31
+      },
+      "2": {
+        "means": "their month (month.jan ... month.dec)",
+        "type": "message",
+        "worst": "month.sep",
+        "or": [
+          "month.jan",
+          "month.feb",
+          "month.mar",
+          "month.apr",
+          "month.may",
+          "month.jun",
+          "month.jul",
+          "month.aug",
+          "month.oct",
+          "month.nov",
+          "month.dec"
+        ]
+      }
+    }
+  },
+  "day.mon": "Mon",
+  "@day.mon": {
+    "context": "Monday, short (docs/LISTENING-STATS.md 7.6, 7.7): the label under its bar on Last 7 days (Small, centred in its column, 41 px), and the weekday of format.weekday_date (Recently played's sections, Bold).",
+    "room": {
+      "font": "Small",
+      "px": 41
+    }
+  },
+  "day.tue": "Tue",
+  "@day.tue": {
+    "context": "Tuesday, short (docs/LISTENING-STATS.md 7.6, 7.7): the label under its bar on Last 7 days (Small, centred in its column, 41 px), and the weekday of format.weekday_date (Recently played's sections, Bold).",
+    "room": {
+      "font": "Small",
+      "px": 41
+    }
+  },
+  "day.wed": "Wed",
+  "@day.wed": {
+    "context": "Wednesday, short (docs/LISTENING-STATS.md 7.6, 7.7): the label under its bar on Last 7 days (Small, centred in its column, 41 px), and the weekday of format.weekday_date (Recently played's sections, Bold).",
+    "room": {
+      "font": "Small",
+      "px": 41
+    }
+  },
+  "day.thu": "Thu",
+  "@day.thu": {
+    "context": "Thursday, short (docs/LISTENING-STATS.md 7.6, 7.7): the label under its bar on Last 7 days (Small, centred in its column, 41 px), and the weekday of format.weekday_date (Recently played's sections, Bold).",
+    "room": {
+      "font": "Small",
+      "px": 41
+    }
+  },
+  "day.fri": "Fri",
+  "@day.fri": {
+    "context": "Friday, short (docs/LISTENING-STATS.md 7.6, 7.7): the label under its bar on Last 7 days (Small, centred in its column, 41 px), and the weekday of format.weekday_date (Recently played's sections, Bold).",
+    "room": {
+      "font": "Small",
+      "px": 41
+    }
+  },
+  "day.sat": "Sat",
+  "@day.sat": {
+    "context": "Saturday, short (docs/LISTENING-STATS.md 7.6, 7.7): the label under its bar on Last 7 days (Small, centred in its column, 41 px), and the weekday of format.weekday_date (Recently played's sections, Bold).",
+    "room": {
+      "font": "Small",
+      "px": 41
+    }
+  },
+  "day.sun": "Sun",
+  "@day.sun": {
+    "context": "Sunday, short (docs/LISTENING-STATS.md 7.6, 7.7): the label under its bar on Last 7 days (Small, centred in its column, 41 px), and the weekday of format.weekday_date (Recently played's sections, Bold).",
+    "room": {
+      "font": "Small",
+      "px": 41
+    }
+  },
+  "day.monday": "Monday",
+  "@day.monday": {
+    "context": "Monday, in full: Last 7 days' big day (docs/LISTENING-STATS.md 7.7, stats.big_day: \"Saturday was your big day: 2 h 1 min\"). Written as that sentence needs it (its case, its article).",
+    "room": null
+  },
+  "day.tuesday": "Tuesday",
+  "@day.tuesday": {
+    "context": "Tuesday, in full: Last 7 days' big day (docs/LISTENING-STATS.md 7.7, stats.big_day: \"Saturday was your big day: 2 h 1 min\"). Written as that sentence needs it (its case, its article).",
+    "room": null
+  },
+  "day.wednesday": "Wednesday",
+  "@day.wednesday": {
+    "context": "Wednesday, in full: Last 7 days' big day (docs/LISTENING-STATS.md 7.7, stats.big_day: \"Saturday was your big day: 2 h 1 min\"). Written as that sentence needs it (its case, its article).",
+    "room": null
+  },
+  "day.thursday": "Thursday",
+  "@day.thursday": {
+    "context": "Thursday, in full: Last 7 days' big day (docs/LISTENING-STATS.md 7.7, stats.big_day: \"Saturday was your big day: 2 h 1 min\"). Written as that sentence needs it (its case, its article).",
+    "room": null
+  },
+  "day.friday": "Friday",
+  "@day.friday": {
+    "context": "Friday, in full: Last 7 days' big day (docs/LISTENING-STATS.md 7.7, stats.big_day: \"Saturday was your big day: 2 h 1 min\"). Written as that sentence needs it (its case, its article).",
+    "room": null
+  },
+  "day.saturday": "Saturday",
+  "@day.saturday": {
+    "context": "Saturday, in full: Last 7 days' big day (docs/LISTENING-STATS.md 7.7, stats.big_day: \"Saturday was your big day: 2 h 1 min\"). Written as that sentence needs it (its case, its article).",
+    "room": null
+  },
+  "day.sunday": "Sunday",
+  "@day.sunday": {
+    "context": "Sunday, in full: Last 7 days' big day (docs/LISTENING-STATS.md 7.7, stats.big_day: \"Saturday was your big day: 2 h 1 min\"). Written as that sentence needs it (its case, its article).",
+    "room": null
+  },
+  "month.jan": "Jan",
+  "@month.jan": {
+    "context": "January, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2) and format.day_range_month (\"4–10 Nov\"): as the language shortens a month in a date (its full stop too, where it takes one).",
+    "room": null
+  },
+  "month.feb": "Feb",
+  "@month.feb": {
+    "context": "February, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2) and format.day_range_month (\"4–10 Nov\"): as the language shortens a month in a date (its full stop too, where it takes one).",
+    "room": null
+  },
+  "month.mar": "Mar",
+  "@month.mar": {
+    "context": "March, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2) and format.day_range_month (\"4–10 Nov\"): as the language shortens a month in a date (its full stop too, where it takes one).",
+    "room": null
+  },
+  "month.apr": "Apr",
+  "@month.apr": {
+    "context": "April, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2) and format.day_range_month (\"4–10 Nov\"): as the language shortens a month in a date (its full stop too, where it takes one).",
+    "room": null
+  },
+  "month.may": "May",
+  "@month.may": {
+    "context": "May, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2) and format.day_range_month (\"4–10 Nov\"): as the language shortens a month in a date (its full stop too, where it takes one).",
+    "room": null
+  },
+  "month.jun": "Jun",
+  "@month.jun": {
+    "context": "June, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2) and format.day_range_month (\"4–10 Nov\"): as the language shortens a month in a date (its full stop too, where it takes one).",
+    "room": null
+  },
+  "month.jul": "Jul",
+  "@month.jul": {
+    "context": "July, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2) and format.day_range_month (\"4–10 Nov\"): as the language shortens a month in a date (its full stop too, where it takes one).",
+    "room": null
+  },
+  "month.aug": "Aug",
+  "@month.aug": {
+    "context": "August, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2) and format.day_range_month (\"4–10 Nov\"): as the language shortens a month in a date (its full stop too, where it takes one).",
+    "room": null
+  },
+  "month.sep": "Sep",
+  "@month.sep": {
+    "context": "September, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2) and format.day_range_month (\"4–10 Nov\"): as the language shortens a month in a date (its full stop too, where it takes one).",
+    "room": null
+  },
+  "month.oct": "Oct",
+  "@month.oct": {
+    "context": "October, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2) and format.day_range_month (\"4–10 Nov\"): as the language shortens a month in a date (its full stop too, where it takes one).",
+    "room": null
+  },
+  "month.nov": "Nov",
+  "@month.nov": {
+    "context": "November, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2) and format.day_range_month (\"4–10 Nov\"): as the language shortens a month in a date (its full stop too, where it takes one).",
+    "room": null
+  },
+  "month.dec": "Dec",
+  "@month.dec": {
+    "context": "December, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2) and format.day_range_month (\"4–10 Nov\"): as the language shortens a month in a date (its full stop too, where it takes one).",
+    "room": null
   }
 }

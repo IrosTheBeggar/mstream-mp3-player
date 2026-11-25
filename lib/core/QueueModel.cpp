@@ -142,9 +142,10 @@ uint32_t* QueueModel::selection(const uint32_t* positions, uint32_t n, uint32_t*
   return bits;
 }
 
-bool QueueModel::insertAt(uint32_t at, const uint32_t* tracks, uint32_t n, Edit edit) {
+bool QueueModel::insertAt(uint32_t at, IdView tracks, Edit edit) {
+  uint32_t n = tracks.count;
   if (n == 0) return true;
-  if (!tracks) return false;
+  if (!tracks.first) return false;
   // As many as fit under the cap, the first ones, once what played (the
   // heard entries before the current one) is pushed out to make room,
   // oldest first, as many as the spare places lack; none: refused (full,
@@ -211,20 +212,21 @@ bool QueueModel::insertAt(uint32_t at, const uint32_t* tracks, uint32_t n, Edit 
   return true;
 }
 
-bool QueueModel::insertNext(const uint32_t* tracks, uint32_t n) {
+bool QueueModel::insertNext(IdView tracks) {
   const uint32_t at = current_ < 0 ? q_.size : static_cast<uint32_t>(current_) + 1;
-  return insertAt(at, tracks, n, Edit::InsertNext);
+  return insertAt(at, tracks, Edit::InsertNext);
 }
 
-bool QueueModel::append(const uint32_t* tracks, uint32_t n) { return insertAt(q_.size, tracks, n, Edit::Append); }
+bool QueueModel::append(IdView tracks) { return insertAt(q_.size, tracks, Edit::Append); }
 
 void QueueModel::put(uint32_t pos, uint32_t track, uint32_t rank) { q_.data[pos] = Entry{track, newKey(), rank}; }
 
-bool QueueModel::replace(const uint32_t* tracks, uint32_t n, uint32_t start, bool shuffled) {
+bool QueueModel::replace(IdView tracks, uint32_t start, bool shuffled) {
+  const uint32_t n = tracks.count;
   if (n == 0 && shuffled == shuffled_) return clear();
   // Past the cap, kMaxEntries of them (the class): a block of that.
   const uint32_t keep = n < kMaxEntries ? n : kMaxEntries;
-  if (n && (!tracks || !reserve(q_, keep))) return false;
+  if (n && (!tracks.first || !reserve(q_, keep))) return false;
   // The snapshot first: it holds the mode the queue was in (undo() puts it
   // back with the entries), then the mode this Play is laid out in.
   snapshot(n ? Edit::Replace : Edit::Clear);

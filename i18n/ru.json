@@ -1,7 +1,7 @@
 {
   "@@locale": "ru",
   "@@autonym": "Русский",
-  "@@note": "Russian, made for the device's UI from the mobile app's (mstream_music, lib/l10n/app_ru.arb, master bdb174e) and the terminal player's (mstream-terminal-player, locales/ru.yml, main b89ad0a) translations where they had the text or the term (both GPL-3.0, the same author's; their words, register and typography are kept: formal вы), and translated by a Fable agent (Claude) otherwise, then reviewed message by message by a second Fable agent. A machine translation, not yet reviewed by a native speaker: a review as a pull request on this file is welcome. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_ru.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' Auto DJ text (November 2026, docs/MOOD-FILTERS.md 8.2: autodj.status_waits_fit) was made the same way: the mobile app's autoDjSeedNoMatch and its word for the filters (moodFilters), from mstream_music master at d17c3fa5, fitted to en.json's room, not yet reviewed by a native speaker. The mood filters' Auto DJ page (November 2026, docs/MOOD-FILTERS.md 8, S5): mood.smart_filters, mood.any and mood.no_data are the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_ru.arb: autoDjMoodTitle, autoDjAny, autoDjNoMoodData); autodj.smart_sub, autodj.status_fits, autodj.status_coverage_mood, autodj.status_few, autodj.status_few_sub, toast.autodj_few, toast.autodj_no_close, toast.autodj_plays_once, toast.autodj_no_mood and empty.no_track_fits were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjNoMoodData for the mood, autoDjSeedNoMatch, mainSync for a sync), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The screen's touch setting (November 2026, Output > Touch when off and the glance it can show: settings.screen_touch, its three values and their lines, glance.hint; settings.screen_off_sub rewritten, since a touch no longer wakes the screen unless the setting says so) was translated by a Fable agent (Claude), in this file's words for the screen's other settings, fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker.",
+  "@@note": "Russian, made for the device's UI from the mobile app's (mstream_music, lib/l10n/app_ru.arb, master bdb174e) and the terminal player's (mstream-terminal-player, locales/ru.yml, main b89ad0a) translations where they had the text or the term (both GPL-3.0, the same author's; their words, register and typography are kept: formal вы), and translated by a Fable agent (Claude) otherwise, then reviewed message by message by a second Fable agent. A machine translation, not yet reviewed by a native speaker: a review as a pull request on this file is welcome. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_ru.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' Auto DJ text (November 2026, docs/MOOD-FILTERS.md 8.2: autodj.status_waits_fit) was made the same way: the mobile app's autoDjSeedNoMatch and its word for the filters (moodFilters), from mstream_music master at d17c3fa5, fitted to en.json's room, not yet reviewed by a native speaker. The mood filters' Auto DJ page (November 2026, docs/MOOD-FILTERS.md 8, S5): mood.smart_filters, mood.any and mood.no_data are the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_ru.arb: autoDjMoodTitle, autoDjAny, autoDjNoMoodData); autodj.smart_sub, autodj.status_fits, autodj.status_coverage_mood, autodj.status_few, autodj.status_few_sub, toast.autodj_few, toast.autodj_no_close, toast.autodj_plays_once, toast.autodj_no_mood and empty.no_track_fits were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjNoMoodData for the mood, autoDjSeedNoMatch, mainSync for a sync), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The screen's touch setting (November 2026, Output > Touch when off and the glance it can show: settings.screen_touch, its three values and their lines, glance.hint; settings.screen_off_sub rewritten, since a touch no longer wakes the screen unless the setting says so) was translated by a Fable agent (Claude), in this file's words for the screen's other settings, fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The listening stats' words (November 2026, docs/LISTENING-STATS.md 8.1: stats.window_all, stats.days_n, stats.today, stats.yesterday, stats.shelf_empty) are the mobile app's from mstream_music at d17c3fa5 (lib/l10n/app_ru.arb: its listening* keys), as it writes them; stats.title, stats.recent, stats.listened, stats.plays_label and stats.empty_title, too wide for their rooms as the app writes them, and stats.plays_n, which fits a shelf's rows but not the hub's Last 7 days line (stats.time_plays, Small 232 px: at 168 h it is 248 px at 9,999 plays and still 236 px at 118, in each of its forms), have short forms (below). The listening stats' other texts (November 2026, docs/LISTENING-STATS.md 8.2: toast.stats_needs_dates, toast.stats_needs_month, the rest of stats.*, format.day_month, format.weekday_date, format.day_range, format.day_range_month, day.* and month.*) take the mobile app's words from mstream_music at d17c3fa5 where it has them (lib/l10n/app_ru.arb: its listening* keys for прослушивания, засчитываются and Сеансы, listeningScopeSheetDevice for хранится, agoMinutes and agoHours) and the terminal player's from mstream-terminal-player at b89ad0a (locales/ru.yml: gui.nav.most_played for Популярные, gui.top.mp3 for the MP3 Player tab, sta.note_top_track for последнее, sta.empty_state_detail's 'пока вы слушаете', and sta.weekdays_short, sta.months_short and sta.day_label for the dates), and this file's words (Ожидание, Не хватает памяти, не читается, Карта вернулась, Наугад, Синтетическая as library.synthetic); the rest was translated by a Claude agent (Claude Opus 5.5), then reviewed by a second, fitted to en.json's rooms and to test_ui_library's with Библиотека's crumb (a note says where a room made a text shorter), not yet reviewed by a native speaker. The short forms written for the six ARB words that did not fit depart from the ARB (each one's note gives the widths): stats.title Статистика (the terminal player's sta.title), stats.recent Недавние (the mobile app's autoDjFirstSongRecent, the terminal player's sta.tab_recent), stats.listened Время (the mobile app's listeningByTime), stats.plays_label Прослушано, stats.empty_title Прослушиваний нет (without пока) and stats.plays_n '{0} просл.' (the terminal player's abbreviation, its column ПРОСЛ.).",
   "boot.touch_hint": "Касания мимо? Держите палец на экране.",
   "coach.header_tip": "Совет {0} из {1}",
   "coach.header_hint": "тап: дальше",
@@ -95,6 +95,8 @@
     "note": "With a ': ' to split at: one line is 385 px in Body, the toast's line 284."
   },
   "toast.autodj_no_mood": "Нет данных о настроении: синхронизируйте карту с mStream",
+  "toast.stats_needs_dates": "Нужны даты: {0}",
+  "toast.stats_needs_month": "Нужен месяц прослушиваний: {0}",
   "hud.bluetooth": "Bluetooth: {0}",
   "hud.bluetooth_connecting": "Bluetooth: подключение…",
   "hud.speaker_paused": "Динамик, пауза: нажмите B",
@@ -339,6 +341,156 @@
   "mood.smart_filters": "Умные фильтры",
   "mood.any": "Не важно",
   "mood.no_data": "Нет данных о настроении",
+  "stats.title": "Статистика",
+  "@stats.title": {
+    "note": "Статистика, the terminal player's name for its stats pages (sta.title), departing from the ARB: the mobile app's Статистика прослушиваний (listeningTitle) is 234 px in the entry row's Body 204."
+  },
+  "stats.entry_empty": "Копится, пока вы слушаете",
+  "@stats.entry_empty": {
+    "note": "Копится (builds up, as statistics do: 'статистика копится'), its subject the row's title (stats.title, Статистика), and 'пока вы слушаете' as the terminal player's sta.empty_state_detail: the mobile app's first sentence (listeningEmptyDevice) is far wider, 'Прослушивания появятся здесь' 221 px and 'Появится, когда вы слушаете' 206 in Small 204; 'Собирается, пока вы слушаете' is 214."
+  },
+  "stats.counting": "Подсчёт прослушиваний…",
+  "stats.waiting": "Ожидание карты…",
+  "stats.no_room": "Сейчас не хватает памяти",
+  "stats.unread": "Статистика не читается",
+  "@stats.unread": {
+    "note": "Не читается (can't be read), as the device says of the card and the Auto DJ index (card.unknown_title, autodj.status_unreadable): 'Не удалось прочитать статистику' is 237 px in the entry row's Small 204."
+  },
+  "stats.card_back": "Карта вернулась",
+  "stats.no_card": "Нет карты: счёт не ведётся",
+  "@stats.no_card": {
+    "note": "Счёт не ведётся (no count is kept): 'Нет карты: прослушивания не считаются' is 348 px in Body 300, '…: прослушивания не в счёт' 311."
+  },
+  "stats.since": "{0} с {1}",
+  "@stats.since": {
+    "note": "с before the date, as the terminal player writes it (sta.week_of, 'Неделя с %{date}'). On the 2nd of a month it reads 'с 2 сен', where Russian writes 'со 2' (со второго): the date's number can't choose the form, and 'со' every time would be wrong from the 3rd. For a native review, as Italian's 'dal 8'."
+  },
+  "stats.since_only": "с {0}",
+  "@stats.since_only": {
+    "note": "As stats.since: 'с 2 сен' on the 2nd of a month, where Russian writes 'со 2'; the date's number can't choose the form. For a native review."
+  },
+  "stats.last7": "За 7 дней",
+  "@stats.last7": {
+    "note": "За 7 дней (over 7 days), as stats.window_all's За всё время: 'Последние 7 дней' is 171 px in Bold 161, the page's title beside Библиотека's crumb."
+  },
+  "stats.time_plays": "{0} · {1}",
+  "stats.plays_n": {
+    "one": "{0} просл.",
+    "few": "{0} просл.",
+    "many": "{0} просл."
+  },
+  "@stats.plays_n": {
+    "note": "просл., the terminal player's abbreviation (its PLAYS column, ПРОСЛ.), departing from the ARB: the mobile app's listeningPlays (прослушивание, прослушивания, прослушиваний) is 248 px in the hub's Last 7 days line (stats.time_plays, Small 232) at 168 ч 59 мин and 9 999 plays, and 236 px at 118; '{0} прослуш.' would be 203. An abbreviation doesn't decline, so the three forms are one (as pair.found's шт.)."
+  },
+  "stats.most_played": "Популярные",
+  "stats.new_finds": "Новые находки",
+  "stats.new_finds_sub": {
+    "one": "{0} новый трек за 30 дней",
+    "few": "{0} новых трека за 30 дней",
+    "many": "{0} новых треков за 30 дней"
+  },
+  "@stats.new_finds_sub": {
+    "note": "новый (new to you) for 'first heard', as the shelf's title says (Новые находки), with трек as library.found: '{0} трек впервые услышан за 30 дней' is 258 px in Small 232 at 21 (312 at 99 999), so it would never be drawn, and 'впервые за 30 дней' reads as 'for the first time in 30 days' (after a gap). So the long form is the short one with трек."
+  },
+  "stats.new_finds_sub_short": {
+    "one": "{0} новый за 30 дней",
+    "few": "{0} новых за 30 дней",
+    "many": "{0} новых за 30 дней"
+  },
+  "stats.old_favourites": "Старое любимое",
+  "@stats.old_favourites": {
+    "note": "Старое любимое (old favourite things); neither app has a word for it: 'Старые любимые' is 162 px in Bold 161 beside Библиотека's crumb, 'Старые любимцы' 163, 'Давно не слушали' 173."
+  },
+  "stats.old_favourites_sub": {
+    "one": "{0} трек — часто, но давно",
+    "few": "{0} трека — часто, но давно",
+    "many": "{0} треков — часто, но давно"
+  },
+  "@stats.old_favourites_sub": {
+    "note": "'часто, но давно' (often, but long ago: played often, not lately), after a dash: '1 000 треков — часто слушали, но давно' is 282 px in Small 232 (with English's comma, 269)."
+  },
+  "stats.not_played": "Ещё не слушали",
+  "@stats.not_played": {
+    "note": "Ещё не слушали ((you) haven't listened yet): 'Пока не слушали' is 162 px in Bold 161 beside Библиотека's crumb, 'Непрослушанные' 163."
+  },
+  "stats.recent": "Недавние",
+  "@stats.recent": {
+    "note": "Недавние, the mobile app's autoDjFirstSongRecent and the terminal player's Recent, its stats' log of plays (sta.tab_recent; its gui.nav.recent, the same word, is Recently added), departing from the ARB: the app's Недавно прослушанные (autoDjRecentlyPlayed) is 225 px in Bold 161 beside Библиотека's crumb."
+  },
+  "stats.no_dates": "Дат пока нет: часы не настроены",
+  "stats.clock_fix": "Подключите к вкладке MP3-плеер",
+  "@stats.clock_fix": {
+    "note": "MP3-плеер, the terminal player's name for its MP3 Player tab (gui.top.mp3), with no quotes, as it names its tabs ('на вкладке Доступ'). Capitalized also after the toast's ': ' (toast.stats_needs_dates), as it is drawn alone on the hub's status row. 236 px in Small 250. For a native review: one plugs in to a computer, not a tab; 'Подключите к ПК (вкладка MP3-плеер)' and 'Подключите к компьютеру: MP3-плеер' are 269 px, 'Подключите и откройте вкладку MP3-плеер' 304, and 'Подключите (вкладка MP3-плеер)', the French file's way, fits at 234."
+  },
+  "stats.needs_dates": "Нужны даты",
+  "stats.warming": "Откроется {0}, после месяца",
+  "@stats.warming": {
+    "note": "после месяца (after a month): 'Откроется {0}, после месяца прослушиваний' is 336 px in Small 250 and 412 in Body 300, so it would never be drawn; the toast (toast.stats_needs_month) names the month of plays."
+  },
+  "stats.warming_short": "Откроется {0}",
+  "stats.window_all": "За всё время",
+  "stats.days_n": {
+    "one": "{0} день",
+    "few": "{0} дня",
+    "many": "{0} дней"
+  },
+  "stats.sub_last7": "за последние 7 дней",
+  "stats.sub_last30": "за последние 30 дней",
+  "stats.first_heard": "новые за 30 дней",
+  "@stats.first_heard": {
+    "note": "новые (new) for 'first heard', as the shelf's title says (Новые находки): 'впервые услышаны за 30 дней' is 212 px in Small 161 (under the title, beside Библиотека's crumb), and 'впервые за 30 дней' reads as 'for the first time in 30 days' (after a gap)."
+  },
+  "stats.not_in_30": "не слушали 30 дней",
+  "stats.found_autodj": "найден Авто-DJ",
+  "@stats.found_autodj": {
+    "note": "найден (found: the track, masculine as трек); Авто-DJ as the device writes it."
+  },
+  "stats.found_shuffle": "найден наугад",
+  "@stats.found_shuffle": {
+    "note": "найден наугад (found at random): Наугад is the device's Shuffle all (empty.shuffle_all)."
+  },
+  "stats.last_on": "последнее {0}",
+  "@stats.last_on": {
+    "note": "последнее (the last, the play's), the terminal player's (sta.note_top_track): the mobile app's 'последний раз {0}' (songInfoLastPlayed) leaves the artist under 32 px of the row's 264 in 94 of test_ui_library's cases (249 px with 9 999 plays), so the row would draw the count alone; with последнее in 6, all at 9 999 plays."
+  },
+  "stats.ago_min": "{0} мин назад",
+  "stats.ago_h": "{0} ч назад",
+  "stats.today": "Сегодня",
+  "stats.yesterday": "Вчера",
+  "stats.this_session": "Этот сеанс",
+  "stats.earlier": "Ранее",
+  "stats.shelf_empty": "За этот период ничего нет.",
+  "stats.utc": "{0} (UTC)",
+  "stats.listened": "Время",
+  "@stats.listened": {
+    "note": "Время, the mobile app's word for listening time on its Top page (listeningByTime), departing from the ARB: Время прослушивания (listeningTileTime) is 156 px in Small 150."
+  },
+  "stats.plays_label": "Прослушано",
+  "@stats.plays_label": {
+    "note": "Прослушано (listened: the count under it), departing from the ARB: Прослушивания (listeningTilePlays) is 110 px in Small 100."
+  },
+  "stats.big_day": "Максимум {0}: {1}",
+  "@stats.big_day": {
+    "note": "Максимум (the most) {0}: the mobile app's 'Больше всего {date}:' (listeningMostOnDay; the terminal player's 'больше всего %{day}') is 290 px with в понедельник and 23 ч 59 мин in Small 288. The day names (day.monday ... day.sunday) carry their preposition."
+  },
+  "stats.autodj_right": "Авто-DJ угадал в {0} случаев",
+  "@stats.autodj_right": {
+    "note": "угадал (guessed right) в {0} случаев (in {0} of the cases)."
+  },
+  "stats.empty_title": "Прослушиваний нет",
+  "@stats.empty_title": {
+    "note": "Without пока (yet), departing from the ARB: Прослушиваний пока нет (listeningEmptyTitle) is 323 px in Title 304, 'Ещё нет прослушиваний' 314; the empty state's lines under it say the rest."
+  },
+  "stats.empty_rule": "Засчитываются от 30 с или половины трека",
+  "@stats.empty_rule": {
+    "note": "Засчитываются (are counted), the apps' word for a counted play (listeningTileSubCounted, sta.sub_counted), its subject the title's прослушивания."
+  },
+  "stats.empty_rule_short": "Засчитываются от 30 с",
+  "stats.empty_card": "Ваша статистика хранится на этой карте",
+  "stats.made_up": "Синтетическая статистика: только просмотр",
+  "@stats.made_up": {
+    "note": "As library.synthetic (Синтетическая библиотека: только просмотр)."
+  },
   "card.another": "Другая карта: перезапуск",
   "card.back": "Карта вернулась: перезапуск",
   "queue_cap.full": {
@@ -966,5 +1118,50 @@
   "format.mb": "{0} МБ",
   "format.khz": "{0} кГц",
   "format.hz": "{0} Гц",
-  "format.list_sep": ", "
+  "format.list_sep": ", ",
+  "format.day_month": "{0} {1}",
+  "format.weekday_date": "{0}, {1}",
+  "@format.weekday_date": {
+    "note": "With a comma, as Russian writes a weekday before its date (Ср, 30 сен); the terminal player's sta.day_key has none, but it is a column's key, not a date."
+  },
+  "format.day_range": "{0} – {1}",
+  "@format.day_range": {
+    "note": "A spaced dash between two dates that hold spaces (28 сен – 4 окт), as Russian writes such a span (CLDR's ru, d MMM – d MMM); in one month, format.day_range_month keeps it unspaced between the numbers (4–10 ноя). '30 июн – 30 июн (UTC)' is 152 px in the Last 7 days header's Small 161."
+  },
+  "format.day_range_month": "{0}–{1} {2}",
+  "day.mon": "Пн",
+  "@day.mon": {
+    "note": "day.mon ... day.sun are the terminal player's sta.weekdays_short, capitalized as labels (it writes them lowercase in running text)."
+  },
+  "day.tue": "Вт",
+  "day.wed": "Ср",
+  "day.thu": "Чт",
+  "day.fri": "Пт",
+  "day.sat": "Сб",
+  "day.sun": "Вс",
+  "day.monday": "в понедельник",
+  "@day.monday": {
+    "note": "day.monday ... day.sunday carry their preposition (в понедельник, во вторник), as only stats.big_day draws them: 'Максимум в понедельник: 2 ч 1 мин'."
+  },
+  "day.tuesday": "во вторник",
+  "day.wednesday": "в среду",
+  "day.thursday": "в четверг",
+  "day.friday": "в пятницу",
+  "day.saturday": "в субботу",
+  "day.sunday": "в воскресенье",
+  "month.jan": "янв",
+  "month.feb": "фев",
+  "month.mar": "мар",
+  "month.apr": "апр",
+  "month.may": "мая",
+  "@month.may": {
+    "note": "month.jan ... month.dec are the terminal player's sta.months_short, as it writes them (no full stop), in the genitive (мая), as a month here always follows its day."
+  },
+  "month.jun": "июн",
+  "month.jul": "июл",
+  "month.aug": "авг",
+  "month.sep": "сен",
+  "month.oct": "окт",
+  "month.nov": "ноя",
+  "month.dec": "дек"
 }

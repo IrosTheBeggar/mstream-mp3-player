@@ -9,33 +9,42 @@
 // uniform and the hardware scroll (VScrollMap) and the kinetic scroll
 // (KineticScroll) work in plain pixels:
 //
-//   [top bar]     optional item 0: a container's Play / Play next / + Queue
+//   [top row]     optional: a row of the source's own ahead of the top bar
+//                 (Most played's tray: LISTENING-STATS.md 7.2 item 1)
+//   [top bar]     optional: a container's Play / Play next / + Queue
 //   row 0
 //   row 1         <- expanded: a tap opened its inline action bar
 //   [inline bar]  right under the expanded row (at most one)
 //   row 2
 //   ...
 //
-// Offsets are content pixels from the first item (0: item 0 at the top of
-// the viewport). Also the A-Z rail's geometry: where its thumb sits for an
+// The top row and the top bar are the lead items (0-2 of them). Offsets are
+// content pixels from the first item (0: item 0 at the top of the
+// viewport). Also the A-Z rail's geometry: where its thumb sits for an
 // offset, and the offset a scrub to a point asks for. Portable, host-tested.
 class ListLayout {
 public:
   static constexpr int kPitch = 42;
 
-  enum class Kind : uint8_t { None, TopBar, Row, InlineBar };
+  // (TopRow last: the others keep their values.)
+  enum class Kind : uint8_t { None, TopBar, Row, InlineBar, TopRow };
   struct Item {
     Kind kind = Kind::None;
     int32_t row = -1;  // the data row (Row, InlineBar); -1 otherwise
   };
 
-  // The list's data rows and whether it starts with a top bar. The
-  // expanded row is kept if it still exists.
-  void set(uint32_t rows, bool topBar);
+  // The list's data rows, whether it starts with a top bar, and whether a
+  // top row comes ahead of that. The expanded row is kept if it still exists.
+  void set(uint32_t rows, bool topBar, bool topRow);
+  // Today's form, every list but the stats shelves': no top row.
+  void set(uint32_t rows, bool topBar) { set(rows, topBar, false); }
   uint32_t rows() const { return rows_; }
   bool topBar() const { return topBar_; }
+  bool topRow() const { return topRow_; }
+  // The items ahead of row 0.
+  uint32_t leads() const { return (topRow_ ? 1u : 0u) + (topBar_ ? 1u : 0u); }
 
-  uint32_t itemCount() const { return rows_ + (topBar_ ? 1u : 0u) + (expanded_ >= 0 ? 1u : 0u); }
+  uint32_t itemCount() const { return rows_ + leads() + (expanded_ >= 0 ? 1u : 0u); }
   int32_t contentPx() const { return static_cast<int32_t>(itemCount()) * kPitch; }
   int32_t maxOffset(int32_t viewportPx) const {
     const int32_t m = contentPx() - viewportPx;
@@ -91,5 +100,136 @@ public:
 private:
   uint32_t rows_ = 0;
   bool topBar_ = false;
+  bool topRow_ = false;  // (in the padding after topBar_)
   int32_t expanded_ = -1;
 };
+// ListView's layout_, inside ui::Ui: the top row took a padding byte,
+// nothing more, so ui::Ui keeps main's carve (LISTENING-STATS.md 7.2,
+// "Where S3b's UI bytes live").
+static_assert(sizeof(ListLayout) == 12, "ListLayout grew");
+
+// The pure rules a list follows when its rows change under it, beside the
+// layout (LISTENING-STATS.md 7.2, as decided): its edge, where a shelf's
+// rows land, and what a recount leaves stale on screen. Host-tested.
+namespace listlayout {
+
+// The list's right edge: nothing, a thin scrollbar, or the A-Z rail.
+enum class Edge : uint8_t { None, Rail, Bar };
+// A long alphabetical list gets the A-Z rail (the review: only above about
+// 30 entries).
+constexpr uint32_t kRailMinRows = 30;
+
+// ListView::setEdge()'s rule: the rail for a long A-Z list over 30 rows, a
+// scrollbar for any other list longer than the viewport, else nothing.
+// `railRows`: the source's rows sorted by name.
+constexpr Edge edgeOf(int32_t contentPx, int32_t heightPx, bool alphabetical, uint32_t railRows) {
+  return contentPx <= heightPx                       ? Edge::None
+         : alphabetical && railRows > kRailMinRows ? Edge::Rail
+                                                     : Edge::Bar;
+}
+// The rows' width beside the edge: 320, 312 beside the bar, 284 beside the rail.
+constexpr int widthOf(Edge e) { return e == Edge::Rail ? 284 : e == Edge::Bar ? 312 : 320; }
+
+// Where a page's rows land (7.2, "An open bar across a new ask"): the
+// ref's place put back over the rows that came (0 to N, a pass or two
+// after the push; the ref was kept while the rows were pending).
+//   - The scroll is kept, clamped to the new items.
+//   - Within the visit (`sameVisit`) no row moved, so the bar comes back if
+//     its row is there. Across a new ask (a tab back, a wake, Try again)
+//     rows can move (a play counted meanwhile), so it never does: a bar
+//     reopened by its index could act on a track the listener didn't pick.
+//   - A scroll below 0 (-1, the page's own default; kShowPlaying, -2) comes
+//     back as it went in: the caller resolves it (playingRow()).
+// `leads`: the lead items (0-2).
+struct Place {
+  int32_t offset = 0;
+  int32_t expanded = -1;
+};
+Place arrival(int32_t refScroll, int32_t refExpanded, uint32_t rows, uint32_t leads, bool sameVisit,
+              int32_t heightPx);
+
+// What a recount leaves stale on screen (7.2 item 4, as decided: a recount
+// pushes one stale item a pass, never the whole band), at the drawn offset
+// `drawn`. A position is stale when its item changed (kind, row), when its
+// data row is at or past `changedRow` (the first row whose picture may
+// differ: 0 for all, as at an arrival or a tray tap; from's rows() for only
+// the new ones), when its row became or stopped being the expanded one (a
+// bar folded or opened: the row's fill and divider), when the edge changed
+// (every row's width), or when it held the old empty line's ground (a list
+// with no rows: everything under its lead items) and the new list doesn't
+// draw its own there. A blank ground under the new empty line isn't: that
+// line is the caller's to draw, after the pushes, when `to` has no rows.
+// `target`: where the list is to stand after (arrival()'s offset at a
+// landing, resolved by the caller; the drawn offset for a recount in
+// place); below 0 reads as 0.
+struct Staging {
+  // The positions to push one a pass, top first: [first, end), none when
+  // first == end, at the drawn offset. Any between that aren't stale are
+  // pushed as well (a superset, never a miss). A position at or past `to`'s
+  // items is cleared.
+  uint32_t first = 0, end = 0;
+  // Item 0 is a lead item (the top row, or a top bar) in both and on
+  // screen, and its picture changed (`leadChanged`: the tray's 30-day cell
+  // now reading "16 days" at a landing, the entry row's line) or the edge
+  // did: the caller redraws it in place (refreshTopRow), before the rest.
+  // [first, end) never holds it then.
+  bool lead = false;
+  bool edge = false;  // the edge changes (320, 312, 284 px)
+  // The edge is drawn again: it changed, or the list's height did under a
+  // scrollbar or rail (the thumb's size and place follow it).
+  bool rail = false;
+  // Where the list stands after: `target`, clamped to `to`'s items.
+  int32_t offset = 0;
+  // `offset` isn't the drawn one, either way: the list has to move as well,
+  // which a push in place can't do. That is a shrink past the new end (the
+  // drawn offset clamped), or a kept scroll put back at a landing (a shelf
+  // drawn at 0 while its rows were pending, its ref's 420 px). A move of
+  // more than ListView::kMaxStep (84 px) isn't one hardware-scroll step:
+  // how the caller makes it is its own rule, not this one's.
+  bool moves = false;
+};
+Staging staging(const ListLayout& from, Edge fromEdge, const ListLayout& to, Edge toEdge, int32_t drawn,
+                int32_t target, int32_t heightPx, uint32_t changedRow, bool leadChanged);
+
+// How ListView::recountStaged() draws a recount, from staging()'s answer
+// (`drawn` as given to it; `maxStep`: ListView::kMaxStep, the hardware
+// scroll's one-hold step). S3b's rule for a place that moves (7.2: "no
+// whole-band reload", the scroll kept):
+//   - InPlace: the list stays; its stale items are pushed one a pass.
+//   - Move: the new offset is at most `maxStep` lines away: one move there
+//     (one bus hold of new lines, from slots rendered for the new rows),
+//     then the stale items still on screen, one a pass.
+//   - Band: further (a shelf drawn at 0 while its rows were pending, its
+//     ref's 420 px, at a wake; a shrink from far down): the band is drawn
+//     in place at the new offset a row a pass, as a scrub's jump is
+//     (ListView::startBand()). Every line on screen is the new offset's
+//     after it, so nothing else is owed. Not a whole-band draw in one pass
+//     (35-50 ms idle, 80-100 with an MP3), nor a slide there in steps (the
+//     list would scroll by itself for five frames).
+enum class Way : uint8_t { InPlace, Move, Band };
+constexpr Way wayOf(const Staging& s, int32_t drawn, int32_t maxStep) {
+  const int32_t d = s.offset - (drawn > 0 ? drawn : 0);
+  if (!s.moves) return Way::InPlace;
+  return d <= maxStep && -d <= maxStep ? Way::Move : Way::Band;
+}
+
+// What an empty list draws in its band (7.2 item 5; ListView::drawEmpty()).
+//   - None: it has rows, or only a top bar of buttons over none (the bar
+//     alone, as before 7.2).
+//   - State: no items at all: the source's empty state (the disc, the
+//     title, the buttons), or its line.
+//   - Line: no rows under lead items that are rows (the top row; the top
+//     bar when it is a row: the Albums list's filters, Most played's tray):
+//     the line alone, below them. The empty state's buttons couldn't be
+//     pressed there (ListView::onEvent(): only with no items).
+enum class Empty : uint8_t { None, State, Line };
+struct EmptyLine {
+  Empty kind = Empty::None;
+  // The line's 56-line strip, from the band's top: under the lead items,
+  // 42 px each (114 on screen under one, 156 under two); else 40.
+  int32_t top = 40;
+  int32_t textY = 24;  // its text's centre in the strip: 36 under lead items, else 24
+};
+EmptyLine emptyLine(const ListLayout& l, bool topBarIsRow);
+
+}  // namespace listlayout

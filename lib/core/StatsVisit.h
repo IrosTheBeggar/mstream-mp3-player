@@ -45,6 +45,11 @@
 //     worker's 30 s give-up's hold and the wait's start (StatsLists'
 //     gateOf() and loop()), pure; restHolds(): whether the tag scan's
 //     memory holds the visits (CardTasks' word, kWhyRest), pure.
+//   - S3b's: the pages' asks (UiAsk, here so ui/UiHost.h can name it);
+//     Not played yet's 30 days, the one rule for the visit's grade
+//     (StatsLists) and the shelf (statsview::notPlayedOpen()); and
+//     writeMadeUp(), a made-up snapshot for the console's look-only views
+//     (9.3's uiSx<n>), marked kFlagMadeUp in its header.
 // Portable, host-tested (test_stats_visit). No allocation.
 namespace statsvisit {
 
@@ -70,8 +75,10 @@ constexpr uint16_t kNoRow = 0xFFFF;    // an id field with no wanted row (resolv
 constexpr uint32_t kCountMax = 0xFFFF;         // a count saturates
 constexpr uint32_t kNewFindsCountMax = 0x3FFF;  // ... New finds' (bits 14-15 the source)
 constexpr uint32_t kWhenMax = 0xFFFFFD;        // `when` saturates (in 2057)
-constexpr uint32_t kWhenEarlier = 0xFFFFFE;    // undated, before this session
-constexpr uint32_t kWhenSession = 0xFFFFFF;    // undated, this session (lastOrd the live round)
+// The codes: a dated snapshot's rows with no dated play; every row of an
+// undated one (4.3's "This session", then "Earlier": write()).
+constexpr uint32_t kWhenEarlier = 0xFFFFFE;    // before this session
+constexpr uint32_t kWhenSession = 0xFFFFFF;    // this session (lastOrd the live round)
 constexpr uint32_t kNoAlbum = 0xFFFFFFFF;      // albumAt() past the count
 // Most played's window (the header's byte; 7.1's PageRef window).
 constexpr uint8_t k7Days = 0, k30Days = 1, kAllTime = 2;
@@ -80,6 +87,15 @@ constexpr uint8_t kFlagDated = 1;      // the clock was set at the ask
 constexpr uint8_t kFlagNotPlayed = 2;  // the bits and the directory are there
 constexpr uint8_t kFlagResolved = 4;   // the ids are track ids (resolve())
 constexpr uint8_t kFlagWritten = 8;    // write() ended
+// Made up (writeMadeUp(): the console's uiSx views, look only), never a
+// rank's. A real ask's write() clears it with the rest of the flags. Kept
+// here, not in StatsLists (44 B, full: its static_assert), so whoever reads
+// the block can tell (Hk and Hv: S3b's S12).
+constexpr uint8_t kFlagMadeUp = 16;
+// RCNT short of the 30-day window (statsrank::rcntShort(): its oldest day
+// after DAYS' first played day there), set by write() from the report: the
+// 30-day cell then reads the days RCNT holds (7.6, S3b's review of S5).
+constexpr uint8_t kFlagRcntShort = 32;
 
 // The grades (9.7): the visit's Full (Not played yet's played set) and
 // Lists, and Not played yet's lean ask, with the folders' states or not.
@@ -118,6 +134,8 @@ public:
   bool resolved() const { return written() && (flags() & kFlagResolved) != 0; }
   bool dated() const { return (flags() & kFlagDated) != 0; }
   bool hasNotPlayed() const { return written() && (flags() & kFlagNotPlayed) != 0; }
+  bool madeUp() const { return written() && (flags() & kFlagMadeUp) != 0; }
+  bool rcntShort() const { return written() && (flags() & kFlagRcntShort) != 0; }
   Grade grade() const;
   // The key (the index it was made over) and whether `stamp` and `tracks`
   // are it (a remount's index that isn't releases it: 9.7's "the snapshot's
@@ -139,7 +157,8 @@ public:
   uint32_t rows(List l) const;
   uint32_t total(List l) const;
   // DAYS ⊕ the records' first and newest day (O5's span: newest - first +
-  // 1, 0 with none), RCNT's oldest, sinceDay (Fold::sinceDayNow()).
+  // 1, 0 with none), RCNT's oldest (the days it holds, with rcntShort()),
+  // sinceDay (Fold::sinceDayNow()).
   uint16_t firstDay() const;
   uint16_t newestDay() const;
   uint16_t rcntFirstDay() const;
@@ -191,6 +210,13 @@ struct Context {
 // its row in `wanted` (kNoRow when it has none) and its facts, the totals,
 // the 7 days and the span from `report`; every other byte of the block
 // (bytesFor(ctx.albums)) zero. `snap` is a block of `bytes`, as carved.
+// Recently played's `when`: dated, a row's minute, or with no dated play
+// kWhenSession (lastOrd ctx.liveRound) or kWhenEarlier; ranked with no
+// clock, kWhenSession for the rank's own rows of this session
+// (Entry::session: lastOrd its live round, whatever lastAt) and
+// kWhenEarlier for every other, no minute (4.3: "This session", then
+// "Earlier"; the owner's call, 2026-11-24). The ask gives ctx.liveRound
+// the rank's (Input::liveRound), so the header's round is the rank's.
 // False, nothing written: a library past kMaxTracks or kMaxAlbums, or a
 // block short of bytesFor(ctx.albums) (a held snapshot re-asked over an
 // index with more albums). A backstop in the firmware: StatsLists'
@@ -212,6 +238,64 @@ bool resolve(const statsmap::Wanted& wanted, Snapshot* snap);
 // over `index` or without bits, or the snapshot's key or albums not the
 // index's.
 bool notPlayed(const statsmap::Map& map, const LibraryIndex& index, Snapshot* snap);
+
+// ---------------------------------------------------------------------------
+// A made-up snapshot (9.3's uiSx<n>: 1 a full card, 3 no clock, 4 day 5 of
+// counting; statsview::madeUpView() gives each recipe), look only. It is
+// written as a landed one reads: the header whole, the 7 days, each list's
+// rows at kStrides, the flags written and resolved (and kFlagMadeUp). Its
+// key is the live index's, so StatsLists::loop()'s key check keeps it, and
+// its ids are that index's tracks (spread over them: a step coprime to the
+// track count, each list from its own place, so no id twice in a list), so
+// the pages draw real names. Nothing is ranked or read: the counts, days
+// and times are the recipe's, kept to 4.3's rules (Old favourites' plays
+// and last days).
+// ---------------------------------------------------------------------------
+struct MadeUp {
+  uint64_t buildStamp = 0;  // the live index's key
+  uint32_t trackCount = 0;
+  uint32_t albums = 0;      // its albumCount(): the block's bytesFor(albums)
+  Grade grade = Grade::Full;
+  bool dated = true;        // the clock set at the "ask" (else the lists that need it have no rows)
+  uint32_t time = 0;        // with dated: a row's time (seconds since 2026-01-01, plus 1)
+  uint16_t today = statsfold::kUnsetDay;  // with dated
+  uint32_t liveRound = 1;
+  uint16_t sinceDay = statsfold::kUnsetDay;
+  uint16_t firstDay = statsfold::kUnsetDay;  // DAYS' first and newest dated day (O5's span)
+  uint16_t newestDay = statsfold::kUnsetDay;
+  uint16_t rcntFirstDay = statsfold::kUnsetDay;
+  bool rcntShort = false;   // with dated: kFlagRcntShort (RCNT capped: the 30-day cell its days)
+  uint8_t window = kAllTime;
+  uint32_t version = 0;
+  statsrank::Day days[statsrank::kWeekDays];  // oldest first (written as 0 undated, as a rank's)
+  // Each list: its rows (cut to its room, its cap and the tracks; none for
+  // a list the clock unset doesn't offer: Ranker::offered()), its total (at
+  // least the rows) and its first row's count (each next row one less, at
+  // least 1; Old favourites' at least 5, 4.3's rule, their last days from
+  // today - 31 down to sinceDay, spread, never before it). Recently
+  // played's rows[] are its dated ones (none undated).
+  uint32_t rows[statsrank::kLists] = {};
+  uint32_t totals[statsrank::kLists] = {};
+  uint32_t topCount[statsrank::kLists] = {};
+  // Recently played's dated rows: the first `recentFirstAgoMin` minutes
+  // before `time`'s minute, each next `recentStepMin` before the last; then
+  // `sessionRows` of this session (kWhenSession) and `earlierRows` before
+  // it (kWhenEarlier), last, as a dated rank orders them. Undated (view 3):
+  // no dated row, `sessionRows` first, then `earlierRows`, as a rank with
+  // no clock orders and codes them (4.3: "This session", then "Earlier").
+  uint32_t recentFirstAgoMin = 25;
+  uint32_t recentStepMin = 60;
+  uint32_t sessionRows = 0;
+  uint32_t earlierRows = 0;
+  // Not played yet: the album at place k of albumsAZ() not played when k is
+  // a multiple of `notPlayedEvery` (its bits, the directory and the count,
+  // kFlagNotPlayed); 0: none written (a Lists grade's snapshot).
+  uint32_t notPlayedEvery = 0;
+};
+// The block's every byte (bytesFor(m.albums)), as write() makes them, then
+// resolve()'s and notPlayed()'s. False, nothing written: no block, a library
+// past kMaxTracks or kMaxAlbums, or `bytes` short of bytesFor(m.albums).
+bool writeMadeUp(const MadeUp& m, Snapshot* snap, size_t bytes);
 
 // ---------------------------------------------------------------------------
 // The grades (9.7): each region's place in the ask's one block
@@ -353,6 +437,37 @@ inline bool stallHolds(bool stalled, uint32_t nowMs, uint32_t startMs) {
 }
 inline bool waitStartMoves(uint8_t why, ScanScheduler::Wait wait, bool stalled) {
   return why == 0 && wait == ScanScheduler::Wait::None && !stalled;
+}
+
+// ---------------------------------------------------------------------------
+// S3b: the pages' asks and Not played yet's month
+// ---------------------------------------------------------------------------
+// The stats pages' asks (9.7's API, StatsLists::ask()): the visit's, and Not
+// played yet's lean ask (its Try again after a visit that took Lists). Here,
+// not in src/app, so ui/UiHost.h can name it (StatsLists keeps its name:
+// `using UiAsk`).
+enum class UiAsk : uint8_t { Visit, NotPlayed };
+
+// Not played yet opens after this many counting days (call 4, O5: 3.1),
+// as New finds and Old favourites do.
+constexpr uint32_t kNotPlayedDays = 30;
+// The counting days (4.1): today - sinceDay + 1, at least 1; 0 when they
+// aren't known (the clock unset, or no first day yet).
+constexpr uint32_t countingDaysOf(bool dated, uint16_t today, uint16_t sinceDay) {
+  return !dated || sinceDay == statsfold::kUnsetDay ? 0
+         : today < sinceDay                       ? 1
+                                                   : static_cast<uint32_t>(today - sinceDay) + 1;
+}
+// The one rule both sides use, so the visit's grade and the shelf can't
+// disagree (the shelf opening on a Lists visit, "Not enough memory"): days
+// (the counting days dated, or DAYS' span with no clock) reach 30.
+constexpr bool notPlayedDays(uint32_t days) { return days >= kNotPlayedDays; }
+// The visit's grade (StatsLists' notPlayedMayOpen(): Full or Lists): dated,
+// the counting days reach 30 (a first day unset: never); with no clock,
+// perhaps (DAYS' span, the ask's report, decides the shelf:
+// statsview::notPlayedOpen()), so the visit asks for its played set too.
+constexpr bool notPlayedMayOpen(bool dated, uint16_t today, uint16_t sinceDay) {
+  return !dated || notPlayedDays(countingDaysOf(true, today, sinceDay));
 }
 
 }  // namespace statsvisit

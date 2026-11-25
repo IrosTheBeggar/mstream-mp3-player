@@ -982,14 +982,37 @@ def old_favourites(st: Stats, today, rows=None, capped=True):
     return [(h, -p, -t) for p, t, h in items]
 
 
-def recently_played(st: Stats, rows=None):
-    """[(pathHash, plays, lastAt, lastOrd)]: plays at least 1. lastAt, newest
-    first; then the rows with no dated play by lastOrd, newest first; then
-    the hash."""
+def live_round_of(st: Stats):
+    """The round a session that boots on this card gives its live plays
+    (Fold::liveRound(): HEAD's round as it loads it, + 2, saturating). No
+    row of the card has it: a save writes HEAD's round at least each row's
+    lastOrd."""
+    return sat(st.head["round"] + 2, M24)
+
+
+def recently_played(st: Stats, rows=None, live_round=None, dated=True):
+    """[(pathHash, plays, lastAt, lastOrd)]: plays at least 1. Dated (the
+    clock set): lastAt, newest first; then the rows with no dated play by
+    lastOrd, newest first; then the hash. With the clock unset (dated False;
+    live_round the ranking session's Fold::liveRound(), None or 0: none)
+    this session's rows first: lastOrd the live round, whatever lastAt (an
+    undated play leaves lastAt, 5.9; the owner's call, 2026-11-24: 4.3's
+    "This session", then "Earlier"). Then, within each part, lastOrd,
+    newest first (every play sets it, dated or not: with no time, the one
+    order every row has, so the last no-clock session's never-dated plays
+    lead Earlier, not fall past 216 dated rows); then lastAt, newest first
+    (no dated play last); then the hash."""
     rows = st.tracks() if rows is None else rows
-    items = sorted(((0, -r.lastAt) if r.lastAt else (1, -r.lastOrd), h) for h, r in rows.items() if r.plays >= 1)
+
+    def key(h, r):
+        if dated:
+            return (1, (0, -r.lastAt) if r.lastAt else (1, -r.lastOrd), h)
+        session = bool(live_round) and r.lastOrd == live_round
+        return (0 if session else 1, (-r.lastOrd, -r.lastAt), h)
+
+    items = sorted(key(h, r) for h, r in rows.items() if r.plays >= 1)
     items = items[:CAPS["recentlyPlayed"] + PAST_CAP]
-    return [(h, rows[h].plays, rows[h].lastAt, rows[h].lastOrd) for _, h in items]
+    return [(h, rows[h].plays, rows[h].lastAt, rows[h].lastOrd) for _, _, h in items]
 
 
 def not_played(st: Stats, albums, rows=None):
@@ -999,12 +1022,17 @@ def not_played(st: Stats, albums, rows=None):
     return [name for name, hashes in albums if not any(h in rows and rows[h].plays >= 1 for h in hashes)]
 
 
-def lists(st: Stats, today, albums=None):
-    """Every shelf's list (4.3) as the rankers give it: hashes, no names."""
+def lists(st: Stats, today, albums=None, live_round=None):
+    """Every shelf's list (4.3) as the rankers give it: hashes, no names.
+    With the clock unset (today None) Recently played puts the ranking
+    session's rows first, then the rest by lastOrd (recently_played()):
+    live_round its Fold::liveRound(), by default a session that boots on
+    the card (live_round_of(): no row is its)."""
     rows = st.tracks()
+    live = None if today is not None else live_round_of(st) if live_round is None else live_round
     out = {"mostPlayed": {str(d or "all"): most_played(st, today, d, rows) for d in (7, 30, None)},
            "newFinds": new_finds(st, today, rows), "oldFavourites": old_favourites(st, today, rows),
-           "recentlyPlayed": recently_played(st, rows)}
+           "recentlyPlayed": recently_played(st, rows, live, dated=today is not None)}
     if albums is not None:
         out["notPlayed"] = not_played(st, albums, rows)
     return out
@@ -2779,36 +2807,84 @@ def _rank_rcnt_cap(today=RANK_TODAY):
     return st
 
 
+RANK_LOADED = 900                       # rank-no-clock-session: the round its session loaded
+
+
+def _rank_session():
+    """This session's plays with the clock unset, as its live save leaves
+    the card (5.9; the owner's call, 2026-11-24: with no clock Recently
+    played puts this session's plays first, 4.3's "This session", then
+    "Earlier"). A history from earlier sessions, rounds 1 to 900: 432
+    tracks, 365 of them dated and played (over 216); then this session,
+    which loaded round 900: the boot's fold of an earlier session's undated
+    play (round 901), and its own plays, all undated, round 902
+    (Fold::liveRound(), its live save's HEAD round): three tracks never
+    played before (one twice), one played before but never dated, the
+    oldest and the newest dated tracks played again (lastAt kept), and a
+    skip of a dated one (no play: not this session's). (stats, live
+    round)."""
+    st = _rank_stats(7, tracks=500, delta=200, rcnt=600)
+    live = RANK_LOADED + 2
+    rows = st.tracks()
+    dated_rows = sorted((r.lastAt, h) for h, r in rows.items() if r.plays and r.lastAt)
+    never = sorted(h for h, r in rows.items() if r.plays and not r.lastAt)
+    rng = random.Random(7 + 3000)
+    fresh = sorted({rng.getrandbits(64) | 1 for _ in range(3)} - set(rows))
+    a = lambda seq, h, **kw: slot(DEV_A, EPOCH_A, seq, h, 200000, 200000, **kw)  # noqa: E731
+    st.fold(a(1, never[1]), RANK_LOADED + 1)                    # the boot's fold: an earlier session's play
+    for seq, h in enumerate([fresh[0], dated_rows[0][1], never[0], fresh[1], dated_rows[-1][1], fresh[2],
+                             fresh[0]], 2):
+        st.fold(a(seq, h), live)
+    st.fold(slot(DEV_A, EPOCH_A, 9, dated_rows[5][1], 10000, 200000, outcome=SKIPPED), live)  # a skip
+    st.head["round"] = live
+    st.generation = 10
+    return st, live
+
+
 def rank_scenarios():
-    """(name, note, stats, today): the rankers' scenarios."""
+    """(name, note, stats, today, liveRound): the rankers' scenarios; with
+    the clock unset, the ranking session's live round (Fold::liveRound())."""
     big = _rank_stats(1)
     big.days[RANK_TODAY - 2] = [M16, 7, M8, M8, M32, 3, 1]  # a row at its fields' tops, in the 7 days
+    session, live = _rank_session()
     return [
         ("rank-big", "900 hashes: 635 in the base, 320 TRKD rows (160 over a base row), 1,800 RCNT rows over "
          "the 32 days to day 320 and day 321 (a clock ahead): every list past its cap and 16. DAYS on most of the "
-         "60 days to day 321, day 318's row at its fields' tops", big, RANK_TODAY),
+         "60 days to day 321, day 318's row at its fields' tops", big, RANK_TODAY, None),
         ("rank-no-clock", "rank-big's files with the clock unset: Most played All time and Recently played "
-         "alone; no 7 days, the span still read", big, None),
+         "alone; no 7 days, the span still read", big, None, live_round_of(big)),
         ("rank-ties", "plays, days and times from a few values: the hash decides most places, the caps' edges "
-         "among them", _rank_stats(2, ties=True), RANK_TODAY),
-        ("rank-early", "a history to day 12: the windows begin before 2026-01-01", _rank_stats(3, today=12), 12),
+         "among them", _rank_stats(2, ties=True), RANK_TODAY, None),
+        ("rank-early", "a history to day 12: the windows begin before 2026-01-01", _rank_stats(3, today=12), 12,
+         None),
         ("rank-no-base", "TRKD alone (no base yet), 300 hashes", _rank_stats(4, tracks=300, base_share=0,
-                                                                            delta=300, rcnt=700), RANK_TODAY),
+                                                                            delta=300, rcnt=700), RANK_TODAY,
+         None),
         ("rank-days", "DAYS at its 400 rows (the newest kept, day 501 a clock ahead), today day 500",
-         _rank_days(), 500),
+         _rank_days(), 500, None),
         ("rank-midnight", "plays folded around UTC midnights: each counts whole on the day it began (an Auto DJ "
          "play from 23:50 on day 319, a skip at 23:59:59.999, a shuffle play at 00:00 on day 320, one from "
          "23:59:59 on day 320, one from 23:58 on day 313, outside the 7 days); a stop under the line, an undated "
-         "play, a clock ahead", _rank_midnight(), RANK_TODAY),
+         "play, a clock ahead", _rank_midnight(), RANK_TODAY, None),
         ("rank-rcnt-cap", "RCNT capped: 300 tracks a day over 20 days, the oldest 7 dropped whole, so its oldest "
-         "day is 308, inside the 30 days", _rank_rcnt_cap(), RANK_TODAY),
+         "day is 308, inside the 30 days", _rank_rcnt_cap(), RANK_TODAY, None),
+        ("rank-no-clock-session", "this session's plays with the clock unset, as its live save leaves the card "
+         "(its HEAD round, 902, the session's live round: it loaded 900), ranked by that session: three tracks "
+         "never played before, one played before but never dated, the oldest and the newest dated tracks played "
+         "again, all undated, first (This session), then the rest (Earlier) by round, newest first: the boot's "
+         "fold of an earlier undated play (round 901), then the rows of rounds up to 900, over 216 of them "
+         "dated; a skip moves no row", session, None, live),
+        ("rank-no-clock-next", "rank-no-clock-session's card ranked by the next session, the clock still unset, "
+         "before it plays (it loads 902: live round 904): no row is this session's; Earlier by round, newest "
+         "first: the last session's six rows (two dated, four never dated) lead it, then round 901's, though the "
+         "card has over 216 dated tracks", session, None, live_round_of(session)),
     ]
 
 
 def rank_files():
     """test/fixtures/card/stats/rank.json and the scenarios' files."""
     files, index, where = {}, [], {}
-    for name, note, st, today in rank_scenarios():
+    for name, note, st, today, live in rank_scenarios():
         bin_b = write_stats(st)
         folder = where.get(bin_b)
         if folder is None:
@@ -2819,14 +2895,17 @@ def rank_files():
                                                                                      st.head["baseGen"])
         rows = st.tracks()
         w = window(today, 30)
-        index.append({"name": name, "note": note, "in": folder, "today": today,
-                      "rows": {"base": len(st.base), "trkd": len(st.trkd), "rcnt": len(st.rcnt),
+        entry = {"name": name, "note": note, "in": folder, "today": today}
+        if today is None:
+            entry["liveRound"] = live
+        entry.update({"rows": {"base": len(st.base), "trkd": len(st.trkd), "rcnt": len(st.rcnt),
                                "played": sum(1 for r in rows.values() if r.plays), "days": len(st.days),
                                "tracks": len(rows),
                                "window": 0 if w is None else sum(1 for (d, _), n in st.rcnt.items()
                                                                  if n and w[0] <= d <= w[1])},
-                      "lists": lists_json(lists(st, today)), "totals": totals(st, today, rows),
+                      "lists": lists_json(lists(st, today, live_round=live)), "totals": totals(st, today, rows),
                       "days7": days7(st, today), "played40": played40_bytes(played40(st, rows)).hex()})
+        index.append(entry)
     files["stats/rank.json"] = (json.dumps(index, indent=1) + "\n").encode("utf-8")
     return files
 

@@ -176,7 +176,8 @@ public:
   void command(const char* arg);
 
   // ---- S3a: the stats pages' asks (docs/LISTENING-STATS.md 9.7's API) ----
-  enum class UiAsk : uint8_t { Visit, NotPlayed };
+  // (lib/core's since S3b, so ui/UiHost.h can name it.)
+  using UiAsk = statsvisit::UiAsk;
   using Phase = statsvisit::Phase;
   using Outcome = statsvisit::Outcome;
   // Queued (Asked): true. Behind a console ask under way, it waits for it;
@@ -222,6 +223,31 @@ public:
   // Dance tab's, carved at the boot and kept). The fence releases it:
   // drop()'s count and main.cpp's memory check (alsoFreed) take this.
   size_t snapshotHeapBytes() const { return 0; }
+  // S3b's made-up views (docs/LISTENING-STATS.md 9.3's uiSx<n>, look only:
+  // statsview::madeUpView(), keyed on `index`, Library::index()). Views 1-9:
+  // whatever is held released first (a page's ask cancelled; a console
+  // visit or lean ask under way ended, its result dropped, as it would
+  // write into the view's snapshot; the snapshot held released, a page's,
+  // Hu's or a console ask's: a view's look never stands on a real
+  // snapshot), then for 1, 3 and 4 the view's snapshot written into the
+  // Dance tab's block, lent (statshold::borrow(), as a visit's), as a landed
+  // one reads (statsvisit::writeMadeUp(): the live index's key, so the key
+  // check keeps it; kFlagMadeUp in its header, as no StatsLists byte is
+  // free), and served at once; the version moves. True for 2 and 5-9 (none
+  // to write). 0: a made-up snapshot held released (a real one is left
+  // alone), true. False: no such view (past 9: nothing done); for 1, 3 and 4
+  // no index ready (behind the fence), no loan (the Dance tab up, past
+  // kBound, no block) or the write refused, each said, with nothing held
+  // (the release above). Nothing asks: the pages' guard (D16; ui::Ui's
+  // selector, its uiSx<n>, which calls this while the held condition is up
+  // and at each of its rises). The releases with no navigation (loop(): the
+  // stats off, the card away or held, another index's key) and the falls',
+  // the fence's and the end's apply to it as to any snapshot, on purpose: a
+  // view is held exactly while the pages are, and lends the Dance tab's
+  // block as a visit does (its view's pages read Pending, nothing due, until
+  // the next rise writes it again). Hk and a console visit's lines label it
+  // (MADE UP); a console Hv or Hu over it rewrites it whole, a real one.
+  bool madeUp(uint8_t n, const LibraryIndex* index);
 
   // ---- the loop (app/PlayHistory, main.cpp) ----
   // An ask waits and may carve now (PlayHistory's turn, statsglue::turnOf()'s
@@ -399,8 +425,12 @@ private:
   uint8_t pastCap_ = 0;       // visits whose holds passed kLitCapMs this session (saturating)
   // Hk owed, as the TX buffer's room allows (stepHk()): 0 none; 1-3 the
   // header's pieces; 4-9 a list's rows (from hkRow_); 10 Not played yet's
-  // first albums (from hkRow_). (Both in the object's tail padding: no
-  // .bss.)
+  // first albums (from hkRow_); kHkCut, the snapshot its header printed
+  // was released or written over since (freeSnap(), an ask's write: a
+  // made-up view's write follows its release in the same call, so stepHk
+  // would find one written): the rest not printed. (Both in the object's
+  // tail padding: no .bss.)
+  static constexpr uint8_t kHkCut = 0xFF;
   uint8_t hkPart_ = 0;
   uint8_t hkRow_ = 0;
 };

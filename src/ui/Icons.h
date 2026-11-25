@@ -50,6 +50,14 @@ extern const Icon kFunnel;        // the mood filters: the Albums list's first r
 extern const Icon kShuffleSmall;    // 14 x 11
 extern const Icon kRepeatSmall;     // 14 x 11: the loop
 extern const Icon kRepeatOneSmall;  // 20 x 11: the same loop and a bold "1" beside it
+// The listening stats (docs/LISTENING-STATS.md 7.4-7.5): the hub's rows
+// (centred on the row's (26, 21)) and its empty state's disc. All 18 wide.
+extern const Icon kTrophy;    // Most played (18 x 14)
+extern const Icon kSpark;     // New finds (18 x 18)
+extern const Icon kHeart;     // Old favourites (18 x 15)
+extern const Icon kClock;     // Recently played; the no-dates status row, AMBER (18 x 18)
+extern const Icon kChart;     // the empty state, nothing played yet (18 x 18)
+extern const Icon kRingPlay;  // Not played yet: the clock's ring and a play mark (18 x 18)
 
 // Draws `icon` with its top-left at (x, y), or centred on (cx, cy).
 inline void draw(lgfx::LovyanGFX& g, const Icon& icon, int x, int y, uint16_t colour) {

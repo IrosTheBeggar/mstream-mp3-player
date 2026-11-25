@@ -150,6 +150,29 @@ public:
   void statsSetWindow(uint8_t w) {
     if (active_) stats_.lists().setWindow(w);
   }
+  // S3b's, for UiHost (docs/LISTENING-STATS.md 7.11; RAM, us):
+  //   - the phase, why, outcome and version at once (no play log: Idle, as
+  //     statsPhase());
+  //   - the lifetime (ListeningStats::lifetime(): HEAD, the clock), the card
+  //     in when neither held (`cardHeld`: main.cpp's) nor away (cardAway(),
+  //     as statsAsk() and the lists' gates read it: the page's No card line,
+  //     and its Try again once the card is back). No play log: the stats off;
+  //   - a made-up view (9.3's uiSx<n>, look only: StatsLists::madeUp() over
+  //     the library's index, `n` 0 its end). No play log: statsview::
+  //     madeUpNoLog() (true for 0, 2 and 5-9; false for 1, 3, 4 and past 9,
+  //     said). False otherwise: past 9, or for 1, 3 and 4 its snapshot not
+  //     written, nothing held (StatsLists' line says why).
+  void statsPhase(statsview::PhaseInfo& out) const;
+  void statsLifetime(statsview::Lifetime& out, bool cardHeld) const;
+  bool statsMadeUp(uint8_t n);
+  // The card isn't one to ask now (docs/METADATA.md 3.8): the mount's card
+  // is out of the slot, none answering or another in it (sectordisk::
+  // cardOut(), what the player's card hold goes by), or it refuses every
+  // write until a restart (the guard's writes off). Each ask of a card that
+  // is out is a mount tried, a second or two of the SD driver's tries with
+  // the loop held, and a slot's would only fail again. (Public since S3b:
+  // the stats pages' card in, statsLifetime().)
+  static bool cardAway();
   // The held snapshot's heap bytes, for the update's memory check's
   // alsoFreed (main.cpp; the fence releases it): none, as it sits in the
   // Dance tab's block, lent (StatsLists::snapshotHeapBytes()).

@@ -6,8 +6,9 @@ source, and each translation is `<tag>.json` beside it (`de.json`,
 player's: de, es, fr, it, ja, pl, pt (Brazilian), ru and zh (Simplified).
 All ten are on the player's Language page (Output > Language), and each
 has its file: machine translations, made from the two apps' words where
-they had them and by Fable agents for the rest, **not yet reviewed by a
-native speaker** (a review is welcome: below). A text a translation
+they had them and by Fable agents for the rest (the listening stats'
+texts by Claude Opus 5.5 agents), **not yet reviewed by a native
+speaker** (a review is welcome: below). A text a translation
 leaves out is drawn in English (as a language with no file would be).
 How it all works, and how the translations were made, is in
 [docs/I18N.md](../docs/I18N.md), phase 3.

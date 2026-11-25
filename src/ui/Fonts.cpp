@@ -10,8 +10,10 @@
 
 #include "CjkGlyphs16.h"
 #include "GlyphStore.h"
+#include "StatsText.h"
 #include "TextFold.h"
 #include "app/Psram.h"
+#include "ui/Theme.h"
 #include "ui/VlwFonts.h"
 
 namespace ui {
@@ -632,6 +634,30 @@ int Fonts::draw(M5Canvas& c, Font f, const char* text, size_t len, int x, int y,
 int Fonts::draw(M5Canvas& c, Font f, const char* text, int x, int y, int maxW, uint16_t fg, uint16_t bg,
                 Align align) const {
   return drawOn(c, &c, f, text, strlen(text), x, y, maxW, fg, bg, align);
+}
+
+int drawStat(lgfx::LovyanGFX& g, int x, int baseline, const statstext::StatValue& v, Fonts::Align align) {
+  const Fonts& f = Fonts::instance();
+  const int n = std::min<int>(v.count, statstext::kStatSegments);
+  // Measured first (the width sets where it starts), then drawn
+  // left-aligned a segment at a time, each in its own width: the room
+  // draw() fits to is the text's own, so nothing is cut.
+  int widths[statstext::kStatSegments];
+  int w = 0;
+  for (int k = 0; k < n; ++k) {
+    widths[k] = f.width(v.seg[k].value ? Font::Title : Font::Small, v.at(k));
+    w += widths[k];
+  }
+  int pen = align == Fonts::Align::Right ? x - w : align == Fonts::Align::Centre ? x - (w >> 1) : x;
+  for (int k = 0; k < n; ++k) {
+    if (v.seg[k].value) {
+      f.draw(g, Font::Title, v.at(k), pen, baseline - statstext::kStatValueRise, widths[k], col::TXT, col::TXT);
+    } else {
+      f.draw(g, Font::Small, v.at(k), pen, baseline - statstext::kStatWordsRise, widths[k], col::SOFT, col::SOFT);
+    }
+    pen += widths[k];
+  }
+  return w;
 }
 
 }  // namespace ui

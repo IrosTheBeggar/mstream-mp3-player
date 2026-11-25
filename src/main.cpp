@@ -1078,6 +1078,19 @@ struct MainUiHost : ui::UiHost {
   bool autoDjFromHere(uint32_t track) override { return autoDj && !frozen.on && autoDj->fromHere(track); }
   bool autoDjHasNeighbours(uint32_t track) override { return autoDj && !frozen.on && autoDj->hasNeighbours(track); }
   bool autoDjMarked(uint32_t key) const override { return autoDj && autoDj->marked(key); }
+  // The listening stats' pages (app/PlayHistory's forwarders of StatsLists'
+  // asks; docs/LISTENING-STATS.md 7.11, 9.7). The two that read the card's
+  // hold (cardHeld, with the card's swap below: a static can't be declared
+  // ahead) are defined after it, beside stepPlays().
+  bool statsAsk(statsview::UiAsk a) override;
+  void statsCancel() override { playHistory.statsCancel(); }
+  void statsRelease(const char* why) override { playHistory.statsRelease(why); }
+  void statsPhase(statsview::PhaseInfo& out) override { playHistory.statsPhase(out); }
+  bool statsNews() override { return playHistory.statsNews(); }
+  const statsvisit::Snapshot* statsSnapshot() const override { return playHistory.statsSnapshot(); }
+  void statsSetWindow(uint8_t window) override { playHistory.statsSetWindow(window); }
+  void statsLifetime(statsview::Lifetime& out) override;
+  bool statsMadeUp(uint8_t n) override { return playHistory.statsMadeUp(n); }
 };
 static MainUiHost uiHost;
 
@@ -2174,7 +2187,9 @@ static SerialConsole console({
         return;
       }
       // ui (u + "i"): the UI's navigation state; ui0-ui4 a tab, uib back;
-      // uiM... the mood filters (Ui::filtersCommand()).
+      // uiM... the mood filters (Ui::filtersCommand()); uiS... the listening
+      // stats' pages (Ui::statsCommand(); a bare uiS doesn't wake the screen;
+      // uiSx<n> a made-up view, look only, kept in the Ui's RAM).
       if (a[0] == 'i') {
         if (a[1] == 'l') {
           browseCommand(a + 2);
@@ -3589,6 +3604,12 @@ static void stepPlays(uint32_t now, bool input) {
   playHistory.loop(look, in, cardHeld);
 }
 
+// The stats pages' calls that read the card's hold (MainUiHost's, declared
+// with it: cardHeld comes after it). The card's word as the play log's own
+// pass gives it (stepPlays()), so a page's No card and an ask's drop agree.
+bool MainUiHost::statsAsk(statsview::UiAsk a) { return playHistory.statsAsk(a, cardHeld); }
+void MainUiHost::statsLifetime(statsview::Lifetime& out) { playHistory.statsLifetime(out, cardHeld); }
+
 // Every loop pass, after the UI's (its covers taken in, its list's motion
 // known): what the card worker does next (ScanScheduler's inputs, as
 // METADATA.md 3.3.9 maps them; the update step's, LibraryUpdate's), the
@@ -4118,7 +4139,9 @@ void setup() {
                  "uiF<c/s/p/r/l/n/f/t/g/u/w> show a faked Bluetooth, no-card, exFAT/NTFS/GPT/can't-read card or waiting state "
                  "(uiF0 the real one), uiV the volume HUD, uil<n> a synthetic "
                  "library of n tracks in the Library tab, uil0 the card's, uiM the Albums list's mood filter (uiMa<hex> "
-                 "set it, uiMa0 clear it, uiMe the editor)); "
+                 "set it, uiMa0 clear it, uiMe the editor), uiS the listening stats' pages (no wake), uiSh their "
+                 "hub, uiS<shelf>[w] a shelf (0-4; Most played's window w 0-2), uiSw Last 7 days, uiSx<n> a "
+                 "made-up stats view, look only: 1-9, uiSx0 the card's own); "
                  "UI spike (with Enter): u input lab (u0-u3, us summary), w scroll lab (w0 interactive, w1-w3 stress, wm0/wm1 redraw/hw scroll, wp refill pacing), "
                  "g library index (g0 SD card, g<n> synthetic) and its tags (gs the scan's status, gt</music/...> a "
                  "file's tags, gr rescan tags, gc the sector cache, gl the card's bench, gm the mood words, gm<hex> a filter's "

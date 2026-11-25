@@ -1,7 +1,7 @@
 {
   "@@locale": "zh",
   "@@autonym": "中文",
-  "@@note": "Simplified Chinese, made for the device's UI from the mobile app's (mstream_music, lib/l10n/app_zh.arb, master bdb174e) and the terminal player's (mstream-terminal-player, locales/zh.yml, main b89ad0a) translations where they had the text or the term (both GPL-3.0, the same author's; their words and register are kept: informal 你, 曲目 for a track counted with 首, 曲库 for the Library, 队列, 艺术家, 专辑, 群星, and a space between Latin letters or digits and hanzi; their fullwidth punctuation is written as the ASCII signs, 、 and 。, which is what the device can draw), and translated by a Fable agent (Claude) otherwise. A machine translation, reviewed by a second Fable agent, not yet by a native speaker: a review as a pull request on this file is welcome. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_zh.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' Auto DJ text (November 2026, docs/MOOD-FILTERS.md 8.2: autodj.status_waits_fit) was made the same way: the mobile app's autoDjSeedNoMatch and its word for the filters (moodFilters), from mstream_music master at d17c3fa5, fitted to en.json's room, not yet reviewed by a native speaker. The mood filters' Auto DJ page (November 2026, docs/MOOD-FILTERS.md 8, S5): mood.smart_filters, mood.any and mood.no_data are the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_zh.arb: autoDjMoodTitle, autoDjAny, autoDjNoMoodData); autodj.smart_sub, autodj.status_fits, autodj.status_coverage_mood, autodj.status_few, autodj.status_few_sub, toast.autodj_few, toast.autodj_no_close, toast.autodj_plays_once, toast.autodj_no_mood and empty.no_track_fits were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjNoMoodData for the mood, autoDjSeedNoMatch, mainSync for a sync), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The screen's touch setting (November 2026, Output > Touch when off and the glance it can show: settings.screen_touch, its three values and their lines, glance.hint; settings.screen_off_sub rewritten, since a touch no longer wakes the screen unless the setting says so) was translated by a Fable agent (Claude), in this file's words for the screen's other settings, fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker.",
+  "@@note": "Simplified Chinese, made for the device's UI from the mobile app's (mstream_music, lib/l10n/app_zh.arb, master bdb174e) and the terminal player's (mstream-terminal-player, locales/zh.yml, main b89ad0a) translations where they had the text or the term (both GPL-3.0, the same author's; their words and register are kept: informal 你, 曲目 for a track counted with 首, 曲库 for the Library, 队列, 艺术家, 专辑, 群星, and a space between Latin letters or digits and hanzi; their fullwidth punctuation is written as the ASCII signs, 、 and 。, which is what the device can draw), and translated by a Fable agent (Claude) otherwise. A machine translation, reviewed by a second Fable agent, not yet by a native speaker: a review as a pull request on this file is welcome. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_zh.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' Auto DJ text (November 2026, docs/MOOD-FILTERS.md 8.2: autodj.status_waits_fit) was made the same way: the mobile app's autoDjSeedNoMatch and its word for the filters (moodFilters), from mstream_music master at d17c3fa5, fitted to en.json's room, not yet reviewed by a native speaker. The mood filters' Auto DJ page (November 2026, docs/MOOD-FILTERS.md 8, S5): mood.smart_filters, mood.any and mood.no_data are the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_zh.arb: autoDjMoodTitle, autoDjAny, autoDjNoMoodData); autodj.smart_sub, autodj.status_fits, autodj.status_coverage_mood, autodj.status_few, autodj.status_few_sub, toast.autodj_few, toast.autodj_no_close, toast.autodj_plays_once, toast.autodj_no_mood and empty.no_track_fits were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjNoMoodData for the mood, autoDjSeedNoMatch, mainSync for a sync), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The screen's touch setting (November 2026, Output > Touch when off and the glance it can show: settings.screen_touch, its three values and their lines, glance.hint; settings.screen_off_sub rewritten, since a touch no longer wakes the screen unless the setting says so) was translated by a Fable agent (Claude), in this file's words for the screen's other settings, fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The listening stats' words (November 2026, docs/LISTENING-STATS.md 8.1: stats.title, stats.plays_n, stats.recent, stats.window_all, stats.days_n, stats.today, stats.yesterday, stats.shelf_empty, stats.listened, stats.plays_label, stats.empty_title) are the mobile app's from mstream_music at d17c3fa5 (lib/l10n/app_zh.arb: its listening* keys and autoDjRecentlyPlayed), as it writes them. The listening stats' other texts (November 2026, docs/LISTENING-STATS.md 8.2: toast.stats_needs_dates, toast.stats_needs_month, the rest of stats.*, format.day_month, format.weekday_date, format.day_range, format.day_range_month, day.* and month.*) take the mobile app's words from mstream_music at d17c3fa5 where it has them (lib/l10n/app_zh.arb: its listening* keys for 播放, 收听 and 统计, listeningEmptyDevice, agoMinutes, agoHours, songInfoLastPlayed for 上次, discoverPageTitle's 发现) and the terminal player's from mstream-terminal-player at b89ad0a (locales/zh.yml: gui.nav.most_played, gui.top.mp3 for the MP3 Player tab, and sta.day_label, sta.day_key, sta.weekdays_short and sta.months_short for the dates); the rest were translated by a Claude agent (Claude Opus 5.5), in the apps' and this file's words (随机播放 for the shuffle, now_playing.shuffle), then reviewed by a second, fitted to en.json's rooms and to test_ui_library's with 曲库's crumb (a note says where a room made a text shorter), not yet reviewed by a native speaker. All eleven of the mobile app's words above fit their rooms in Chinese, so none departs from the app.",
   "boot.touch_hint": "触摸不灵? 长按屏幕。",
   "coach.header_tip": "提示 {0} / {1}",
   "coach.header_hint": "点一下继续",
@@ -88,6 +88,11 @@
   "toast.autodj_no_close": "没有相近的曲目: 改选任一符合条件的曲目",
   "toast.autodj_plays_once": "只播放这一次, 之后按筛选条件选曲",
   "toast.autodj_no_mood": "无氛围数据: 请从 mStream 同步这张存储卡",
+  "toast.stats_needs_dates": "需要日期: {0}",
+  "toast.stats_needs_month": "需要一个月的播放: {0}",
+  "@toast.stats_needs_month": {
+    "note": "As stats.warming: 播放 for the plays, '{0}起可用' after the ': '."
+  },
   "hud.bluetooth": "蓝牙: {0}",
   "@hud.bluetooth": {
     "note": "'蓝牙' is the universal Chinese name for Bluetooth (phones, headphones); neither app has the word."
@@ -293,6 +298,107 @@
   "mood.smart_filters": "智能筛选",
   "mood.any": "不限",
   "mood.no_data": "无氛围数据",
+  "stats.title": "收听统计",
+  "stats.entry_empty": "收听时播放记录出现在这里",
+  "@stats.entry_empty": {
+    "note": "The mobile app's listeningEmptyDevice, its first sentence, without its 会 (will) and its 。: '收听时播放记录会出现在这里' is 208 px in Small, the room 204. The terminal's sta.empty_state_detail says it as '边听边记录在这里'."
+  },
+  "stats.counting": "正在统计播放…",
+  "@stats.counting": {
+    "note": "统计 for counting plays, as the feature's name (收听统计) and stats.no_card say it."
+  },
+  "stats.waiting": "正在等待存储卡…",
+  "stats.no_room": "内存暂时不足",
+  "stats.unread": "无法读取收听统计",
+  "stats.card_back": "存储卡已放回",
+  "stats.no_card": "没有存储卡: 无法统计播放",
+  "stats.since": "{1}以来 {0}",
+  "@stats.since": {
+    "note": "'{1}以来 {0}' (since the day, then the time or the albums), as Chinese orders it: '9月1日以来 74 小时 10 分', '9月1日以来 612 张专辑'. At the worst ('10月30日以来 99,999 小时 59+ 分') 231 px in Small 232; the terminal's 自 … 起 (dev.adv_list_cached), '自 {1}起 {0}', is 235. stats.since_only says '{0}以来' to match."
+  },
+  "stats.since_only": "{0}以来",
+  "stats.last7": "最近 7 天",
+  "stats.time_plays": "{0} · {1}",
+  "stats.plays_n": {
+    "other": "{0} 次播放"
+  },
+  "stats.most_played": "最常播放",
+  "stats.new_finds": "新发现",
+  "@stats.new_finds": {
+    "note": "'新发现' (new discoveries), after the mobile app's 发现 (discoverPageTitle)."
+  },
+  "stats.new_finds_sub": {
+    "other": "30 天内首次听到 {0} 首曲目"
+  },
+  "stats.new_finds_sub_short": {
+    "other": "30 天内新发现 {0} 首"
+  },
+  "@stats.new_finds_sub_short": {
+    "note": "'新发现', the shelf's own word (stats.new_finds): '新增' would read as tracks added to the library, not first heard."
+  },
+  "stats.old_favourites": "久违的最爱",
+  "@stats.old_favourites": {
+    "note": "'久违的最爱' (favourites not heard for a long while): neither app has the shelf; 久违 (long unseen) says 'not lately'."
+  },
+  "stats.old_favourites_sub": {
+    "other": "{0} 首常听, 但最近没听"
+  },
+  "stats.not_played": "尚未播放",
+  "stats.recent": "最近播放",
+  "stats.no_dates": "还没有日期: 时钟未设置",
+  "stats.clock_fix": "插上电脑, 打开 MP3 播放器标签页",
+  "@stats.clock_fix": {
+    "note": "'插上电脑, 打开 MP3 播放器标签页' (plug in to the computer, open the MP3 Player tab): MP3 播放器 is the terminal player's name for that tab (gui.top.mp3), 标签页 this file's word for a tab (coach.tab), 插 as the terminal says plugged in (dev.none_title)."
+  },
+  "stats.needs_dates": "需要日期",
+  "stats.warming": "{0}起可用, 需一个月的播放",
+  "@stats.warming": {
+    "note": "'{0}起可用' (usable from the day) for Opens, here and in stats.warming_short and toast.stats_needs_month; 播放 as the apps' noun for plays (计入的播放, 更早的播放). With 播放记录 (listeningEmptyTitle's word) the line is 264 px in Small, the room 250."
+  },
+  "stats.warming_short": "{0}起可用",
+  "stats.window_all": "全部时间",
+  "stats.days_n": {
+    "other": "{0} 天"
+  },
+  "stats.sub_last7": "最近 7 天",
+  "stats.sub_last30": "最近 30 天",
+  "stats.first_heard": "30 天内首次听到",
+  "stats.not_in_30": "30 天内未播放",
+  "stats.found_autodj": "由 Auto DJ 发现",
+  "stats.found_shuffle": "由随机播放发现",
+  "stats.last_on": "上次 {0}",
+  "stats.ago_min": "{0} 分钟前",
+  "stats.ago_h": "{0} 小时前",
+  "stats.today": "今天",
+  "stats.yesterday": "昨天",
+  "stats.this_session": "本次开机",
+  "@stats.this_session": {
+    "note": "'本次开机' (since this power-on): the tracks played since the player was switched on. The apps' 会话 (listeningTileSessions, sta.tile_sessions) is a listening sitting there and a server session in the terminal (gui.stats.no_session), so it is not taken."
+  },
+  "stats.earlier": "更早",
+  "stats.shelf_empty": "本时段没有内容。",
+  "stats.utc": "{0} (UTC)",
+  "stats.listened": "收听时长",
+  "stats.plays_label": "播放",
+  "stats.big_day": "你在{0}听得最多: {1}",
+  "@stats.big_day": {
+    "note": "'你在{0}听得最多: {1}' (on that day you listened most), with the full 星期一 … 星期日 (day.monday …): '{0}是你听得最多的一天: {1}' (was the day you listened most) is 292 px with 星期四 and 23 小时 59 分, the room 288; this is 244. The bars' labels and the sections keep the short 周一 … 周日 (the terminal's sta.weekdays_short)."
+  },
+  "stats.autodj_right": "Auto DJ 的选曲有 {0} 合你心意",
+  "@stats.autodj_right": {
+    "note": "'Auto DJ 的选曲有 {0} 合你心意' (of Auto DJ's picks, {0} suited you): 选曲 as this file names Auto DJ's pick (toast.autodj_random, toast.autodj_seed_moved)."
+  },
+  "stats.empty_title": "还没有播放记录",
+  "stats.empty_rule": "播放满 30 秒或半首即计入",
+  "@stats.empty_rule": {
+    "note": "'半首' (half a track, counted with 首 as library.tracks_n): a play counts at 30 s or half the track, whichever comes first."
+  },
+  "stats.empty_rule_short": "播放满 30 秒即计入",
+  "stats.empty_card": "你的统计保存在这张存储卡上",
+  "stats.made_up": "虚构的统计: 仅供查看",
+  "@stats.made_up": {
+    "note": "虚构 (made up), not library.synthetic's 合成: '合成统计' would read as aggregated stats."
+  },
   "card.another": "换了存储卡: 正在重启",
   "card.back": "存储卡已放回: 正在重启",
   "queue_cap.full": {
@@ -832,5 +938,44 @@
   "format.list_sep": "、",
   "@format.list_sep": {
     "note": "'、', the enumeration comma, between the counts of a list."
-  }
+  },
+  "format.day_month": "{1}{0}日",
+  "@format.day_month": {
+    "note": "'{1}{0}日' with month.* as '9月': '9月30日', the terminal's sta.day_label, unspaced as Chinese writes a date."
+  },
+  "format.weekday_date": "{1} {0}",
+  "@format.weekday_date": {
+    "note": "'{1} {0}' ('11月8日 周日'): the weekday last, as the terminal's sta.day_key."
+  },
+  "format.day_range": "{0}–{1}",
+  "format.day_range_month": "{2}{0}日–{1}日",
+  "@format.day_range_month": {
+    "note": "'{2}{0}日–{1}日' ('11月4日–10日'): the month once, before both days."
+  },
+  "day.mon": "周一",
+  "day.tue": "周二",
+  "day.wed": "周三",
+  "day.thu": "周四",
+  "day.fri": "周五",
+  "day.sat": "周六",
+  "day.sun": "周日",
+  "day.monday": "星期一",
+  "day.tuesday": "星期二",
+  "day.wednesday": "星期三",
+  "day.thursday": "星期四",
+  "day.friday": "星期五",
+  "day.saturday": "星期六",
+  "day.sunday": "星期日",
+  "month.jan": "1月",
+  "month.feb": "2月",
+  "month.mar": "3月",
+  "month.apr": "4月",
+  "month.may": "5月",
+  "month.jun": "6月",
+  "month.jul": "7月",
+  "month.aug": "8月",
+  "month.sep": "9月",
+  "month.oct": "10月",
+  "month.nov": "11月",
+  "month.dec": "12月"
 }

@@ -385,6 +385,45 @@ private:
 // shows. A card with no mood data, or a synthetic library, drops it at
 // enter(); no memory for its albums: the filter reverts, and a toast says
 // so (none, when the old one's albums can't be held either).
+//
+// The listening stats (docs/LISTENING-STATS.md 7.1-7.7; LibraryStats.cpp,
+// the stats half): the Artists root's first row, the way in (7.3: the
+// fixed bars, "Listening stats" and the lifetime line, "74 h 10 min since 1
+// Sep"; decided at enter(), so the artists never move under it), and the
+// stats pages, PageKinds StatsHub, StatsShelf and StatsWeek, all this
+// page's. The hub (7.4): six rows (Last 7 days, Most played, New finds, Old
+// favourites, Not played yet, Recently played), each open (a tick and its
+// page; the stats gone off while it shows, the tick, then the double buzz
+// and nothing pushed), disabled (the double buzz and a toast), or the
+// status row with no clock (nothing), and a Try again row after them when
+// the visit's ask came to nothing or the card is back; its lines the
+// visit's snapshot's, or the phase's ("Counting plays…"); with nothing
+// played, the empty state and Shuffle all (7.5); with the card out, no
+// rows and the No card line. What it draws is read anew at each draw (the
+// lifetime, the phase, the snapshot: Ui's accessors), never kept: the
+// stats' news, a change of its rows' shape (the card back among them) and
+// a new minute (row 6's "25 min ago") draw it again in place, one row a
+// pass. The snapshot is held while the stats pages show (Ui's held
+// condition), not by the page.
+// The shelves (7.6): Most played (its tray of windows over its rows), New
+// finds, Old favourites, Recently played (its rows under their days'
+// headings; with no clock, This session's, then Earlier's), each a ranked
+// list of the snapshot's tracks with a top bar; Not played yet, its albums
+// A-Z with covers and the rail. A ranked row's tap opens its bar (Play
+// plays the shelf from it), its hold the track's sheet; they act through
+// the queue's id view over the snapshot (nothing copied). Before the ask
+// lands a shelf has no rows and the phase's line, its place kept in its
+// ref (pending()), the rows then staged in one a pass where it was; a
+// tray tap stages the window's rows the same way.
+// Last 7 days (7.7): no items and no top bar, its picture the list's body
+// (drawBody(): "Listening time" and the week's time, "Plays" and its count;
+// seven bars and their days; the big day and Auto DJ's rate), drawn whole
+// in three strips; the phase's line alone while the ask runs, and the No
+// card line the same way while the card is out; the band blank with the
+// stats off or nothing played; the empty state (the chart's disc, the
+// reason, Try again) when the ask came to nothing or the card is back, its
+// reason alone with no clock (Week shut). No targets but that button;
+// never the status band.
 class LibraryPage : public Page, public ListView::Source, public FilterOwner {
 public:
   explicit LibraryPage(Ui& ui);
@@ -412,7 +451,8 @@ public:
   void drawRow(ListView::Row& r) override;
   uint16_t accent() override;
   bool topBar() override;
-  // The Albums list's top bar is its first row, the mood filters'.
+  // The Albums list's top bar is its first row, the mood filters'; the
+  // Artists list's, the listening stats' row (while latched: topBar()).
   bool topBarIsRow() override;
   void drawTopRow(ListView::Row& r) override;
   void onTopRowTap(int x, bool rightEdge) override;
@@ -453,19 +493,62 @@ public:
   // uiM: the filter, what it holds, the last pass, the carve.
   void printFilter() const;
 
+  // ---- the listening stats (LibraryStats.cpp) ----
+  // It shows a stats page (the hub, a shelf, Last 7 days).
+  bool statsShown() const { return statsview::statsKind(static_cast<uint8_t>(kind_)); }
+  // ... or the Artists root, whose entry row reads the lifetime (7.3): what
+  // a made-up view put on or ended enters again (Ui's uiSx<n>).
+  bool statsReads() const { return statsShown() || (root() && segment() == LibrarySegment::Artists); }
+  // The stats' news (StatsLists' version moved: a phase, a landing, a
+  // release), once a pass from Ui::loop() while a stats page shows: the hub
+  // restages its rows in place (one a pass). True: attach the page again at
+  // 0 rows (Ui's, after closing what reads the snapshot): a page that drew
+  // the snapshot's rows has none to draw now (S3a released it). `why`: its
+  // [ui] words ("the stats' news"; "the wake": Ui::setDark()'s, before the
+  // wake's whole draw). `wake`: that one, a new visit's rise drawn whole
+  // next, so the page takes its counting days again (7.10: as at an
+  // enter(), statsview::latchDays()).
+  bool statsNews(const char* why, bool wake = false);
+  // uiS: the page's part (its kind, look, the rows drawn and their lines;
+  // the Artists root's entry row).
+  void printStats();
+  // ListView::Source: a disabled hub row (7.2 item 2).
+  bool inert(uint32_t row) override;
+  void onInertTap(uint32_t row) override;
+  // ListView::Source: Most played's tray, its lead item (7.6: the picked
+  // window, a cell's tap; LibraryStats.cpp), and a shelf's rows pending
+  // (7.2: its place kept in its ref until they land).
+  bool leadRow() override;
+  void drawLeadRow(ListView::Row& r) override;
+  void onLeadRowTap(int x, bool rightEdge) override;
+  bool pending() override;
+  // ListView::Source: Last 7 days' picture, strip by strip, through the
+  // list's body hook (7.2 item 6, 7.7: no items; LibraryStats.cpp). False on
+  // every other page, and for Week's looks that draw the empty state.
+  bool drawBody(M5Canvas& c, int y0, int h) override;
+
 private:
-  // Disc: an album's "Disc 2" divider (5.4), not a control.
-  enum class RowKind : uint8_t { None, Artist, Album, AllTracks, Track, Folder, File, Disc };
+  // Disc: an album's "Disc 2" divider (5.4), not a control. The stats
+  // shelves' (7.6): Ranked, a track of the visit's snapshot (its id, its
+  // row in the snapshot's list); Section, Recently played's heading, drawn
+  // as a Disc; StatsTryAgain, a shelf's one row when its ask came to
+  // nothing or the card is back; Not played yet's albums are Album rows.
+  enum class RowKind : uint8_t { None, Artist, Album, AllTracks, Track, Folder, File, Disc, Ranked, Section,
+                                 StatsTryAgain };
   struct RowRef {
     RowKind kind = RowKind::None;
     uint32_t id = 0;     // the artist, album, folder or track; a divider's disc
-    uint32_t index = 0;  // a track's or a file's place in pageTracks() (a divider: the next track's)
+    uint32_t index = 0;  // a track's or a file's place in pageTracks() (a divider: the next track's; a
+                         // ranked row's: its row in the snapshot's list)
   };
 
   const LibraryIndex* index() const;
   // The card's library (not the synthetic one of 'uil<n>'): the queue and
   // the covers can be used.
   bool real() const;
+  // The root's segment, its PageRef id. A stats shelf's id_ is shelf * 4 +
+  // window (statsview::shelfId()), so ids 0-2 read as segments too: every
+  // use is behind root() or a PageKind test (docs/LISTENING-STATS.md 7.1).
   LibrarySegment segment() const { return static_cast<LibrarySegment>(id_ <= 2 ? id_ : 0); }
   bool root() const { return kind_ == PageKind::Library; }
   bool folderList() const { return kind_ == PageKind::Folder || (root() && segment() == LibrarySegment::Folders); }
@@ -478,12 +561,19 @@ private:
   int32_t playingRow() const;
   bool playing(const RowRef& r) const;
   void notePlaying();
-  // Play (0) / Play next (1) / + Queue (2): `start` >= 0 plays `span`
-  // from there. `name`: what the toast calls a whole container.
-  void act(LibraryIndex::Span span, int32_t start, int action, const char* name);
+  // Play (0) / Play next (1) / + Queue (2): `start` >= 0 plays `ids` from
+  // there. `name`: what the toast calls a whole container. The ids as the
+  // queue's view reads them (IdView.h): a Library list's u32 array
+  // (IdView::of() of a span), or a stats shelf's u16 ids in place in the
+  // visit's snapshot (7.6: nothing copied or carved). By reference: its
+  // arguments then go in registers, as main's span did (a 12-byte view by
+  // value put `name` on the caller's stack, 32 B more under every act).
+  void act(const IdView& ids, int32_t start, int action, const char* name);
   // What a container row (or, kind None, the page itself) plays, and its name.
   bool container(const RowRef& r, LibraryIndex::Span* span, const char** name) const;
-  void onRowAction(const RowRef& r, int action);
+  // A row's action (its bar, its sheet), or the top bar's (`topBar`: the
+  // page's own, onAction(-1)'s; a stats shelf's None row is no top bar).
+  void onRowAction(const RowRef& r, int action, bool topBar = false);
   // The long-press sheet's "Auto DJ from here" on `track`.
   void autoDjFromHere(uint32_t track);
   Header header() const;
@@ -492,11 +582,158 @@ private:
   bool crumb() const;
   const char* rowName(uint32_t row) const;
   size_t titleOf(uint32_t track, char* buf, size_t size) const;
+  // drawRow()'s for the Library's own rows (an artist, an album, a track...).
+  __attribute__((noinline)) void drawLibraryRow(ListView::Row& r);
+
+  // ---- the listening stats (LibraryStats.cpp) ----
+  // The Artists root's entry row (7.3): none, its line drawn while the
+  // boot's fold runs ("Counting plays…": drawn again at its end, A20),
+  // drawn (the lifetime line, "Plays show up as you listen"), or the fold
+  // ended with the stats off ("Couldn't read the stats": no chevron, and a
+  // tap opens nothing, the hub being unreachable then: 4.4's Off).
+  enum class EntryRow : uint8_t { None, Counting, Shown, Unread };
+  // Decided here (enter(), a segment switched to Artists), never while the
+  // list shows (it would move every artist by 42 px): its line formatted
+  // into headerSub_, which the root's header doesn't use.
+  void latchEntry();
+  void drawEntryRow(ListView::Row& r);
+  // Its tap: the hub, while it can be shown (statsview::hubReachable()).
+  void entryTap();
+  // A stats page entered: its counting days latched (7.10), its shape, the
+  // minute, an ask due (D9 as replaced: Idle with nothing served and the
+  // stats on).
+  void statsEntering();
+  // The lifetime as a stats page reads it (Ui's, its counting days as the
+  // page latched them: statsview::holdDays()), and the same read that
+  // keeps the latch up first (statsview::latchDays(): `entering` at
+  // enter() and the wake, else a pass's or the news's reading).
+  void statsLife(statsview::Lifetime& l) const;
+  void statsLatch(statsview::Lifetime& l, bool entering);
+  // update()'s part: a new shape restages the page (no news brings the
+  // card back), a new minute redraws row 6, the entry row's line at the
+  // boot fold's end.
+  void statsUpdate();
+  // After update()'s frame: one line an item a recount staged in place
+  // (D17: a landing's lines arriving one a pass, at a still pass).
+  void statsFrame();
+  // The page follows what it reads (the news, each pass's look): an ask
+  // due made (D9 as replaced); a moved shape or text drawn again in place,
+  // the rows staged one a pass (ListView::recountStaged()), and kept; the
+  // header again when its line came or went (not at the wake, `wake`:
+  // redrawAll() draws it next); the band whole from the empty state to No
+  // card's line (statsview::hubDrawsWhole()).
+  void statsFollow(const statsview::Lifetime& l, const char* why, bool wake = false);
+  // The hub as it is now (the phase, the snapshot: Ui's; `l` the lifetime).
+  statsview::HubLook hubNow(const statsview::Lifetime& l) const;
+  // What the stats page draws now, as its shape (the hub's
+  // statsview::hubShape(), with kShapeSub when its header draws the
+  // lifetime line; a shelf's statsview::shelfShape(); Week's its look,
+  // its header's days moving with its texts: statsview::weekHeaderMoved())
+  // in bits 16-23 and its texts (statsview::lookText()) in 0-15; and its
+  // look. statsShape_ and statsText_ keep what it drew.
+  uint32_t statsSigNow(const statsview::Lifetime& l, statsview::PageLook* look = nullptr) const;
+  uint32_t statsSigDrawn() const { return static_cast<uint32_t>(statsShape_) << 16 | statsText_; }
+  void keepSig(uint32_t sig) {
+    statsShape_ = static_cast<uint8_t>(sig >> 16);
+    statsText_ = static_cast<uint16_t>(sig);
+  }
+  uint32_t statsRows();
+  // The hub's rows (drawRow()'s dispatch: each in a frame of its own).
+  void drawStatsRow(ListView::Row& r);
+  Header statsHeader() const;
+  ListView::Tap statsTap(uint32_t row);
+  statsview::Control statsControl(uint32_t row);
+
+  // ---- a shelf (7.6; LibraryStats.cpp) ----
+  // Its look as it is now (the lifetime `l`, the phase and the snapshot:
+  // Ui's), and row `row` of it (statsview::shelfItem(): read anew at each
+  // draw and act, D6). Not inlined: their locals stay out of the frames
+  // that draw.
+  statsview::ShelfLook shelfNow(const statsview::Lifetime& l) const;
+  __attribute__((noinline)) statsview::ShelfItem shelfItemAt(uint32_t row, uint32_t* nowMin = nullptr) const;
+  // rowAt()'s for a shelf: a ranked row (its track, its snapshot row), a
+  // heading, an album, the Try again row.
+  __attribute__((noinline)) RowRef statsRowAt(uint32_t row) const;
+  // A shelf's row drawn (a rank, a heading, Try again); the Library's own
+  // row (Not played yet's albums) handed back for drawLibraryRow(), drawn
+  // once this frame is gone; else nullptr.
+  __attribute__((noinline)) ListView::Row* drawShelfRow(ListView::Row& r);
+  bool statsTopBar();
+  uint32_t statsRailRows();
+  // The row that holds what plays (kShowPlaying: from Now Playing, or the
+  // rows' arrival at the place kept for it); -1: none.
+  int32_t statsPlayingRow() const;
+  // A ranked row's Play, Play next and + Queue (its bar, its sheet), and
+  // the shelf's top bar (`topBar`, `r` None): through the queue's id view
+  // over the snapshot's list, read anew now (D6: its key the live index's,
+  // every id a track of it; a ranked row still the track it was). A None
+  // row that isn't the top bar acts on nothing.
+  void statsAct(const RowRef& r, int action, bool topBar);
+  // statsAct()'s reading: the view over the shelf's list and its title, or
+  // false (the double buzz and a [ui] line: nothing acted on). Not inlined:
+  // the lifetime and the look it reads stay out of the frame that runs
+  // act() and playNow()'s start.
+  __attribute__((noinline)) bool statsActIds(const RowRef& r, bool topBar, IdView* ids, const char** name);
+  // statsFollow()'s for a shelf: its rows arriving at the place kept for
+  // them (listlayout::arrival(), kShowPlaying resolved, D7's window
+  // written back), or restaged where it stands; the tray and the header
+  // drawn again when theirs moved (the header only `headerHere`: the page
+  // shows, and not the wake, whose redrawAll() draws it).
+  void shelfFollow(uint32_t drawn, uint32_t sig, const statsview::Lifetime& l, const char* why, bool headerHere);
+  // A new minute on Recently played: its rows on screen from the first
+  // whose "25 min ago" moved, drawn again in place one a pass.
+  void recentMinute(const statsview::Lifetime& l, uint32_t was);
+  // ---- Last 7 days (7.7; LibraryStats.cpp, S3b's S11) ----
+  // A page of no items and no top bar, its picture the list's body (A's
+  // time and plays, B's seven bars and days, C's big day and Auto DJ's
+  // rate, from the snapshot's week), the phase's or the No card line alone
+  // in A (statsview::weekBodyLine()), or the empty state (its reason, Try
+  // again with Retry). Its look as it is now (the lifetime `l`, the phase,
+  // the snapshot: Ui's).
+  statsview::WeekLook weekNow(const statsview::Lifetime& l) const;
+  // drawBody()'s for Week: the look read, then each 56-row strip filled and
+  // drawn whole at its offset (as drawEmptyState() does: the strip isn't
+  // kept) and pushed; the strip's A and B, and its C, each in a frame of
+  // its own (their texts' buffers never stacked under the glyph store's
+  // draw). False: the empty state's look.
+  __attribute__((noinline)) bool weekBody(M5Canvas& c, int y0, int h);
+  __attribute__((noinline)) void weekStrip(M5Canvas& c, int top, int h, const statsview::WeekFigures& w);
+  __attribute__((noinline)) void weekLines(M5Canvas& c, int top, int h, const statsvisit::Snapshot& s,
+                                           const statsview::WeekFigures& w);
+  // statsFollow()'s for Week: the header again when its days moved
+  // (`header`: statsview::weekHeaderMoved(); `headerHere` as
+  // shelfFollow()'s), the body (or the empty state) whole at the next still
+  // pass.
+  void weekFollow(statsview::Look now, const char* why, bool header, bool headerHere);
+  // Its empty state's button (Retry: the visit asked again).
+  void weekTryAgain();
+  // uiS's parts (printStats()): the hub's rows, a shelf's, Week's.
+  void printHub(const statsview::Lifetime& l);
+  void printShelf(const statsview::Lifetime& l);
+  void printWeek(const statsview::Lifetime& l);
+  const char* statsEmptyText();
+  bool statsEmptyState(EmptyState& e);
+  // A hub row's line (statstext::hubLine(), the catalog's titles).
+  size_t hubLineOf(const statsview::HubItem& it, const statsview::Lifetime& l, const statsvisit::Snapshot* snap,
+                   char* out, size_t size);
+  static size_t statsTitle(uint16_t id, char* out, size_t size, void* ctx);
 
   PageKind kind_ = PageKind::Library;
+  // (Here and below, in the padding: ui::Ui keeps main's 9,416 B, S3b's
+  // byte-exact call. LibraryPage stays 836 B.)
+  EntryRow entry_ = EntryRow::None;
+  // The minute the hub's row 6, or Recently played's rows, were drawn at,
+  // its low 16 bits (statsview::minuteFrom()).
+  uint16_t minute_ = 0;
   uint32_t id_ = 0;
   NavModel::PageRef* ref_ = nullptr;
   bool touchInList_ = false;
+  // The stats page's shape and texts as drawn (statsview::hubShape(),
+  // shelfShape(), lookText(); Week's its look): a change restages it, the
+  // news's or one no news brings (the card back: No card's line to Try
+  // again).
+  uint8_t statsShape_ = 0;
+  uint16_t statsText_ = 0;
   int headerPressed_ = 0;  // Header::hit() of the finger on the header; the root: 10 + its segment
   int32_t segScroll_[3] = {-1, -1, -1};
   char playAll_[48] = "";  // the Folders root's "Play all N"
@@ -511,6 +748,10 @@ private:
   // A long press's row, for its sheet.
   RowRef held_;
   bool heldDj_ = false;  // its sheet has "Auto DJ from here" (the first row)
+  // A stats page's counting days as latched (statsview::latchDays(), 7.10:
+  // taken at its enter() and the wake, held to the next; in the hole after
+  // heldDj_, so LibraryPage stays 836 B).
+  uint8_t days_ = 0;
   // The Album page's disc dividers (read at enter()).
   librarytext::Discs discs_;
   // The Albums list's mood filter (4.6), the albums that fit it, the last

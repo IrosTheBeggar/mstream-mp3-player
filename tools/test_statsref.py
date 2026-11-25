@@ -659,6 +659,56 @@ class RankTests(unittest.TestCase):
         albums = [("Only skipped", [4]), ("Played", [4, 2]), ("Never", [99])]
         self.assertEqual(sr.not_played(st, albums), ["Only skipped", "Never"])
 
+    def test_this_session_first_with_no_clock(self):
+        """The owner's call (2026-11-24, "Yes, fix the order"): with the
+        clock unset, Recently played puts this session's rows first (lastOrd
+        the live round, whatever lastAt), then the rest; each part by
+        lastOrd, newest first, then lastAt, newest first, then the hash (the
+        review of the session order: 4.3's dated order inside Earlier lost
+        the last no-clock session's never-dated plays one boot later). 300
+        dated tracks of earlier rounds (1 to 40); this session's undated
+        plays: two never-dated tracks, one dated track played again (its
+        lastAt kept); the boot's fold of an earlier session's never-dated
+        play (the live round's neighbour: Earlier, first)."""
+        live = 42
+        st = sr.Stats()
+        st.base = {h: sr.Row(1, 0, t_at(h), t_at(h), 1 + h % 40, 0) for h in range(1000, 1300)}
+        st.base[7] = sr.Row(2, 0, 0, 0, 5, 0)              # never dated, an old round: Earlier, cut
+        st.trkd = {9: sr.Row(1, 0, 0, 0, live, 0),         # never dated, this session
+                   8: sr.Row(3, 0, 0, 0, live, 0),         # never dated, this session
+                   1000: sr.Row(1, 0, 0, 0, live, 0),      # the oldest dated, played again undated
+                   6: sr.Row(1, 0, 0, 0, live - 1, 0)}     # the boot's fold: an earlier session's
+        rows = st.tracks()
+        self.assertEqual(rows[1000].lastAt, t_at(1000))    # (its dated lastAt kept, lastOrd the live round)
+        self.assertEqual(rows[1000].lastOrd, live)
+        old = [r[0] for r in sr.recently_played(st)]       # 4.3's dated order: the old no-clock one
+        self.assertEqual(len(old), 216)
+        self.assertTrue(not {9, 8, 6, 1000} & set(old))    # the defect: past the 216 dated rows
+        new = sr.recently_played(st, live_round=live, dated=False)
+        self.assertEqual([r[0] for r in new[:3]], [1000, 8, 9], "the dated one first, then by the hash")
+        # Then Earlier: round 41 (the boot's fold), then round 40's by
+        # lastAt, newest first (h % 40 == 39), and so on down.
+        self.assertEqual([r[0] for r in new[3:7]], [6, 1279, 1239, 1199])
+        self.assertEqual(len(new), 216)
+        self.assertTrue(all(r[3] != live for r in new[3:]))
+        self.assertTrue(all((a[3], a[2]) >= (b[3], b[2]) for a, b in zip(new[3:], new[4:])), "Earlier by round")
+        self.assertNotIn(7, [r[0] for r in new])
+        self.assertEqual(sr.lists(st, None, live_round=live)["recentlyPlayed"], new)
+        # A dated rank: 4.3's order, the live round no matter.
+        self.assertEqual(sr.lists(st, 1400, live_round=live)["recentlyPlayed"], sr.recently_played(st))
+        self.assertEqual(sr.recently_played(st, live_round=live), sr.recently_played(st))
+        # The next session (the default: one that boots on the card), the
+        # clock still unset, before it plays: none of its rows, and the last
+        # session's plays, the never-dated among them, lead Earlier.
+        st.head["round"] = live
+        self.assertEqual(sr.live_round_of(st), live + 2)
+        nxt = sr.lists(st, None)["recentlyPlayed"]
+        self.assertEqual([r[0] for r in nxt[:5]], [1000, 8, 9, 6, 1279])
+        self.assertEqual(nxt, sr.recently_played(st, live_round=0, dated=False))  # (0: no row this session's)
+        self.assertEqual([r[0] for r in nxt], [r[0] for r in new])
+        st.head["round"] = sr.M24
+        self.assertEqual(sr.live_round_of(st), sr.M24)
+
     def test_windows(self):
         self.assertEqual([sr.windows_offered(d) for d in (None, 1, 6, 7, 29, 30, 400)],
                          [[], [], [], [7, None], [7, None], [7, 30, None], [7, 30, None]])
@@ -741,13 +791,15 @@ class RankTests(unittest.TestCase):
         played alone."""
         files = sr.rank_files()
         index = json.loads(files["stats/rank.json"])
-        self.assertEqual([e["name"] for e in index], [n for n, _, _, _ in sr.rank_scenarios()])
+        self.assertEqual([e["name"] for e in index], [n for n, _, _, _, _ in sr.rank_scenarios()])
         for e in index:
             st = sr.read_stats(files["stats/%s/stats.bin" % e["in"]])
             if st.head["baseGen"]:
                 st.base = sr.read_base(files["stats/%s/%s" % (e["in"], sr.base_name(st.head["baseGen"]))],
                                        st.head["baseGen"])
-            self.assertEqual(sr.lists_json(sr.lists(st, e["today"])), e["lists"], e["name"])
+            self.assertEqual("liveRound" in e, e["today"] is None, e["name"])
+            self.assertEqual(sr.lists_json(sr.lists(st, e["today"], live_round=e.get("liveRound"))), e["lists"],
+                             e["name"])
             self.assertEqual(sr.totals(st, e["today"]), e["totals"], e["name"])
             self.assertEqual(sr.days7(st, e["today"]), e["days7"], e["name"])
             self.assertEqual(sr.played40_bytes(sr.played40(st)).hex(), e["played40"], e["name"])
@@ -763,6 +815,36 @@ class RankTests(unittest.TestCase):
         none = by["rank-no-clock"]["lists"]
         self.assertEqual((none["mostPlayed"]["7"], none["newFinds"], none["oldFavourites"]), (None, None, None))
         self.assertIsNone(by["rank-no-clock"]["days7"]["days"])
+        # A session that boots on rank-big's card has none of its rows: no
+        # This session; Earlier by round, newest first.
+        self.assertEqual(by["rank-no-clock"]["liveRound"], 2)
+        self.assertTrue(all(r[3] != 2 for r in none["recentlyPlayed"]))
+        by_round = lambda rs: all((a[3], a[2]) >= (b[3], b[2]) for a, b in zip(rs, rs[1:]))  # noqa: E731
+        self.assertTrue(by_round(none["recentlyPlayed"]))
+        # The owner's call (2026-11-24): this session's six rows first (two
+        # dated, played again; four never dated), then Earlier by round:
+        # the boot's fold's (901), then the 363 dated rows of earlier rounds.
+        ses = by["rank-no-clock-session"]
+        live, recent = ses["liveRound"], ses["lists"]["recentlyPlayed"]
+        self.assertEqual(live, sr.RANK_LOADED + 2)
+        first = [r for r in recent if r[3] == live]
+        self.assertEqual(recent[:len(first)], first)
+        self.assertEqual((len(first), sum(1 for r in first if r[2])), (6, 2))
+        self.assertEqual(len(recent), 216)
+        self.assertEqual((recent[6][3], recent[6][2]), (sr.RANK_LOADED + 1, 0))
+        self.assertTrue(by_round(recent))
+        # The next session, before it plays: no row its; the last session's
+        # six lead Earlier, its four never-dated plays among them, where
+        # 4.3's dated order kept none of them (the review of the session
+        # order).
+        nxt = by["rank-no-clock-next"]
+        self.assertEqual((nxt["in"], nxt["liveRound"]), (ses["in"], live + 2))
+        self.assertEqual(nxt["lists"]["recentlyPlayed"], recent)
+        st = sr.read_stats(files["stats/%s/stats.bin" % ses["in"]])
+        st.base = sr.read_base(files["stats/%s/%s" % (ses["in"], sr.base_name(st.head["baseGen"]))],
+                               st.head["baseGen"])
+        self.assertEqual(sum(1 for r in sr.recently_played(st) if r[3] == live and not r[2]), 0)
+        self.assertEqual(sum(1 for r in recent[:6] if not r[2]), 4)
         self.assertEqual(by["rank-days"]["rows"]["days"], sr.DAYS_ROWS)
         self.assertEqual(by["rank-rcnt-cap"]["days7"]["rcntFirstDay"], sr.RANK_TODAY - 12)
         self.assertLessEqual(by["rank-rcnt-cap"]["rows"]["rcnt"], sr.RCNT_ROWS)

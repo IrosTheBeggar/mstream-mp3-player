@@ -435,6 +435,163 @@ def check_indicator():
     assert widest <= INDICATOR_MAX_W, widest
 
 
+# The listening stats' icons (docs/LISTENING-STATS.md 7.4 and 7.5): the
+# hub's rows (1-bit SOFT, centred on its row's (26, 21); FAINT on a
+# disabled row, AMBER for the clock on the status row) and the empty
+# state's disc. Trophy, spark, heart, clock and chart are the design
+# frames' pixel for pixel (docs/img/listening-stats: Main, NoClock,
+# NoPlays); the ring with a play mark (Not played yet) is in no frame, so it
+# is the clock's ring with a play triangle in kPlay's 2 px steps: its box
+# x 6-12, half a pixel right of the ring's middle (8.5), so its weight (x
+# 8.3) sits on it. Row 1's seven bars are drawn, not an icon
+# (statsview::kEntryBars).
+TROPHY = [
+    "...############...",
+    "##.############.##",
+    "#..############..#",
+    "#..############..#",
+    "##.############.##",
+    ".##.##########.##.",
+    "....##########....",
+    ".....########.....",
+    ".......####.......",
+    "........##........",
+    "........##........",
+    "......######......",
+    "....##########....",
+    "....##########....",
+]
+
+# New finds: a four-pointed spark.
+SPARK = [
+    "........##........",
+    "........##........",
+    "........##........",
+    ".......####.......",
+    ".......####.......",
+    "......######......",
+    ".....########.....",
+    "...############...",
+    "##################",
+    "##################",
+    "...############...",
+    ".....########.....",
+    "......######......",
+    ".......####.......",
+    ".......####.......",
+    "........##........",
+    "........##........",
+    "........##........",
+]
+
+# Old favourites.
+HEART = [
+    "..#####....#####..",
+    ".#######..#######.",
+    "##################",
+    "##################",
+    "##################",
+    "##################",
+    ".################.",
+    ".################.",
+    "..##############..",
+    "...############...",
+    "....##########....",
+    ".....########.....",
+    "......######......",
+    ".......####.......",
+    "........##........",
+]
+
+# The clock's ring (2 px), shared with the ring and play mark.
+RING = [
+    "......######......",
+    "....##########....",
+    "...###......###...",
+    "..##..........##..",
+    ".##............##.",
+    ".##............##.",
+    "##..............##",
+    "##..............##",
+    "##..............##",
+    "##..............##",
+    "##..............##",
+    "##..............##",
+    ".##............##.",
+    ".##............##.",
+    "..##..........##..",
+    "...###......###...",
+    "....##########....",
+    "......######......",
+]
+
+
+def clock():
+    # Recently played, and the status row's no-dates clock (in AMBER): the
+    # ring, its hands at three o'clock.
+    img = from_art(RING)
+    d = ImageDraw.Draw(img)
+    d.rectangle((8, 4, 9, 9), fill=1)                   # the minute hand, up
+    d.rectangle((8, 8, 13, 9), fill=1)                  # the hour hand, right
+    return img
+
+
+def ring_play():
+    # Not played yet: the ring and a play mark, 8 rows from row 5 (centred
+    # on the ring's middle, between rows 8 and 9), 2 px a row as kPlay's.
+    img = from_art(RING)
+    d = ImageDraw.Draw(img)
+    for i, w in enumerate((2, 4, 6, 7, 7, 6, 4, 2)):
+        d.line((6, 5 + i, 5 + w, 5 + i), fill=1)
+    return img
+
+
+def chart():
+    # The stats' empty state (a 48 px disc): an axis and three bars.
+    img, d = canvas(18, 18)
+    d.rectangle((0, 0, 1, 17), fill=1)                  # the axis
+    d.rectangle((0, 16, 17, 17), fill=1)
+    d.rectangle((4, 9, 6, 14), fill=1)                  # the bars
+    d.rectangle((9, 4, 11, 14), fill=1)
+    d.rectangle((14, 7, 16, 14), fill=1)
+    return img
+
+
+# Their sizes (7.4: trophy 18 x 14, spark 18 x 18, heart 18 x 15, clock,
+# ring and chart 18 x 18): every one 18 wide, so the hub's icons line up on
+# x 17-34 (drawCentred on x 26).
+STATS_SIZES = {
+    "Trophy": (18, 14),
+    "Spark": (18, 18),
+    "Heart": (18, 15),
+    "Clock": (18, 18),
+    "Chart": (18, 18),
+    "RingPlay": (18, 18),
+}
+
+
+def check_stats(icons):
+    made = dict(icons)
+    for name, size in STATS_SIZES.items():
+        assert made[name]().size == size, (name, made[name]().size, size)
+    ring = from_art(RING)
+    for name in ("Clock", "RingPlay"):
+        img = made[name]()
+        for y in range(18):
+            for x in range(18):
+                if ring.getpixel((x, y)):
+                    assert img.getpixel((x, y)), (name, x, y)  # the same ring
+    # The play mark stands clear of the ring (a row or column of space
+    # between them all round, so it reads at 1x).
+    play = made["RingPlay"]()
+    for y in range(18):
+        for x in range(18):
+            if play.getpixel((x, y)) and not ring.getpixel((x, y)):
+                for dy in (-1, 0, 1):
+                    for dx in (-1, 0, 1):
+                        assert not ring.getpixel((x + dx, y + dy)), (x, y)
+
+
 ICONS = [
     ("Library", library),
     ("Queue", queue),
@@ -470,6 +627,12 @@ ICONS = [
     ("ShuffleSmall", lambda: from_art(SHUFFLE_SMALL)),
     ("RepeatSmall", lambda: from_art(REPEAT_SMALL)),
     ("RepeatOneSmall", lambda: from_art(REPEAT_ONE_SMALL)),
+    ("Trophy", lambda: from_art(TROPHY)),
+    ("Spark", lambda: from_art(SPARK)),
+    ("Heart", lambda: from_art(HEART)),
+    ("Clock", clock),
+    ("Chart", chart),
+    ("RingPlay", ring_play),
 ]
 
 
@@ -500,6 +663,7 @@ def main():
     ap.add_argument("--preview", action="store_true")
     args = ap.parse_args()
     check_indicator()
+    check_stats(ICONS)
     nl = chr(10)
     lines = [
         "// SPDX-License-Identifier: GPL-3.0-or-later",

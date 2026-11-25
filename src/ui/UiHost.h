@@ -13,6 +13,7 @@
 #include "PlayGate.h"
 #include "PlaybackController.h"
 #include "QueueView.h"
+#include "StatsView.h"
 
 // What the UI reads of the rest of the firmware, and the few things it asks
 // of it. main.cpp implements UiHost; the UI takes one AppState snapshot a
@@ -325,6 +326,50 @@ public:
   // nobody had looked at yet (maybe a pocket's second contact): the fade
   // toast's +10 min and Turn off don't act on it (they raise the level).
   virtual bool touchLandedUnattended() const = 0;
+
+  // ---- the listening stats' pages (docs/LISTENING-STATS.md 7.11, 9.7) ----
+  // app/StatsLists' asks and the lifetime, through app/PlayHistory: RAM, us
+  // each, no card I/O, and no AppState field (its 496 B stay main's). Each
+  // has a default that reads as a host with no play log (the stats off,
+  // nothing asked or served), so a host without them still builds.
+  // A visit's ask, or Not played yet's lean ask (S3a's ask(): the card held
+  // or away dropped at once, No card). True: queued; false: dropped (the
+  // stats off, the card gone, Not played yet with no landed snapshot).
+  virtual bool statsAsk(statsview::UiAsk a) {
+    (void)a;
+    return false;
+  }
+  // The page's ask cancelled (Asked: dropped; queued: its block back; on the
+  // card worker: its result dropped at its step's end).
+  virtual void statsCancel() {}
+  // ... and the snapshot released (`why`: its [listen] line's words).
+  virtual void statsRelease(const char* why) { (void)why; }
+  // The phase, why, outcome and version (the pages' line, their redraws).
+  virtual void statsPhase(statsview::PhaseInfo& out) { out = statsview::PhaseInfo(); }
+  // True once each time the version moves (StatsLists' one news byte: one
+  // reader, Ui::loop).
+  virtual bool statsNews() { return false; }
+  // The held snapshot once the visit's ask has landed (resolved); else null.
+  // Read at each use: null from a re-ask's write to its landing.
+  virtual const statsvisit::Snapshot* statsSnapshot() const { return nullptr; }
+  // Most played's window into the held snapshot's header (no ask).
+  virtual void statsSetWindow(uint8_t window) { (void)window; }
+  // The lifetime from RAM (HEAD, the clock, the stats on or folding, the
+  // card in: statsview::lifetimeOf()), read at each page's update().
+  virtual void statsLifetime(statsview::Lifetime& out) { out = statsview::Lifetime(); }
+  // A made-up view (9.3's uiSx<n>, look only: 1-9; 0 ends it, a made-up
+  // snapshot released, a real one kept: true). For 1-9 whatever is held is
+  // released first (a page's ask cancelled, a console visit or lean ask
+  // under way ended, the snapshot held released), then for 1, 3 and 4 its
+  // made-up snapshot written into the Dance tab's block, lent, and served.
+  // True: written, or a view with none (2, 5-9). False: past 9 (no such
+  // view: nothing done), or for 1, 3 and 4 not written (no play log, no
+  // index ready, the Dance tab up, the write refused: its [listen] line says
+  // why), with nothing held; the pages then draw the view's look with
+  // nothing served (S12; statsview::pageLook(): Pending, nothing due). So
+  // for 1-9 no view stands on a real snapshot. The default is a host with
+  // no play log's (statsview::madeUpNoLog(), as app/PlayHistory's).
+  virtual bool statsMadeUp(uint8_t n) { return statsview::madeUpNoLog(n); }
 
 protected:
   ~UiHost() = default;

@@ -3571,7 +3571,10 @@ made-up library behind Not played yet: its albums in A-Z order, each
 track's path and hash. `stats/rank.json` lists the rankers' scenarios
 (docs/LISTENING-STATS.md 4.3 and 6.8): each a card's `stats.bin` and its
 base as a long history leaves them (`in`, under `stats/rank/`), every list
-past its cap and 16, `today` (null: the clock unset), the rows each
+past its cap and 16, `today` (null: the clock unset; then `liveRound`,
+the ranking session's Fold::liveRound(): Recently played's rows whose
+lastOrd it is come first, This session, then the rest by lastOrd,
+newest first), the rows each
 section holds, how many tracks there are and how many have a play, and
 RCNT's rows in the 30-day window (`rows`), and what a rank MUST give over
 them (9.7's S3a): the lists (`lists`, as a boot's above, without

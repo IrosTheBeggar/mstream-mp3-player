@@ -68,6 +68,35 @@ constexpr uint32_t kTrimMost = sr::rowsOf(sr::kOldFavourites) < sr::rowsOf(sr::k
 
 uint16_t sat16(uint32_t v, uint32_t top) { return static_cast<uint16_t>(v > top ? top : v); }
 
+// The made-up ids' step: 7,919 or the next odd number coprime to the track
+// count, so i * step % tracks never repeats under the tracks (a count that
+// 7,919, a prime, divides, 7,919 itself among them, would give one id).
+uint32_t gcdOf(uint32_t a, uint32_t b) {
+  while (b) {
+    const uint32_t t = a % b;
+    a = b;
+    b = t;
+  }
+  return a;
+}
+uint32_t madeUpStep(uint32_t tracks) {
+  uint32_t step = 7919;
+  while (tracks > 1 && gcdOf(step, tracks) != 1) step += 2;
+  return step;
+}
+
+// Old favourites' made-up last days (4.3: before the 30-day window, within
+// the counting): today - 31 for row 0, down to sinceDay for the last row,
+// spread between, each row's no newer than the one before (the list's
+// order: plays, then lastAt, newest first). kUnsetDay undated.
+uint16_t madeUpLastDay(bool dated, uint16_t today, uint16_t sinceDay, uint32_t i, uint32_t n) {
+  if (!dated || today == sf::kUnsetDay || today < 31) return sf::kUnsetDay;
+  const uint32_t hi = today - 31u;
+  const uint32_t lo = sinceDay != sf::kUnsetDay && sinceDay <= hi ? sinceDay : hi;
+  const uint64_t back = n > 1 ? static_cast<uint64_t>(i) * (hi - lo) / (n - 1) : 0;
+  return static_cast<uint16_t>(hi - back);
+}
+
 }  // namespace
 
 const char* gradeName(Grade g) {
@@ -246,10 +275,18 @@ bool write(const sr::Ranker& ranker, const sm::Wanted& wanted, const sr::Report&
           cc::put16(row + 4, e.at ? sf::dayOfTime(e.at) : sf::kUnsetDay);
           break;
         case sr::kRecent: {
-          // Minutes since 2026-01-01 (a row's time is seconds plus 1); no
-          // dated play: this session's (lastOrd the live round) or earlier.
+          // Dated: minutes since 2026-01-01 (a row's time is seconds plus
+          // 1); no dated play: this session's (lastOrd the live round) or
+          // earlier. With no clock (4.3: "This session", then "Earlier"; the
+          // owner's call, 2026-11-24): the rank's mark alone, this session's
+          // rows (lastOrd the live round, whatever lastAt: a track played
+          // again keeps its dated lastAt) and every other row earlier. No
+          // dated when, so no day heading and no time: the rank has put
+          // this session's first, so the two parts follow each other.
           uint32_t when = 0;
-          if (e.at) {
+          if (!dated) {
+            when = e.session ? kWhenSession : kWhenEarlier;
+          } else if (e.at) {
             when = (e.at - 1) / 60;
             if (when > kWhenMax) when = kWhenMax;
           } else {
@@ -287,7 +324,8 @@ bool write(const sr::Ranker& ranker, const sm::Wanted& wanted, const sr::Report&
   cc::put16(p + kOffDir, static_cast<uint16_t>(bits + bitBytes(ctx.albums)));
   p[kOffWindow] = ctx.window <= kAllTime ? ctx.window : kAllTime;
   cc::put32(p + kOffVersion, ctx.version);
-  p[kOffFlags] = static_cast<uint8_t>((dated ? kFlagDated : 0) | kFlagWritten);
+  p[kOffFlags] =
+      static_cast<uint8_t>((dated ? kFlagDated : 0) | kFlagWritten | (sr::rcntShort(report) ? kFlagRcntShort : 0));
   return true;
 }
 
@@ -350,6 +388,123 @@ bool notPlayed(const sm::Map& map, const LibraryIndex& index, Snapshot* snap) {
   }
   cc::put16(p + kOffCount, static_cast<uint16_t>(count));
   p[kOffFlags] = static_cast<uint8_t>(p[kOffFlags] | kFlagNotPlayed);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// A made-up snapshot (the console's uiSx views)
+// ---------------------------------------------------------------------------
+bool writeMadeUp(const MadeUp& m, Snapshot* snap, size_t bytes) {
+  if (!snap || m.trackCount > kMaxTracks || m.albums > kMaxAlbums || bytesFor(m.albums) > bytes) return false;
+  uint8_t* p = reinterpret_cast<uint8_t*>(snap);
+  // As write(): the flags first, then every byte.
+  p[kOffFlags] = 0;
+  std::memset(p, 0, bytesFor(m.albums));
+  cc::put16(p + kOffMagic, kMagic);
+  p[kOffGrade] = static_cast<uint8_t>(m.grade);
+  cc::put64(p + kOffStamp, m.buildStamp);
+  cc::put32(p + kOffTracks, m.trackCount);
+  cc::put32(p + kOffTime, m.dated ? m.time : 0);
+  const uint16_t today = m.dated ? m.today : sf::kUnsetDay;
+  cc::put16(p + kOffToday, today);
+  cc::put32(p + kOffRound, m.liveRound);
+  // The minute `time` falls in (a row's time is seconds plus 1), Recently
+  // played's dated rows counted back from it.
+  const uint32_t nowMin = m.dated && m.time ? (m.time - 1) / 60 : 0;
+  const uint32_t step = madeUpStep(m.trackCount);
+  for (int li = 0; li < sr::kLists; ++li) {
+    const List l = static_cast<List>(li);
+    // The lists the clock unset doesn't offer have no rows (Ranker::offered()).
+    const bool offered = m.dated || l == sr::kMostAll || l == sr::kRecent;
+    uint32_t want = offered ? m.rows[li] : 0;
+    if (l == sr::kRecent) want = (m.dated ? want : 0) + m.sessionRows + m.earlierRows;
+    const uint32_t n = std::min({want, roomOf(l, m.albums), sr::kCaps[l], m.trackCount});
+    uint8_t* row = p + offsetOf(l, m.albums);
+    // Recently played: its dated rows first, then this session's, then
+    // earlier (cut from the end, as the cap cuts a rank's). Undated: no
+    // dated row, so this session's, then earlier, as write() codes a rank
+    // made with no clock (the owner's call, 2026-11-24).
+    const uint32_t dated = l == sr::kRecent ? std::min(n, m.dated ? m.rows[li] : 0) : 0;
+    const uint32_t session = l == sr::kRecent ? std::min(n - dated, m.sessionRows) : 0;
+    for (uint32_t i = 0; i < n; ++i, row += kStrides[l]) {
+      // The ids spread over the library (the step coprime to its tracks),
+      // each list from its own place.
+      const uint32_t id =
+          static_cast<uint32_t>((static_cast<uint64_t>(i) * step + static_cast<uint64_t>(li) * 211u) % m.trackCount);
+      cc::put16(row, static_cast<uint16_t>(id));
+      const uint32_t top = m.topCount[li];
+      const uint32_t count = top > i + 1 ? top - i : 1;
+      switch (l) {
+        case sr::kNewFinds:
+          cc::put16(row + 2, static_cast<uint16_t>(sat16(count, kNewFindsCountMax) | (i % 3u) << 14));
+          break;
+        case sr::kOldFavourites:
+          // 4.3's rule: plays at least 5, last played before the 30-day
+          // window and within the counting.
+          cc::put16(row + 2, sat16(std::max(count, sr::kOldFavourite), kCountMax));
+          cc::put16(row + 4, madeUpLastDay(m.dated, today, m.sinceDay, i, n));
+          break;
+        case sr::kRecent: {
+          uint32_t when = 0;
+          if (i < dated) {
+            const uint32_t ago = m.recentFirstAgoMin + i * m.recentStepMin;
+            when = nowMin > ago ? nowMin - ago : 0;
+            if (when > kWhenMax) when = kWhenMax;
+          } else {
+            when = i < dated + session ? kWhenSession : kWhenEarlier;
+          }
+          row[2] = static_cast<uint8_t>(when);
+          row[3] = static_cast<uint8_t>(when >> 8);
+          row[4] = static_cast<uint8_t>(when >> 16);
+          break;
+        }
+        default:
+          cc::put16(row + 2, sat16(count, kCountMax));
+          break;
+      }
+    }
+    cc::put16(p + kOffRows + 2 * li, static_cast<uint16_t>(n));
+    cc::put32(p + kOffTotals + 4 * li, offered ? std::max(m.totals[li], n) : 0);
+  }
+  cc::put16(p + kOffFirstDay, m.firstDay);
+  cc::put16(p + kOffNewestDay, m.newestDay);
+  cc::put16(p + kOffRcntFirst, m.rcntFirstDay);
+  cc::put16(p + kOffSince, m.sinceDay);
+  for (uint32_t i = 0; i < sr::kWeekDays && m.dated; ++i) {
+    uint8_t* d = p + kOffDays + i * kDayBytes;
+    cc::put32(d, m.days[i].listenedMs);
+    cc::put16(d + 4, m.days[i].plays);
+    cc::put16(d + 6, m.days[i].autoDjPlays);
+    cc::put16(d + 8, m.days[i].autoDjSkips);
+  }
+  const size_t bits = offsetOf(sr::kRecent, m.albums) +
+                      static_cast<size_t>(roomOf(sr::kRecent, m.albums)) * kStrides[sr::kRecent];
+  const size_t dir = bits + bitBytes(m.albums);
+  cc::put16(p + kOffAlbums, static_cast<uint16_t>(m.albums));
+  cc::put16(p + kOffBits, static_cast<uint16_t>(bits));
+  cc::put16(p + kOffDir, static_cast<uint16_t>(dir));
+  p[kOffWindow] = m.window <= kAllTime ? m.window : kAllTime;
+  cc::put32(p + kOffVersion, m.version);
+  uint8_t flags = static_cast<uint8_t>(kFlagWritten | kFlagResolved | kFlagMadeUp | (m.dated ? kFlagDated : 0) |
+                                       (m.dated && m.rcntShort ? kFlagRcntShort : 0));
+  if (m.notPlayedEvery) {
+    // notPlayed()'s bytes: a set bit played (and every bit past the last
+    // album), then each 64 albums' clear bits, and the count.
+    uint32_t count = 0;
+    for (uint32_t pos = 0; pos < bitBytes(m.albums) * 8; ++pos)
+      if (pos >= m.albums || pos % m.notPlayedEvery != 0)
+        p[bits + pos / 8] = static_cast<uint8_t>(p[bits + pos / 8] | 1u << (pos % 8));
+    for (uint32_t g = 0; g < groups(m.albums); ++g) {
+      uint32_t clear = 0;
+      const uint32_t end = std::min(m.albums, (g + 1) * 64);
+      for (uint32_t pos = g * 64; pos < end; ++pos) clear += (p[bits + pos / 8] >> (pos % 8) & 1) ? 0 : 1;
+      cc::put16(p + dir + 2 * g, static_cast<uint16_t>(clear));
+      count += clear;
+    }
+    cc::put16(p + kOffCount, static_cast<uint16_t>(count));
+    flags = static_cast<uint8_t>(flags | kFlagNotPlayed);
+  }
+  p[kOffFlags] = flags;
   return true;
 }
 

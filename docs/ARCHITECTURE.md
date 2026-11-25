@@ -45,6 +45,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  StatsFold  StatsFile  StatsGlue (the listening stats)        |
               |  StatsRank  StatsMap  PathHashWalk (their lists, their map)   |
               |  StatsVisit (their pages' snapshot, its grades, the phase)    |
+              |  StatsView  StatsText  IdView (their pages; the queue's view) |
               +------------------------------+--------------------------------+
                                              |
               +------------------------------+--------------------------------+
@@ -65,6 +66,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |         ui/HotMem), Overlays, pages,                          |
               |         Fonts (VLW DejaVu + CJK store), Icons, Gfx, Thumbs,   |
               |         EmptyState, FilterSheet (the mood filters' editor)    |
+              |         LibraryStats (the Library's listening stats pages)    |
               |  ui/BootScreen (the mStream logo and the version)             |
               |  app/Version (the version from git, the app description)      |
               |  app/UsbViz (the USB visualizer: a computer drives the dancer)|
@@ -1421,8 +1423,9 @@ sprite). Console `m` or a tap on the dancer swaps them. Design, commands and
 results: [MASCOT-POC.md](MASCOT-POC.md).
 The tracker's scratch (2,048 mono frames, 4,096 B of PSRAM, carved at
 `DanceMode::begin()` and kept) is read only while the tab is up. While it is
-down it is lent to the listening stats' pages' snapshot
-(`DanceMode::lendScratch()`), and `setActive(true)` takes it back before the
+down it is lent (`DanceMode::lendScratch()`) to the listening stats' pages'
+snapshot, and to the console's made-up views' (`uiSx1`, 3 and 4), and
+`setActive(true)` takes it back before the
 tracker reads into it (`dancelend::reclaim()`: the snapshot released; Library
 and queue's Listening stats bullet; LISTENING-STATS.md 9.7).
 
@@ -1627,7 +1630,8 @@ bad. Log lines: `[plays] ...`, one per slot with the time its write took.
 
 **The listening stats** (`/.player/stats.bin` and the base it names;
 [LISTENING-STATS.md](LISTENING-STATS.md), METADATA.md 3.11; that plan's
-S1, reworked by its 5.14: counted and saved, nothing on the screen yet):
+S1, reworked by its 5.14: counted and saved; on the screen since S3b,
+the UI's Library paragraph below):
 every play on the card, from every player that wrote its log, counted
 from the play log into one card container. RAM holds a fixed few
 kilobytes; the aggregate lives in `stats.bin` alone, and each save merges
@@ -2659,7 +2663,14 @@ strings.
   current entry and + Queue after the highest rank, never shuffled in (the
   listener put them there); a move to play next ranks the moved right after
   the current entry; an add to an empty queue is laid out as a Play from
-  its first.
+  its first. The three adds (`replace()`, `insertNext()`, `append()`, and
+  `PlaybackController`'s `playNow()`, `playNext()` and `addToQueue()`)
+  take the tracks as a u32 array or as an **id view** (`lib/core/IdView`:
+  u16 or u32 ids at a stride, read in place, made only by `IdView::of()`
+  and `IdView::u16()`); the array forms are views of the array, and the
+  queue copies the ids either way. So a stats shelf acts on its
+  snapshot's u16 ids where they are, nothing copied or carved for the
+  act (LISTENING-STATS.md 7.6; `test_queue` pins the two forms equal).
   **Auto DJ's add** ([AUTODJ.md](AUTODJ.md)) is `appendQuiet(track)`: one
   entry at the end, as an `append()` of one (ranked after the highest
   rank while shuffled, never shuffled in; the current entry on an empty
@@ -2950,8 +2961,9 @@ strings.
   the walk the listening stats' map takes too (LISTENING-STATS.md 6.2):
   one hashing rule, the join's output unchanged (`test_autodj_join`).
   The join doesn't begin while the listening stats hold a block: the
-  boot scan's, or an ask's (Hr, Hl, Hw, Hp; S3a's stats pages' asks and
-  Hv, Hn, Hu, but not their held snapshot: `Env::statsHold`); and a rank
+  boot scan's, or an ask's (Hr, Hl, Hw, Hp; the stats pages' asks, S3a's
+  made by S3b's pages, and Hv, Hn, Hu, but not their held snapshot:
+  `Env::statsHold`); and a rank
   waits for a join that works or is due (`AutoDj::joinPending()`).
 - **Waveforms** ([WAVEFORM-INDEX.md](WAVEFORM-INDEX.md) 11): `app/Waves`,
   a member of the `Ui`, takes the path and the row the boot's root names,
@@ -3127,7 +3139,7 @@ strings.
   Auto DJ's PSRAM from setup) is main's size.
 
   S3a (the stats pages' asks: LISTENING-STATS.md 9.7, under "A: nothing
-  held"; on the console until S3b's screens) shares S2's one slot. A
+  held"; the stats pages make them since S3b, below) shares S2's one slot. A
   page's ask (`StatsLists::ask()`, forwarded by `PlayHistory::statsAsk()`
   for S3b's `UiHost`) is a visit's (every list, the 7 days and Not played
   yet) or Not played yet's lean ask, and only the listener's navigation
@@ -3190,7 +3202,11 @@ strings.
   block given back once its holds reach 3 s in all (Capped, nothing
   asked by itself). The snapshot is released (the pointer dropped,
   nothing freed), a `[listen]` line each, by `release()` (S3b's `Ui`:
-  the pages left, another tab, the dark), when the Dance tab comes up
+  the pages left, another tab, the dark, a suspend for another screen
+  such as the input lab, the clock set over an undated snapshot
+  (`Ui::statsUndated()`), `uil<n>`, a new index (a Live or a rebuild:
+  `Ui::libraryChanged()`) and a made-up view's write, `uiSx1`-`uiSx9`),
+  when the Dance tab comes up
   (`DanceMode::setActive(true)` calls `dancelend::reclaim()` before its
   tracker reads into the block; an ask in flight then ends without
   writing, and nothing asks again by itself), at the library update's
@@ -3209,7 +3225,8 @@ strings.
   `Hk` prints the held snapshot, paced by the serial port's room, and
   `Hc0`, `Hc1`, `Hc` the cap. `.bss` is 16 B over main's (`StatsLists`
   24 to 44 B); `DanceMode`, `ui::Ui`, `CardTasks` and Auto DJ's object
-  are main's sizes. S3a first carved the snapshot as a plain block, and
+  are main's sizes (`ui::Ui` held at 9,416 B by a `static_assert` since
+  S3b). S3a first carved the snapshot as a plain block, and
   the device's run 3a-4 (2026-11-21) found that, held, it moved main's
   PSRAM (free 3,908 B under, the largest free block 24,576-90,112 B
   under from the second library update on), where the visits alone,
@@ -3219,6 +3236,56 @@ strings.
   re-run against main (2026-11-22, V10b's image) found it so on the
   device: every `D`, join and fence main's to the byte, free included
   (MEASURED; LISTENING-STATS.md 9.7, "S3a: V8-V10's device pass").
+
+  S3b (the stats pages' screens: LISTENING-STATS.md 7, and 9.7's "As
+  built (S3b)"; 2026-11-24: built on main 37ed055 and host-gated, not
+  merged, not yet on a device, its runs 3b-1 to 3b-9 owed) puts the
+  pages on the screen: the Artists root's entry row, the hub, the five
+  shelves and Last 7 days, all `LibraryPage`'s (`src/ui/LibraryStats.cpp`;
+  PageKinds `StatsHub`, `StatsShelf`, `StatsWeek`), their looks and words
+  lib/core's (`statsview`, `statstext`; test_ui_stats). The `Ui` keeps
+  the **held condition**, `statsview::onStatsPages(nav, dark, suspended,
+  synthetic)`: the Library tab shown with a stats page in its stack (an
+  album, an artist, a bar or a sheet above one counts), the screen lit,
+  the UI not suspended, and the card's library (not `uil<n>`'s). The
+  snapshot is held exactly while it is true. Its rise comes after the old
+  page's `leave()` and before the stats page's `enter()` (at a wake,
+  before `redrawAll()`): it folds every shelf's open bar in the Library's
+  stack first (`statsview::foldShelfBars()`, the place kept), then asks a
+  visit, so the page's first frame reads Working. It asks nothing with
+  the stats off, the card out or nothing played; with the card out it
+  marks the `Ui` (`statsCardOut_`), so the pages read No card and, the
+  card back, offer Try again ("The card is back") with nothing asked by
+  itself. Its fall releases after the stats page's `leave()`, so the
+  page's place is saved with its rows. `Ui::loop` reads the stats' news
+  once a pass, after `host_.snapshot()` and before the dark's return and
+  the modal check (S3a's own releases run before it, in
+  `PlayHistory::loop`): a release under a shelf that drew the snapshot's
+  rows closes what reads them (its sheet, the jump grid) and enters it
+  again at 0 rows; the hub and Week follow in place. The pages keep no
+  pointer into the snapshot: each draw and act reads it again through
+  `UiHost`'s nine stats calls (`statsAsk`, `statsCancel`,
+  `statsRelease`, `statsPhase`, `statsNews`, `statsSnapshot`,
+  `statsSetWindow`, `statsLifetime`, `statsMadeUp`), checked against its
+  key and the index's tracks, and a shelf's act hands the queue an id
+  view over its rows (above). A stats page latches its counting days at
+  its `enter()` and at the wake, and holds them to the next
+  (`statsview::latchDays()`, LISTENING-STATS.md 7.10), so a new UTC day
+  never moves the hub's rows or the tray under the finger. The console's
+  made-up views (`uiSx1`-`uiSx9`, look only: the UI's console `ui`,
+  below) write theirs into the same Dance block (views 1, 3 and 4), carving
+  nothing. `ui::Ui` stays main's 9,416 B to the byte (the owner's
+  "Byte-exact", 2026-11-22; a `static_assert`): its three new bytes, the
+  held condition, the card-out mark and the made-up view (RAM only), sit
+  in its padding. `LibraryPage` stays 836 B (the entry row's latch, the
+  minute, the drawn shape and texts and the counting days held are in its
+  holes; gdb), and `ListView` 432 B and `ListLayout` 12 B (each a
+  `static_assert`).
+  `.iram0.text`, `.dram0.data` and `.dram0.bss` are main's (`StatsLists`
+  44 B); flash grows by 35,888 B of `.flash.text` and 26,376 B of
+  `.flash.rodata` over main 37ed055, the strings and their nine
+  translations among it: 75 % of the 6 MB slot by flash_guard's count
+  (74 % at main; MEASURED, the host builds and gdb).
 
 ## Input
 
@@ -4449,7 +4516,45 @@ Queue, Dance and Output (with its Pair and About pages).
   worked out again when Albums next shows (the same pass as `gm<hex>`'s
   albums, 14-31 ms idle at 1,707 albums: MOOD-FILTERS.md 9.6). A card
   with no mood data drops it; no memory for the albums keeps the old
-  filter, with `toast.no_memory`.
+  filter, with `toast.no_memory`. **Listening stats** (docs/LISTENING-STATS.md
+  7; S3b, host-tested, not yet on a device): on the card's library with
+  the stats on and the card in (not behind the fence, not `uil<n>`'s,
+  with artists), the Artists list's first row is the way in, a top row
+  that scrolls as the Filters row does: the fixed bars, "Listening
+  stats" and the lifetime, "74 h 10 min since 1 Sep" (Small in 204 px,
+  else the time alone: the owner's "Time alone", 2026-11-22), "Counting
+  plays…" while the boot's fold runs (drawn again at its end), "Plays
+  show up as you listen" with nothing played. It is decided at
+  `enter()`, so no artist moves under it; a row latched while folding
+  whose fold ends with the stats off reads "Couldn't read the stats" and
+  opens nothing. It opens the **hub**: the lifetime in its header, then
+  six rows (Last 7 days, Most played, New finds, Old favourites, Not
+  played yet, Recently played), each open with its line from the visit's
+  snapshot (or the phase's, "Counting plays…"), or disabled with its
+  reason ("Opens 6 Dec, after a month of plays" in the first month,
+  "Needs dates" with no clock; its tap the double buzz and a toast), and
+  with no clock row 1 is the status row ("No dates yet: the clock isn't
+  set"). A Try again row follows them when the ask came to nothing, or
+  when the card is back ("The card is back": the owner's call,
+  2026-11-22); with nothing played the hub is the empty state with
+  Shuffle all, and with the card out its No card line alone. The rows
+  open the **shelves**: Most played, with its tray of windows (7 days,
+  30 days, All time, as the days counted allow) as a lead item; New
+  finds; Old favourites; Recently played, under its days' headings, or
+  with no clock this session's plays first and then Earlier's (the
+  owner's "Yes, fix the order", 2026-11-24): each a ranked list of tracks
+  with a top bar, a row's tap its bar, a hold its sheet, acting through
+  the queue's id view over the snapshot; Not played yet, its albums A-Z
+  with their covers, the rail and the jump grid. And **Last 7 days**: no
+  items, its picture (the week's time and plays, seven bars, the big day
+  and Auto DJ's rate) drawn whole in three strips through the list's
+  body hook (`drawBody()`). A stats page holds its counting days from one
+  `enter()` to the next, so a new UTC day (or the clock set back) never
+  moves the hub's rows 3-5 or the tray under the finger: they follow at
+  the next `enter()` or the wake, or at the lifetime's first whole
+  reading (the boot fold's end, a re-read's end, the clock set).
+  The lists are the visit's snapshot, asked as the pages come up and
+  released as they go (Library and queue's Listening stats bullet).
 - **The Queue** (spec §6.4, mockups 16-18, with the grafts): opened on the
   playing track (tinted, on top; there again with no row open when the
   queue changed while you were away); the header's summary "4 of 16 · 12
@@ -4892,7 +4997,29 @@ Queue, Dance and Output (with its Pair and About pages).
   tracks), to see the lists, the rail and the jump grid at the scale of
   thousands (the card has 6 artists); look only (its ids aren't the
   player's: its actions are refused, and it has no covers); `uil0` the
-  card's again (`g0` or a new `g<n>` re-points it). The screenshot (`X`) reads the list band back through the scroll
+  card's again (`g0` or a new `g<n>` re-points it). **`uiS`**: the
+  listening stats as the UI reads them (the lifetime and its counting
+  days, the held condition and its edge, the phase, the snapshot served;
+  then the page shown: Artists' first row, the hub's rows, a shelf's
+  window, tray and rows, Last 7 days' look, and the counting days the
+  page latched), a dark screen left dark; `uiSh`, `uiSw` and
+  `uiS<shelf>[w]` open the hub, Last 7 days or a shelf over the hub, as
+  their rows' taps do (shelf 0 Most played at window w: 0 the last 7
+  days, 1 the last 30, 2 All time, else the snapshot's; 1 New finds, 2
+  Old favourites, 3 Not played yet, 4 Recently played; with no clock
+  `uiSw` shows Week shut on "Needs dates"): they wake the screen, print
+  the push's ms, and are refused while the hub can't be reached (the
+  stats off, the library updating, `uil<n>`'s library). `uiSx1`-`uiSx9`
+  put on a made-up stats view (1 a full card, 2 nothing played, 3 no
+  clock, 4 day 5 of counting, 5 folding, 6 no card, 7 waiting, 8 no
+  room, 9 unread), look only: its selector a byte of the `Ui`, RAM only;
+  nothing asks, and every act is refused with a toast (the tray still
+  works); 1, 3 and 4 write their snapshot into the Dance tab's block
+  (refused while that tab is up), and 1-9 are refused under `uil<n>`;
+  `uiSx0` the card's own again, `uiSx` the list (LISTENING-STATS.md
+  9.3). A stats page logs a `[ui] stats` line for each item it stages
+  in place and for each act or tap it refuses, and `[ui] slow pass`'s
+  snapshot part counts the stats' news pass. The screenshot (`X`) reads the list band back through the scroll
   offset, as before. For tests without a hand on the device there is a
   **scripted finger** (`Input::simulate`, replacing the panel until it
   lifts; a real touch cancels it; it does all a finger does but hold the
@@ -5408,4 +5535,7 @@ their own (the player stopped first, so nothing follows them).
    real stream (the session floor's figure, the owner's call) and
    42,808 B, 200 B under, in silent mode (main 89188f4 alone: 35,916 B).
    The
-   lists, the Library's screens and Now Playing's row (S2-S4) are next.
+   lists (S2) and the pages' asks (S3a) are in main; the Library's
+   screens (S3b) are built and host-tested, not yet on a device; Now
+   Playing's row (S4), the owner's card (S5a, S5b) and the time zone (S6)
+   come after them.

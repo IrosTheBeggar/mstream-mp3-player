@@ -1,0 +1,881 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
+#pragma once
+#include <cstddef>
+#include <cstdint>
+
+#include "NavModel.h"
+#include "StatsFold.h"
+#include "StatsRank.h"
+#include "StatsVisit.h"
+#include "UiStrings.h"
+
+// The listening stats' screens as numbers and kinds (docs/LISTENING-STATS.md
+// 4.4, 7.1-7.7, 7.11; S3b's C17a): what each page shows in each state and
+// phase, decided from RAM (the lifetime, the phase) and the visit's
+// snapshot, never from the card. Portable, host-tested (test_ui_stats);
+// src/ui/LibraryStats draws from it, lib/core StatsText (S6) words its
+// lines.
+//   - The lifetime and the phase, as the host hands them (UiHost's
+//     statsLifetime(), statsPhase(); the lifetime filled by lifetimeOf()
+//     from HEAD and the clock), and 4.4's state from the lifetime; the
+//     counting days a page holds from its enter() to its next (7.10's "A
+//     new UTC day": latchDays(), holdDays()).
+//   - The look of a page from its phase (4.4 as decided): the snapshot's
+//     figures, the phase's line (Working, Waiting), a Try again row with
+//     its reason (No room, Unread, Capped, and the card back: the owner's
+//     call 3, stats.card_back), the No card line alone while the card is
+//     out, Off (the stats off: no data lines, no Try again), the empty state
+//     (nothing played). Idle with nothing served never reads "Couldn't read
+//     the stats" (that is for read faults only): with the stats off it is
+//     Off, with them on (a Cancelled ask) the Working line, one ask due.
+//   - The entry row (Library > Artists, item 0: 7.3): whether it is there,
+//     its line (the lifetime one, "74 h 10 min since 1 Sep", when it fits
+//     204 px and the first day is set, else the time alone: the owner's call
+//     1; no plays), and its fixed bars, kEntryBars.
+//   - The hub (7.4): its six rows by state, grade and phase (open, disabled
+//     with a reason and a toast, the status row with no clock), and the Try
+//     again row after them; the empty state with nothing played; how each
+//     row takes a touch, its title, the header's line, and the shape and
+//     texts a page polls to know it must draw again (S9).
+//   - The shelves (7.6): ids, the tray by counting days and the rank's RCNT
+//     mark (rcntShort()), trayCellAt() with filtergrid::skew(), the kept
+//     window's fallback, Not played yet's own state (its bits, its lean
+//     ask), and Recently played's sections (the map between the list's rows
+//     and the snapshot's); each row as a page draws, touches and acts on it
+//     (shelfItem(), shelfControlOf(), idsServed()), the row holding a
+//     track, when its rows are pending and when they arrive, the shape it
+//     polls (its tray's among it), and the console's uiS<shelf>[w] (S10).
+//   - Last 7 days (7.7): its look, and its figures from the snapshot's 7
+//     days (the total, the plays, the bars to 44 px, the big day, Auto DJ's
+//     rate); which looks the page draws through the list's body hook and
+//     which as the empty state, and its header's days (S11).
+//   - The held condition (onStatsPages(): 7.1, 9.7's "The snapshot's
+//     life") and the asks its rising edge makes (none for Off, No card,
+//     Empty or a made-up view).
+//   - The made-up views 0-9 (9.3's uiSx<n>): each one's lifetime and
+//     phase, and the made-up snapshot it writes (statsvisit::writeMadeUp());
+//     the console's argument, the snapshot the pages read under one, the
+//     held condition's rise with one on, and the acts it refuses (S12).
+// No allocation, no state: a draw or an act reads it anew.
+namespace statsview {
+
+using statsvisit::Phase;
+using statsvisit::Outcome;
+using statsvisit::Snapshot;
+using statsvisit::UiAsk;
+using uistr::S;
+
+// ---------------------------------------------------------------------------
+// The pages' kinds (ui::PageKind's StatsHub, StatsShelf, StatsWeek, after
+// AutoDj = 14: 7.1). lib/core can't name ui::PageKind; src/ui/Ui.cpp
+// static_asserts these against src/ui/Page.h once it has them (S9).
+// ---------------------------------------------------------------------------
+constexpr uint8_t kKindHub = 15, kKindShelf = 16, kKindWeek = 17;
+constexpr bool statsKind(uint8_t kind) { return kind == kKindHub || kind == kKindShelf || kind == kKindWeek; }
+
+// ---------------------------------------------------------------------------
+// What the host hands the pages (UiHost: RAM, µs)
+// ---------------------------------------------------------------------------
+// HEAD and the clock (S1's, in RAM: 4.2 as decided). countingDays is
+// statsvisit::countingDaysOf(dated, today, sinceDay); nowMin, with dated,
+// minutes since 2026-01-01 (Recently played's `when`'s, the relative times').
+struct Lifetime {
+  // The stats on this session: StatsGlue::on() || rereadPending(), as
+  // StatsLists' own off test (its loop()'s release and ask()'s drop read
+  // !on() && !rereadPending()). A remount's re-read waiting (on() false, HEAD
+  // cleared until the scan's next reserve()) is on, and folding (booting()),
+  // so the card back reads Try again, not Off. Else Off.
+  bool on = false;
+  bool folding = false;  // the boot's fold under way (StatsGlue::booting(): a re-read's among it): HEAD not whole
+  bool cardIn = true;    // the card in and not held: else No card
+  bool dated = false;    // the board's clock set (statsfold::todayOf())
+  uint16_t today = statsfold::kUnsetDay;     // with dated
+  uint16_t sinceDay = statsfold::kUnsetDay;  // Fold::sinceDayNow()
+  uint32_t countingDays = 0;                 // 0: not known (no clock, no first day); a page's: holdDays()
+  uint64_t plays = 0;       // HEAD's (this session's live folds among them)
+  uint64_t listenedMs = 0;  // HEAD's
+  uint32_t nowMin = 0;      // with dated
+  // A made-up view's (madeUpView(): 9.3's uiSx<n>, look only; never the
+  // host's): nothing asks (D16), so no look says an ask is due and the
+  // rising edge asks none. Its Try again rows still draw; their taps, as
+  // every act under a made-up view, are refused by the pages (S9, S12: the
+  // look-only toast, as uil<n>'s).
+  bool madeUp = false;
+};
+// StatsLists' phase, why, outcome and version (statsPhase()).
+struct PhaseInfo {
+  Phase phase = Phase::Idle;
+  uint8_t why = 0;
+  Outcome outcome = Outcome::None;
+  uint16_t version = 0;
+};
+// The host's lifetime (UiHost::statsLifetime(): app/ListeningStats and
+// app/PlayHistory, S3b's S7), from RAM, read at each page's update() for the
+// minute's check, so a few loads and a division:
+//   - `on`, `folding` and `cardIn` as Lifetime has them (the caller's:
+//     StatsGlue::on() || rereadPending(), booting(), and neither main.cpp's
+//     cardHeld nor PlayHistory::cardAway());
+//   - `head`: Fold::head(), the session's live folds in it (4.2: Empty is
+//     its plays 0 once the fold is done); its plays and time;
+//   - `sinceDay`: Fold::sinceDayNow(nowMs);
+//   - `nowMs`: the board's clock (boardclock::now(): 0 while unset). Dated
+//     when believed (statsfold::todayOf(): 2026-01-01 to 2099-12-31), then
+//     today, the counting days (statsvisit::countingDaysOf()) and nowMin
+//     (its minute since 2026-01-01, the one a snapshot row's `when` gives a
+//     play started now); undated, today kUnsetDay and both 0.
+// madeUp stays false: the host's is never a made-up view's.
+Lifetime lifetimeOf(bool on, bool folding, bool cardIn, const statsfold::Head& head, uint16_t sinceDay,
+                    uint64_t nowMs);
+
+// 4.4's states, from RAM, in this order: the stats off; the card away or
+// held; the boot's fold under way (HEAD partial, so before Empty); nothing
+// played (HEAD's plays 0 once the fold is done); the clock unset; under 30
+// counting days; else Ready. (Updating and the synthetic library are the
+// pages', below.)
+enum class State : uint8_t { Off, NoCard, Folding, Empty, NoDates, FirstMonth, Ready };
+State stateOf(const Lifetime& l);
+const char* stateName(State s);  // "off", "no card", "folding", "empty", "no dates", "first month", "ready"
+// The day a first-month row opens (7.4's "Opens 6 Dec"): sinceDay + 29 (the
+// day the counting days reach 30), else today + 29; kUnsetDay with neither.
+uint16_t opensDay(const Lifetime& l);
+
+// O5 (3.1, call 4): Not played yet's shelf is open when, dated, the counting
+// days reach 30; with no clock, when DAYS' span does (0 before the ask has
+// landed). statsvisit's rule, so the visit's grade agrees.
+constexpr bool notPlayedOpen(uint32_t countingDays, bool dated, uint32_t datedSpanDays) {
+  return statsvisit::notPlayedDays(dated ? countingDays : datedSpanDays);
+}
+
+// ---------------------------------------------------------------------------
+// The counting days a page shows (7.10's "A new UTC day")
+// ---------------------------------------------------------------------------
+// 7.10: "Nothing re-ranked. The hub's disabled rows and the tray follow the
+// counting days at the next enter() (RAM)". What the counting days decide
+// on a page (the hub's rows 3-5 open or disabled, Most played's tray, its
+// cells and with them the window it shows, a shelf the month keeps shut)
+// reads them as the page latched them, so a new UTC day, the clock set
+// back or a fold while a page shows moves nothing on it until the next.
+// The page keeps the latch in a byte (ui's LibraryPage, in its padding): 0
+// none yet; else kDaysHeld with the days (to kDaysMask: the rules' 7 and 30
+// kept apart), and kDaysRetake while they are to be taken again.
+//   - Taken at the page's enter(), each one (a navigation, the console's
+//     uiSh, uiSw and uiS<shelf>, uiSx<n>'s enter again, the dark's and a
+//     release's re-attach), and at the wake, which runs none but draws the
+//     page whole, a new visit's rise: `entering`.
+//   - A lifetime not whole (daysWhole(): the stats off, the card out or
+//     held, the boot's fold or a re-read under way, no clock or no first
+//     day) keeps the days held, an enter() among it, and marks them; its
+//     first whole reading takes them (the boot fold's or a re-read's end,
+//     the card back, the clock set: moments the page's look moves anyway).
+//     So a re-read's HEAD, cleared until it is read (one counting day),
+//     never shuts the hub's rows meanwhile, and another card's days come
+//     with its fold's end. With none held yet, the lifetime's own, marked.
+//   - Else a reading keeps them: a pass changes nothing.
+constexpr uint8_t kDaysHeld = 0x80, kDaysRetake = 0x40, kDaysMask = 0x3F;
+// The lifetime's counting days are whole and known: the stats on, the card
+// in, HEAD whole (no fold under way), dated with a first day.
+bool daysWhole(const Lifetime& l);
+// The latch after a reading of `l` (`entering`: an enter() or the wake).
+uint8_t latchDays(uint8_t held, const Lifetime& l, bool entering);
+// `l` as a page reads it: its counting days the latch's (none held: its
+// own). Every rule that reads them reads `dated` first (the tray, the
+// month's rows, O5, stateOf()), so days held over an undated lifetime
+// change nothing.
+void holdDays(Lifetime& l, uint8_t held);
+
+// ---------------------------------------------------------------------------
+// The look: what a stats page draws for its data (4.4 as decided)
+// ---------------------------------------------------------------------------
+enum class Look : uint8_t {
+  Served,   // the snapshot's figures (its lists landed and held)
+  Pending,  // the phase's line: Working "Counting plays…", Waiting "Waiting for the card…"
+  Retry,    // a Try again row (Week: the empty state's button), its line the reason
+  NoCard,   // the card out: "No card: plays can't be counted" alone; no Try again, no ask
+  Off,      // the stats off: no data lines, no Try again (D9 as replaced)
+  NoPlays,  // nothing played (4.4's Empty): the hub's empty state (7.5); nothing asked
+  Closed,   // a shelf not open (no clock, the first month): its reason alone
+};
+const char* lookName(Look k);
+struct PageLook {
+  Look look = Look::Off;
+  // Pending's line, Retry's reason, NoCard's and Closed's line (a served
+  // shelf with none landed: stats.shelf_empty). Off and NoPlays draw no line
+  // at all: `line` is then the default and means nothing (ShelfLook's
+  // drawLine says when a shelf draws it).
+  S line = S::stats_counting;
+  // Idle with the stats on (a Cancelled ask): one visit's ask due. Never
+  // under a made-up view (Lifetime::madeUp): one whose snapshot wasn't
+  // written (the Dance tab up, past kBound, refused) reads Pending with
+  // nothing due, and uiSx says why (S12).
+  bool askDue = false;
+};
+// The page's look (served: the snapshot landed and held, StatsLists::
+// snapshot() non-null), in this order: the stats off: Off; the card out:
+// NoCard; nothing played: NoPlays; served: Served; then by the phase:
+// Working, Waiting: Pending; No room, Unread, Capped (stats.waiting): Retry;
+// No card with the card in again: Retry, stats.card_back (the owner's call
+// 3); Idle (and Ready, which needs a snapshot served): Pending's Working
+// line, askDue (not under a made-up view).
+PageLook pageLook(const Lifetime& l, const PhaseInfo& p, bool served);
+// The phases' lines (7.11): Working stats.counting, Waiting and Capped
+// stats.waiting, No room stats.no_room, Unread stats.unread, No card
+// stats.no_card; Idle and Ready stats.counting.
+S phaseLine(Phase p);
+
+// The held condition's rising edge (D1, D3): asks a visit unless the stats
+// are off, the card is out (ask() would only drop it: No card), nothing is
+// played (Empty asks nothing), or a made-up view is on (l.madeUp: look
+// only, D16; its rise writes the view's snapshot again instead: riseOf()).
+bool asksOnEdge(const Lifetime& l);
+// The rise with the card out asks nothing (above), and StatsLists records
+// No card only for an ask asked or a snapshot held (its loop()'s card-gone
+// branch). So on the session's first visit made with the card out its
+// phase stays Idle, and once the card is back pageLook() would read Idle's
+// Working line with an ask due: the page would ask by itself, against 4.4
+// ("When the card comes back, the page offers Try again; nothing asks by
+// itself") and the owner's call 3. The Ui keeps the rise's mark
+// (risesCardOut(): the card out, not a made-up view) until a page's ask or
+// the held condition's fall, and the pages read the phase through
+// phaseSeen(): Idle under the mark reads No card, as 4.4's "An ask asked
+// while the card is away is dropped at once". The card back then offers
+// Try again with stats.card_back, no ask due. A phase the host has moved
+// (an ask under way, a console ask's outcome) is the host's.
+bool risesCardOut(const Lifetime& l);
+PhaseInfo phaseSeen(const PhaseInfo& host, bool roseCardOut);
+
+// ---------------------------------------------------------------------------
+// The held condition (7.1, 9.7): on the stats pages
+// ---------------------------------------------------------------------------
+// The Library tab shown, its stack holding a hub, shelf or Week (an album,
+// artist page, bar or sheet above one counts), the screen lit, the UI not
+// suspended (D2), and the library not uil's synthetic one. The snapshot is
+// held exactly while it is true: its edges ask and release.
+bool onStatsPages(const NavModel& nav, bool dark, bool suspended, bool synthetic);
+// A snapshot asked with no clock, the clock set since (a computer's @time
+// while the pages are up: the status row's "Plug in to the MP3 Player
+// tab"). Its 7 days were written as 0 and the lists that need the clock
+// (Most played's 7 and 30 days, New finds, Old favourites) weren't offered,
+// while the pages' kinds now come from a dated lifetime: the hub's row 1
+// open, Week reached, New finds and Old favourites open from 30 counting
+// days, the tray. None of it is their figures (7.7: no week without dates),
+// so the Ui releases it while the held condition is up, as a falling edge
+// would (S3b's review of S11). The page shown then reads Idle over nothing
+// served: the Working line and its one ask (D9 as replaced; D6: no Visit
+// ask over one served). The new ask is dated, its turn's clock (one whose
+// turn came before the clock lands undated and is released once more).
+// Never with no clock (the snapshot is the pages' own then: Week Closed,
+// the status row), nor for a made-up snapshot or under a made-up view's
+// lifetime (look only: view 3 is undated on purpose).
+bool undatedStale(const Lifetime& l, const Snapshot* snap);
+
+// ---------------------------------------------------------------------------
+// The entry row (7.3)
+// ---------------------------------------------------------------------------
+constexpr int kEntryRoom = 204;  // its line's room, Small (x 54 to the chevron)
+// The fixed bars (the owner's call 2: an icon, not data): 4 px wide on a 5
+// px step from x 9, standing on y 32, 24 px the top; past DIM, the last
+// violet. The Entry frame's heights.
+constexpr int kEntryBarCount = 7;
+inline constexpr uint8_t kEntryBars[kEntryBarCount] = {10, 12, 7, 24, 19, 11, 8};
+constexpr int kEntryBarX = 9, kEntryBarStep = 5, kEntryBarW = 4, kEntryBarBase = 32;
+// Whether the row is there, decided at enter() (adding or removing it moves
+// every artist by 42 px): absent for Off and No card, behind the update's
+// fence (no index), for the synthetic library (uil<n>), and with no artists
+// (D18: under a top row the empty state's buttons can't be pressed).
+bool entryDue(const Lifetime& l, bool indexReady, bool synthetic, uint32_t artists);
+enum class EntryLine : uint8_t {
+  Counting,  // Folding: stats.counting
+  Empty,     // nothing played: stats.entry_empty
+  Since,     // the lifetime line, stats.since: "74 h 10 min since 1 Sep"
+  Time,      // the time alone (wider than kEntryRoom, or no first day)
+  Unread,    // the stats off since the row was latched: stats.unread (A20)
+};
+// A text's width in px (the firmware's Small font; the host's tests' VLW).
+using WidthFn = int (*)(const char* text, void* ctx);
+// The row's line into `out` and its kind: no plays (call 1); the lifetime
+// line when the first day is set and it fits kEntryRoom by `width`, else
+// the time alone. With the stats off, stats.unread: never at enter() (the
+// row is absent then: entryDue()), only for a row latched while the boot's
+// fold ran that ended with the stats off (stats.bin or its base unread, a
+// newer major, no memory for the fold: A20). The row stays, since taking
+// it away would move every artist by 42 px. Folding and nothing played are
+// read from the lifetime itself, whatever the card: a row latched while
+// folding whose fold ended with the card out (RAM's HEAD, whole) reads
+// "Plays show up as you listen" with nothing played, never "0 min since
+// 23 Nov" (S3b's review, finding 6: stateOf()'s No card comes first).
+EntryLine entryLine(const Lifetime& l, WidthFn width, void* ctx, char* out, size_t size);
+// The latched row's line is drawn again in place at the boot fold's end
+// (7.3, 7.10: refreshTopRow), and only then: drawn while folding (Counting)
+// and the fold over now. A later fold doesn't move it (its line is as of
+// enter()).
+constexpr bool entryFoldEnded(EntryLine drawn, bool folding) { return drawn == EntryLine::Counting && !folding; }
+// "74 h 10 min" (format.hours_minutes, the hours grouped, the minutes
+// unpadded); under an hour "45 min" (format.minutes): 4.1's times.
+size_t timeText(uint64_t ms, char* out, size_t size);
+// A UTC day (0: 2026-01-01) as format.day_month: "1 Sep".
+size_t dayMonthText(uint16_t day, char* out, size_t size);
+
+// ---------------------------------------------------------------------------
+// The hub (7.4)
+// ---------------------------------------------------------------------------
+enum class HubRow : uint8_t { Week, MostPlayed, NewFinds, OldFavourites, NotPlayed, Recent, TryAgain };
+constexpr uint32_t kHubRows = 6;    // and Try again's, at index 6
+enum class RowKind : uint8_t {
+  Open,      // pressable: a tick and its page
+  Disabled,  // inert: icon FAINT, its reason; a tap the double buzz and `toast`
+  Status,    // no clock, row 1's place: stats.no_dates over stats.clock_fix; no press, no buzz (D13)
+  TryAgain,  // empty.try_again over its reason; pressable, the row's tick
+};
+enum class Line : uint8_t {
+  None,       // nothing (the data lines in Retry and Off)
+  Text,       // `text` as it is: the phase's line, a reason
+  Data,       // the snapshot's (StatsText's forms, S6)
+  SinceOnly,  // Not played yet's before a count: stats.since_only ("since 1 Sep")
+  Warming,    // a first-month row: stats.warming of opensDay() ("Opens 6 Dec, after a month of plays")
+  Status,     // the status row's two lines: stats.no_dates, stats.clock_fix
+};
+struct HubItem {
+  HubRow row = HubRow::Week;
+  RowKind kind = RowKind::Open;
+  Line line = Line::None;
+  S text = S::stats_counting;          // Line::Text's (and Warming's id)
+  S toast = S::toast_stats_needs_dates;  // a disabled row's tap (toast.stats_needs_dates, _needs_month)
+};
+struct HubLook {
+  PageLook page;
+  uint32_t rows = 0;  // 0 (NoPlays: the empty state; NoCard: its one line), 6, or 7 with Try again
+  HubItem item[kHubRows + 1];
+};
+// Row kinds by state (RAM, drawn at once: 7.4 as decided), lines by the look:
+//   - Last 7 days: the status row with no clock, else open;
+//   - Most played and Recently played: open;
+//   - New finds and Old favourites: disabled with no clock (stats.
+//     needs_dates) or under 30 counting days (stats.warming), else open;
+//   - Not played yet: by notPlayedOpen(): dated, open from 30 counting days,
+//     else disabled with stats.warming; with no clock pending (open) until
+//     the snapshot's DAYS span is known, then open or disabled with
+//     stats.needs_dates (D14). Its line, served, the count only after a
+//     Full or lean landing (hasNotPlayed()), else stats.since_only;
+//   - open rows' lines: Served the snapshot's, Pending the phase's line,
+//     else none. So in Folding (Pending, the boot's Working) the open rows
+//     read Counting plays… while the disabled and status rows keep their
+//     RAM reasons (Opens 6 Dec, Needs dates, the status row's two lines);
+//   - Retry: a Try again row at index 6 (also with the status row in row 1).
+HubLook hubLook(const Lifetime& l, const PhaseInfo& p, const Snapshot* snap);
+// A hub row's title (7.4): its name (stats.last7 ... stats.recent); the
+// status row's stats.no_dates (Small AMBER, over stats.clock_fix); Try
+// again's empty.try_again.
+S hubTitle(const HubItem& it);
+// How a hub row takes a touch (7.4, 4.5, D13: ListView::Source's
+// pressable(), inert() and holds(), a table by its kind):
+//   - Open: pressable, a tick and its page; no hold (a long press ends as a
+//     tap);
+//   - Disabled: inert, no press look and no tick; a tap with the list still
+//     at the Down gives the double buzz and the row's toast (a touch that
+//     stopped a moving list does nothing: ListView's);
+//   - Status: nothing at all, no press, no buzz (D13, as Pages.h's
+//     Output > About's rows of text);
+//   - TryAgain: pressable, the row's tick and the ask; no hold.
+struct Control {
+  bool pressable = false;
+  bool inert = false;
+  bool holds = false;
+};
+Control controlOf(RowKind k);
+// What a tap on hub row `row` does (7.4; LibraryPage::statsTap(), after
+// ListView's tick on a pressable row):
+//   - Ask: Try again, the visit's ask;
+//   - Push: an open row, its page (Last 7 days, or its shelf: shelfOfRow());
+//   - Refused: an open row while the hub can't be shown (hubReachable():
+//     the stats gone off on a shown hub, a remount's re-read failed or a
+//     drop; 4.4's Off has no shelf and no Week, "—"): it opens nothing, the
+//     double buzz and no toast, as the entry row's (S9; S3b's review,
+//     finding 16). The rows stay as drawn (D9 as replaced: no data lines);
+//   - None: a disabled row (its own buzz and toast: onInertTap()), the
+//     status row, past the rows.
+enum class HubTap : uint8_t { None, Ask, Push, Refused };
+HubTap hubTap(const HubLook& h, uint32_t row, const Lifetime& l, bool indexReady, bool synthetic);
+// The hub's header line under its title (7.4: the lifetime one, RAM): only
+// for a whole HEAD with plays, whatever the card (with it out, RAM's
+// lifetime still reads). None while the boot's fold runs (A19: HEAD
+// partial), with nothing played (7.5: the title alone) or with the stats
+// off; the card out hides neither (S3b's review, finding 6).
+bool hubSubDue(const Lifetime& l);
+// The hub can be shown (4.4: not with the stats off, behind the update's
+// fence, nor over uil's synthetic library): console uiSh's refusal, and the
+// Artists root's latched entry row's tap (A20's "Couldn't read the stats",
+// or a row whose stats went off since its latch, opens nothing: the double
+// buzz). (The card out still shows it, its No card line.)
+bool hubReachable(const Lifetime& l, bool indexReady, bool synthetic);
+// What the hub draws, as a byte: its look (which gives its row count: 0, 6,
+// or 7 with Try again; and its open rows' line kind) and each row's kind
+// and line kind as the lifetime makes them (the status row, rows 3-4
+// disabled, row 5 open, since-only or disabled). Two looks with the same
+// shape differ only in their texts (the phase's line, a reason, the data),
+// which move with the version (StatsLists' news). A page polls it each pass
+// (RAM): a change no news brings (the card back: No card's line to Try
+// again; a play counted on the empty hub; the stats off; the clock set;
+// rows 3-5 as the page's latch takes the counting days again, latchDays():
+// never a new day while it shows) restages it, so no row drawn later
+// disagrees with those on screen. Bit 7 is never set: it is the page's, for its
+// header's line (kShapeSub).
+uint8_t hubShape(const HubLook& h);
+// The bit a page ORs into the hub's shape when its header draws the
+// lifetime line (hubSubDue()): the line comes and goes with the boot fold's
+// end (A19), a play counted on the empty hub (7.5) and the stats off, and
+// the header is drawn again then (7.4: "At once: the header and its sub"),
+// alone when nothing else moved.
+constexpr uint8_t kShapeSub = 0x80;
+// The hub drawn as its empty state (7.5: the band whole, Shuffle all live)
+// whose look now has no rows either (No card's line alone, the card pulled):
+// a recount from no items to none owes no position (listlayout::staging()
+// keeps the ground under an old empty line), so the page draws the band
+// whole once; else the disc, the lines and a dead Shuffle all would stay
+// around the new line. (The other way, the empty state covers the band as
+// it comes: ListView::drawEmpty(). To rows, every position is staged.)
+constexpr bool hubDrawsWhole(Look drawn, Look now) { return drawn == Look::NoPlays && now == Look::NoCard; }
+// ... and the texts a look draws, as a u16, exact: the look (3 bits) and
+// its line's id (Pending's phase line, a reason, the No card line, a
+// closed shelf's), or, served, the snapshot's version (its ask's: a new
+// ask's rows and lines). Off and NoPlays draw no line: their look alone.
+// With the shape it says whether a page's picture moved: the stats' news
+// (a phase, a landing, a release) restages a page only when one of the two
+// did, so the landing's two version moves (the landing, then Ready) draw
+// it once. (The snapshot's lines read RAM's lifetime too: the minute's own
+// rule redraws row 6; the rest moves with the shape or at the next enter().)
+uint16_t lookText(const PageLook& k, const Snapshot* snap);
+// The full minute a row was drawn at from its low 16 bits (a page keeps
+// those: LibraryPage's u16), at or before `nowMin`: exact while under 65,536
+// minutes (45 days) have passed, as each pass's look does.
+uint32_t minuteFrom(uint16_t low, uint32_t nowMin);
+
+// ---------------------------------------------------------------------------
+// The shelves (7.6)
+// ---------------------------------------------------------------------------
+enum class Shelf : uint8_t { MostPlayed, NewFinds, OldFavourites, NotPlayed, Recent };
+constexpr uint32_t kShelves = 5;
+// PageRef.id: shelf * 4 + window (windows: statsvisit::k7Days, k30Days,
+// kAllTime; Most played's alone).
+constexpr uint32_t shelfId(Shelf s, uint8_t window = statsvisit::kAllTime) {
+  return static_cast<uint32_t>(s) * 4u + (s == Shelf::MostPlayed ? window : 0u);
+}
+Shelf shelfOf(uint32_t id);    // past the five: Recently played
+uint8_t windowOf(uint32_t id);  // Most played's (past All time: All time); the others' kAllTime
+// The shelf a hub row pushes: false for Last 7 days (Week, a page of its
+// own) and Try again.
+bool shelfOfRow(HubRow r, Shelf* out);
+// The snapshot's list for a shelf (Not played yet: none, statsrank::kLists).
+statsrank::List listOf(Shelf s, uint8_t window);
+// A shelf's title (its header, 7.6): its hub row's.
+S shelfTitle(Shelf s);
+
+// The tray (Most played's lead item: 7.6, 7.9). Its cells, in a 300 x 28
+// CARD tray at (6, 7), 2 px in from its ends and 4 px apart: three of 96 px
+// at x 8, 108, 208, or two of 146 at x 8, 158; labels in Bold, else Small,
+// in the cell less 4. (7.6's two of 148 at x 8, 160 end at x 307, 2 px past
+// the tray's last pixel, 305: its 2 x 148 + 4 is the tray's whole width, not
+// its inside. The label room is 142 there, not 144; every label fits the
+// three cells' 92 first, so the catalogue's 144 never binds.)
+struct Tray {
+  uint8_t cells = 0;              // 0 (no tray), 2 or 3
+  uint8_t window[3] = {};         // each cell's window
+  uint8_t days30 = 30;            // the 30-day cell's days: fewer when RCNT is short ("16 days")
+};
+constexpr int kTrayX = 6, kTrayY = 7, kTrayW = 300, kTrayH = 28, kTrayR = 10;
+constexpr int kTrayPlateY = 9, kTrayPlateH = 24, kTrayPlateR = 8, kTrayLabelY = 21;
+constexpr int kTrayCellW3 = 96, kTrayCellW2 = 146;
+inline constexpr int kTrayCellX3[3] = {8, 108, 208};
+inline constexpr int kTrayCellX2[2] = {8, 158};
+// By the counting days (dated): under 7, or no clock, none; 7-29: 7 days
+// and All time; 30 on: 7 days, 30 days and All time. The 30-day cell reads
+// the days RCNT holds (today - rcntFirstDay + 1) only when the snapshot
+// served says RCNT is short (rcntShort(): 5.2's cap, whole days gone, past
+// 4,096 rows), else 30: a window whose first days had no plays (a listener
+// away) holds all its plays, so it reads 30.
+Tray trayOf(const Lifetime& l, const Snapshot* snap);
+// A cell's left edge and width.
+int trayCellX(const Tray& t, int cell);
+int trayCellW(const Tray& t);
+// The cell a reading at x is (-1: no tray): each split at its gap's middle
+// plus filtergrid::skew() (7.9: x 0-105, 106-218, 219-319; two cells at
+// 156 + 6 = 162, 7.9's 164 being its 158 + 6 of the cells above); a reading
+// clamped at the right edge is the last cell.
+int trayCellAt(const Tray& t, int x, bool rightEdge);
+// The window Most played shows: the kept one (its PageRef.id) when the tray
+// offers it, else All time (7.6).
+uint8_t windowShown(uint8_t kept, const Tray& t);
+
+struct ShelfLook {
+  PageLook page;           // the look (Closed and Not played yet's own state among them)
+  Shelf shelf = Shelf::MostPlayed;
+  uint8_t window = statsvisit::kAllTime;  // Most played's shown
+  statsrank::List list = statsrank::kMostAll;  // the snapshot's (Not played yet: kLists)
+  bool tray = false;       // the lead TopRow (Most played with a tray; none in Off, NoCard, NoPlays)
+  bool topBar = false;     // the container's bar: rows landed (none on Not played yet, nor on Try again)
+  bool tryAgain = false;   // row 0 is Try again (first under the tray: 7.6)
+  UiAsk ask = UiAsk::Visit;  // what Try again asks (Not played yet with no bits: its lean ask)
+  uint32_t rows = 0;       // the list's rows (Recently played's with its sections; Not played
+                           // yet's albums); 1 for Try again; 0 for a line or nothing
+  // `page.line` drawn under the lead items (rows 0): Pending, NoCard,
+  // Closed, a served shelf with none landed. Off and NoPlays draw none.
+  bool drawLine = false;
+};
+// A shelf's look:
+//   - Off, NoPlays: 0 rows, no line, no tray (D9 as replaced: no data);
+//   - NoCard: 0 rows, the No card line alone, no tray (the owner's call 3:
+//     while the card is out the page shows only that line);
+//   - Closed (RAM): New finds and Old favourites with no clock (stats.
+//     needs_dates) or under 30 counting days (stats.warming), Not played
+//     yet dated under 30 days (stats.warming), or served with no clock and
+//     DAYS' span under 30 (stats.needs_dates: D14); stats.warming's line is
+//     statstext::warmingLine() of opensDay() in Body kListLineW (its day
+//     filled, its short form where the long one is wider);
+//   - Served: the snapshot's rows, the top bar with any; none landed:
+//     stats.shelf_empty (D12). Not played yet with no bits (the visit took
+//     Lists, or its notPlayed() was refused): its own state by the phase,
+//     Working and Waiting its lean ask's line, Unread and Capped their
+//     reasons, else stats.no_room, Try again its lean ask (7.6). Opening it
+//     asks nothing by itself (7.6), so a snapshot asked before the month
+//     (Lists, no Full asked) and held across the UTC midnight that opens
+//     the shelf reads No room too, its Try again the lean ask;
+//   - Pending: 0 rows, the phase's line;
+//   - Retry: row 0 Try again (no top bar), its reason.
+// Most played's tray (RAM) is there in every other look, Retry and Closed
+// among them.
+ShelfLook shelfLook(uint32_t id, const Lifetime& l, const PhaseInfo& p, const Snapshot* snap);
+
+// Recently played's list (7.6, D10): section rows, then the snapshot's rows
+// under them, in the snapshot's order.
+//   - Dated snapshot: a row's UTC day of `when` against the snapshot's
+//     today(): Today, Yesterday, else the day (format.weekday_date); its
+//     time relative to now. Undated rows (kWhenSession, kWhenEarlier) go
+//     last, under one Earlier.
+//   - Undated snapshot: This session (kWhenSession), then Earlier
+//     (kWhenEarlier), no days and no times, the only two sections (4.3; the
+//     owner's call, 2026-11-24, "Yes, fix the order"). The rank made with
+//     no clock puts this session's rows first, a track played again with
+//     no clock among them though its lastAt stays dated (5.9), and the
+//     copy-out codes every row one or the other; any other `when` (none a
+//     write() makes) reads as Earlier.
+enum class Section : uint8_t { Today, Yesterday, Day, Session, Earlier };
+struct RecentItem {
+  bool heading = false;
+  Section section = Section::Today;  // its section (a heading's, a row's)
+  uint16_t day = statsfold::kUnsetDay;  // Day's UTC day
+  uint32_t row = 0;    // a row: its place in the snapshot's list; a heading: the row after it
+  bool timed = false;  // a row's "25 min ago" is due (dated snapshot, a dated row)
+};
+uint32_t recentCount(const Snapshot& s);  // the list's rows: the snapshot's and the headings
+RecentItem recentAt(const Snapshot& s, uint32_t listRow);  // past the end: a heading-less default
+uint32_t recentListRow(const Snapshot& s, uint32_t snapRow);  // the list row of a snapshot row
+
+// ---------------------------------------------------------------------------
+// A shelf as ui's LibraryPage draws, touches and acts on it (7.6, 7.10;
+// S3b's S10). Read anew at each draw and act from the look and the
+// snapshot served (D6: Ui::statsSnapshot() serves only one keyed on the
+// live index), never kept.
+// ---------------------------------------------------------------------------
+// What a shelf's list row is:
+//   - Ranked: a track of the snapshot's list (Most played's window, New
+//     finds, Old favourites, Recently played): its rank, title and line,
+//     its inline bar, its sheet;
+//   - Section: one of Recently played's headings ("Today", "Sun 8 Nov",
+//     "This session"), drawn as a "Disc 2" divider: no control;
+//   - Album: one of Not played yet's albums, A-Z (statsvisit::albumAt()):
+//     the root's Albums row, its tap the album, its hold its sheet;
+//   - TryAgain: the one row of a shelf whose ask came to nothing (first
+//     under Most played's tray): its title, its reason, the ask;
+//   - None: past the rows, or an id the live index hasn't (D6: never drawn
+//     or acted on).
+enum class ShelfRow : uint8_t { None, Ranked, Section, Album, TryAgain };
+const char* shelfRowName(ShelfRow k);  // "none", "ranked", "section", "album", "Try again"
+struct ShelfItem {
+  ShelfRow kind = ShelfRow::None;
+  statsrank::List list = statsrank::kLists;  // Ranked: the snapshot's list
+  // Ranked: its row in the snapshot's list (the rank less 1; the place a
+  // Play plays the shelf from); Album: k, its place among the albums not
+  // played.
+  uint32_t at = 0;
+  // Ranked: its track id (under the snapshot's trackCount, the live
+  // index's); Album: its place in albumsAZ() (under the snapshot's albums).
+  uint32_t id = 0;
+  // Recently played's: its section, and whether its "25 min ago" is due (a
+  // heading's text; a row's time).
+  RecentItem recent;
+  // TryAgain: its reason (the look's line: stats.no_room, stats.unread,
+  // stats.waiting, stats.card_back), drawn under empty.try_again as the
+  // hub's (7.4).
+  S text = S::stats_counting;
+};
+// Row `row` of a shelf whose look is `k` (k.rows of them). Served, its
+// lists landed (resolve()), so every id is a track of the snapshot's key;
+// an id past its trackCount (never: a write's) or an album past its albums
+// reads None.
+ShelfItem shelfItem(const ShelfLook& k, const Snapshot* snap, uint32_t row);
+// How a shelf row takes a touch (7.6; ListView::Source's pressable(),
+// inert() and holds(), a table by its kind): Ranked, a tick and its inline
+// bar, a hold its track's sheet ("Auto DJ from here" first when it
+// applies); Album, a tick and the album, a hold its sheet; TryAgain, a tick
+// and the ask, no hold; Section and None, nothing (no press, no tick, no
+// hold: the list still scrolls from them). Neither is inert: a tap on one
+// gives no buzz and no toast (onInertTap() is the hub's disabled rows').
+Control shelfControlOf(ShelfRow k);
+// The list row holding `track` (kShowPlaying's row: from Now Playing, or
+// the rows' arrival at the place kept for it): the first of the shelf's
+// ranked rows with that id (Recently played's list row, past its
+// headings), or on Not played yet the row of its album (`albumPlace`: the
+// album's place in albumsAZ(), the bits' order); -1 for none.
+int32_t shelfRowOf(const ShelfLook& k, const Snapshot* snap, uint32_t track, uint32_t albumPlace);
+// The ids a shelf acts on (its Play, Play next, + Queue, its top bar, its
+// sheet: the queue's id view over the snapshot, 7.6): every one of the
+// list's rows a track of an index of `trackCount` tracks (D6). One loop,
+// at most 216 rows, at the act.
+bool idsServed(const Snapshot& s, statsrank::List l, uint32_t trackCount);
+// Its rows aren't here yet (ListView::Source::pending(), 7.2, D5): nothing
+// served, or Not played yet with no bits (its own state, its lean ask's
+// landing to come). The page's place stays in its ref meanwhile.
+bool shelfPending(Shelf s, const Snapshot* snap);
+// The rows arrive (7.2: the place kept in the ref put back by
+// listlayout::arrival(), kShowPlaying resolved): drawn without the
+// snapshot's rows (Pending, Try again, the No card line), served with rows
+// now. (A shelf drawn served and served again moved with a new ask's rows:
+// a restage where it stands.)
+constexpr bool shelfArrives(Look drawn, Look now, uint32_t rows) {
+  return drawn != Look::Served && now == Look::Served && rows > 0;
+}
+// What a shelf draws, as a byte (the hub's hubShape()): its look (bits
+// 0-2), the tray's cells (3-4: none, two, three), the window shown (5-6:
+// Most played's, its header's line too), and the 30-day cell reading the
+// days RCNT holds (bit 7: "16 days" from a capped RCNT, the snapshot's).
+// With lookText()'s texts it says whether the page's picture moved.
+uint8_t shelfShape(const ShelfLook& k, const Tray& t);
+constexpr uint8_t kShelfLook = 0x07, kShelfCells = 0x18, kShelfWindow = 0x60, kShelfShort = 0x80;
+// The tray drawn again in place (ListView::recountStaged()'s leadChanged,
+// 7.6: a landing's "16 days"; two cells three as the page's latch takes
+// the counting days again, latchDays(), never at a new day while it
+// shows): there before and after, and its cells, the window picked or the
+// 30-day label's kind moved, or a short label's days with a new ask's
+// texts.
+bool trayMoved(uint8_t drawnShape, uint8_t nowShape, bool textsMoved);
+// The header's line moved (Most played's window: "last 7 days", "since 1
+// Sep"; and at the 30 days the days RCNT holds, as the picked cell names
+// them: "last 30 days" to "16 days" at a capped landing, "16 days" to "15
+// days" with a new ask's texts, statstext::shelfSub(): S3b's review,
+// finding 8).
+constexpr bool shelfHeaderMoved(uint8_t drawnShape, uint8_t nowShape, bool textsMoved) {
+  if ((drawnShape ^ nowShape) & kShelfWindow) return true;
+  if ((nowShape & kShelfWindow) != (statsvisit::k30Days << 5)) return false;
+  return ((drawnShape ^ nowShape) & kShelfShort) || ((nowShape & kShelfShort) && textsMoved);
+}
+// The tray alone moved (its cells, the 30-day label's kind with them), the
+// look, the window shown and the texts as drawn: every row is the one it
+// was. Its restage keeps the bar open and a finger's press, and owes the
+// rows nothing of their own (ListView::recountStaged()'s expanded,
+// keepPresses, changedRow past them). The cells move between two passes
+// only as the page's latch takes the counting days again at a lifetime's
+// first whole reading (latchDays(): a re-read's end under the card back's
+// Try again, the tray coming as the days are read), never at a new UTC day
+// or the clock set back (7.10: the next enter()). (A tray that comes or
+// goes still moves every item under it by one: ListView stages items at
+// the place they had.)
+constexpr bool trayAlone(uint8_t drawnShape, uint8_t nowShape, bool textsMoved) {
+  return !textsMoved && drawnShape != nowShape &&
+         ((drawnShape ^ nowShape) & static_cast<uint8_t>(~(kShelfCells | kShelfShort))) == 0;
+}
+// D7: Most played's window into the snapshot's header (the hub's next push
+// and a bare uiS0 open on it), owed whenever the shelf is served showing
+// another window than the snapshot's: at enter(), and at a landing with
+// rows or without ("Nothing in this period.": a new ask's loan opened on
+// All time, its page on 7 days). (The window shown is the tray's as the
+// page latched the counting days, latchDays(): a kept 30 days falls back
+// to All time at an enter() under 30 days, never at a pass.)
+bool windowOwed(const ShelfLook& k, const Snapshot* snap);
+// uiS's checksum over a served shelf's rows (run 3b-6: two uiS compared
+// around a counted play): FNV-1a over each ranked row's id, count, lastDay
+// and when in the snapshot's list; on Not played yet over each album's
+// place in albumsAZ() in the bits' order, the values albumAt(0), albumAt(1)
+// ... give (k.rows of them), the bits walked once. albumAt() walks the
+// directory from its start each call: O(rows x groups) in one loop pass,
+// about 100 ms on 15,000 albums not played (S3b's review, finding 12).
+// (A directory that isn't its bits', which no write() makes, would read
+// differently: albumAt()'s kNoAlbum where it disagrees.)
+uint32_t shelfSum(const ShelfLook& k, const Snapshot& s);
+// The console's uiS<shelf>[w] (9.3): a shelf 0-4 (Most played, New finds,
+// Old favourites, Not played yet, Recently played), Most played's window
+// after it (0 seven days, 1 thirty, 2 All time); `windowGiven` false with
+// none (the hub's push: the snapshot's). False: no such shelf, a window
+// past 2, or one on another shelf.
+bool shelfArg(const char* a, Shelf* shelf, uint8_t* window, bool* windowGiven);
+
+// ---------------------------------------------------------------------------
+// Last 7 days (7.7)
+// ---------------------------------------------------------------------------
+constexpr int kWeekBarPx = 44;  // the top day
+struct WeekLook {
+  PageLook page;        // Served: the figures; Pending, NoCard: A's value the line, B and C empty; Retry:
+                        // the empty state, its line and Try again's button; Closed: the empty state, its
+                        // line alone; Off, NoPlays: no figures, no line
+  bool button = false;  // the empty state's Try again
+};
+// As the hub's look; with no clock Closed (stats.needs_dates: never reached,
+// the hub's row 1 is the status row then). An undated snapshot under a
+// dated lifetime (the clock set since its ask) would read Served with zeros:
+// the Ui releases it before a page reads it (undatedStale()).
+WeekLook weekLook(const Lifetime& l, const PhaseInfo& p, const Snapshot* snap);
+struct WeekFigures {
+  uint64_t listenedMs = 0;  // the 7 days'
+  uint32_t plays = 0;
+  uint16_t firstDay = statsfold::kUnsetDay;  // the window's first (today - 6); kUnsetDay undated
+  uint8_t bar[statsrank::kWeekDays] = {};    // px, oldest first (0: no bar: before sinceDay, or nothing)
+  int8_t bigDay = -1;       // the top day by time (a tie: the later), -1 none (nothing in the week)
+  bool autoDj = false;      // Auto DJ's line: its plays + skips at least 5 (D11)
+  uint8_t autoDjPct = 0;    // its plays / (plays + skips), rounded
+};
+// From the snapshot's 7 days (as of the ask: no fold moves it). Bars to
+// `maxPx` (the top day full; any other day with time at least 1 px).
+WeekFigures weekFigures(const Snapshot& s, int maxPx = kWeekBarPx);
+// Bars to `maxPx` for seven days' times (`firstDay` the first's UTC day,
+// none before `sinceDay`; kUnsetDay firstDay: none at all).
+void barHeights(const uint32_t ms[statsrank::kWeekDays], uint16_t firstDay, uint16_t sinceDay, int maxPx,
+                uint8_t out[statsrank::kWeekDays]);
+// The first of the snapshot's seven days (its today and the six before:
+// the columns, oldest first, the last today); kUnsetDay for an undated one
+// (its ask made with no clock: no day to name).
+uint16_t weekFirstDay(const Snapshot& s);
+// How Week shows each look (7.7 as decided; S3b's S11), as ui's LibraryPage
+// draws it with no items (ListView::drawEmpty()):
+//   - through the list's body hook (7.2 item 6): Served, its figures in A, B
+//     and C; Pending and NoCard, the look's line alone in A (B and C empty:
+//     weekBodyLine()); Off and NoPlays, nothing (the band blank: no figures,
+//     no line);
+//   - else the firmware's empty state (Retry, Closed): the chart's disc, no
+//     title, the look's line (Small, 304 px), and Try again's button with
+//     WeekLook::button (Retry: the card back among it, the owner's call 3).
+// Both cover the band whole, so a change of look draws it whole: no strip
+// of the old picture stays (as the list's lone line would leave).
+constexpr bool weekBody(Look k) {
+  return k == Look::Served || k == Look::Pending || k == Look::NoCard || k == Look::Off || k == Look::NoPlays;
+}
+// The line the body draws alone in A (Body DIM centred on x 160 in
+// uitext::kListLineW, on statstext::kWeekPendingY: a list's lone line):
+// Pending's phase line, and with the card out stats.no_card, the line the
+// hub and the shelves draw then, and nothing else (the owner's call 3: no
+// disc, no button; S3b's review, finding 7). None for Served (its figures),
+// Off and NoPlays (blank), nor the empty state's looks.
+constexpr bool weekBodyLine(Look k) { return k == Look::Pending || k == Look::NoCard; }
+// The header's line under or beside "Last 7 days" ("4–10 Nov (UTC)":
+// statstext::weekSub()) names the figures' days, the snapshot's: its first
+// day while they show (Served, a dated snapshot), else kUnsetDay (the title
+// alone: Pending, Try again, the card's lines).
+uint16_t weekHeaderDay(Look k, const Snapshot* snap);
+// ... so it moves with the texts a page keeps (lookText()'s, drawn and
+// now): the figures coming or going, or a new ask's snapshot (its
+// version). Its header is drawn again then (about 5 ms), with the body.
+constexpr bool weekHeaderMoved(uint16_t drawnText, uint16_t nowText) {
+  constexpr uint16_t kLook = 7, kServed = static_cast<uint16_t>(Look::Served);
+  const bool was = (drawnText & kLook) == kServed, is = (nowText & kLook) == kServed;
+  return was != is || (is && drawnText != nowText);
+}
+// The Library's status band (a scan, tags, an update: ui's status line)
+// shows on a Library list, the hub and the shelves among them, but never
+// on Last 7 days, a page of its own (4.4, 7.7): `kind` a ui::PageKind.
+constexpr bool statusLineOn(uint8_t kind) { return kind != kKindWeek; }
+
+// ---------------------------------------------------------------------------
+// The made-up views (9.3's uiSx<n>, look only; S3b's S12): 1 a full card, 2
+// nothing played, 3 no clock, 4 day 5 of counting, 5 folding, 6 no card, 7
+// waiting, 8 no room, 9 unread; 0 the card's own (none). The Ui keeps the
+// view on in a byte of RAM (no NVS): while it is, its accessors hand the
+// pages the view's lifetime and phase (madeUpState()) and only the view's
+// own snapshot (viewServes()), nothing asks (Lifetime::madeUp: D16), every
+// act is refused (actRefused(): the look-only toast, as uil<n>'s), and each
+// rise of the held condition writes the view's snapshot again (riseOf()):
+// the usual releases free it as any other (StatsLists::loop()'s too: the
+// stats off, the card away or held, another index's key).
+// ---------------------------------------------------------------------------
+constexpr uint8_t kMadeUpViews = 10;
+struct MadeUpView {
+  Lifetime life;           // its madeUp true: nothing asks
+  PhaseInfo phase;
+  bool snapshot = false;     // a made-up snapshot to write (1, 3 and 4): `spec`
+  statsvisit::MadeUp spec;   // keyed on the live index's buildStamp, trackCount and albums
+};
+// View `n` (1-9) over the live index's key; false for 0 and past 9.
+bool madeUpView(uint8_t n, uint64_t buildStamp, uint32_t trackCount, uint32_t albums, MadeUpView* out);
+// View `n`'s lifetime and phase alone (either out null: not wanted), as
+// madeUpView() gives them, without its snapshot's recipe (a few hundred
+// bytes, never on the pages' draws): what Ui::statsLifetime() and
+// statsPhase() hand the pages while the view is on. False for 0 and past 9.
+bool madeUpState(uint8_t n, Lifetime* life, PhaseInfo* phase);
+// The views that write a snapshot (1, 3 and 4): into the Dance tab's block,
+// lent (statshold::borrow(): refused while that tab is up, so uiSx<n> says
+// so there and sets nothing).
+bool madeUpWrites(uint8_t n);
+// uiSx<n>'s answer from a host with no play log (UiHost::statsMadeUp()'s
+// default, app/PlayHistory's with none), which serves nothing and so writes
+// no snapshot: true for 0 (the end) and the views with none (2, 5-9); false
+// for those with one (1, 3, 4: not written) and past 9 (no such view). One
+// rule, so the two hosts read alike.
+bool madeUpNoLog(uint8_t n);
+// The console's words for a view (English, whatever the UI's language):
+// "the card's own", "a full card", "nothing played", "no clock", "day 5 of
+// counting", "folding", "no card", "waiting", "no room", "unread"; "?" past
+// 9.
+const char* madeUpName(uint8_t n);
+// uiSx<n>'s argument after uiS: "x" and one digit (0-9), nothing after it.
+// False: anything else ("x" alone, "x10", "xa").
+bool madeUpArg(const char* a, uint8_t* n);
+// The snapshot the pages read (Ui::statsSnapshot(), after D6's key): under
+// a made-up view only the view's own (madeUp()), with none only a real one.
+// So a made-up snapshot never passes for the card's, and a real one never
+// stands under a view's made-up lifetime: a console ask under a view (Hv,
+// Hu) rewrites the view's block whole, and its write() clears the mark (a
+// real ask replaces it), which the pages read once uiSx0 ends the view.
+inline bool viewServes(const Snapshot& s, bool viewOn) { return s.madeUp() == viewOn; }
+// The held condition's rise (D1, D3, D16): with a made-up view on (1-9),
+// the view's snapshot written again (MadeUp: whatever freed it since, a
+// dark, a tab, a Back to Artists, the card, the stats off), never an ask;
+// else the visit's ask when asksOnEdge(), or nothing (Off, the card out,
+// nothing played).
+enum class Rise : uint8_t { None, Ask, MadeUp };
+Rise riseOf(const Lifetime& l, uint8_t view);
+// 7.2's "An open bar across a new ask", at every rise of the held condition
+// and where a made-up view's snapshot is written before the page's enter()
+// (uiSx<n>, 0 among them, with the held condition up): every stats shelf in
+// the Library's stack has its bar folded (expanded -1), its place kept. A
+// rise with nothing served comes up at 0 rows and the landing folds the bar
+// (listlayout::arrival(), sameVisit false); a snapshot served at enter()
+// (a view's written first, or a console Hu's the rise's ask takes over:
+// S3b's review, finding 1) has its rows there at ListView::attach(), which
+// would put the ref's bar back on another snapshot's row: a bar whose Play
+// could act on a track nobody picked. Other pages' bars (an album's) are
+// their own. Returns how many were open.
+int foldShelfBars(NavModel& nav);
+// What a touch on a stats page does, as a made-up view takes it (look only,
+// as uil<n>'s synthetic library: refused, the look-only toast):
+//   - Queue: Play, Play next, + Queue (a ranked row's bar, the top bar, a
+//     sheet's choices, Not played yet's album's sheet);
+//   - AutoDj: "Auto DJ from here" (a ranked row's sheet);
+//   - ShuffleAll: the empty hub's Shuffle all (7.5);
+//   - Ask: Try again (the hub's row, a shelf's, Week's button);
+//   - Window: Most played's tray, the window shown (its byte in the
+//     snapshot's header, D7): look only, never refused. Its write reaches
+//     only a snapshot the pages are served (Ui::statsSetWindow(): under a
+//     view the view's own, never a real one a console Hu (or Hv under views
+//     1, 3, 4) left held under it; S3b's review, finding 5). The window
+//     picked stays the shelf's (its id and PageRef, 7.11) past the view's
+//     end: a Most played still showing at uiSx0, or under a page above it
+//     and entered again by Back, shows it over the card's, and D7 writes it
+//     there at that enter() or the next landing, as any window shown (S3b's
+//     review of its fixes). Back to the hub first drops it: the hub's push
+//     reads the snapshot's window.
+// A push opens a page (a hub row, an album, the entry row, the rail and the
+// jump grid): no act. An album page pushed from Not played yet is the
+// card's own album, its acts the card's. A disabled row's buzz and toast,
+// and a sheet's opening, are look only.
+enum class Act : uint8_t { Queue, AutoDj, ShuffleAll, Ask, Window };
+constexpr bool actRefused(Act a, bool madeUpOn) { return madeUpOn && a != Act::Window; }
+
+}  // namespace statsview

@@ -13,6 +13,7 @@
 #include "PathHashWalk.h"
 #include "StatsFile.h"
 #include "StatsFold.h"
+#include "StatsView.h"
 #include "WallClock.h"
 #include "app/BoardClock.h"
 #include "app/ListeningStats.h"
@@ -55,8 +56,6 @@ constexpr uint32_t kDarkSlice = 250;
 // A visit's walk that skips passes this long gives its block back (a lit
 // list moving, the card held: 9.7's hold bounds).
 constexpr uint32_t kWalkSkipMs = 1000;
-// Not played yet opens after this many counting days (call 4, O5).
-constexpr long kNotPlayedDays = 30;
 
 size_t up(size_t n) { return (n + kAlign - 1) & ~(kAlign - 1); }
 float msSince(int64_t t0) { return static_cast<float>(esp_timer_get_time() - t0) / 1000.0f; }
@@ -193,10 +192,13 @@ void dayText(uint32_t day, char* out, size_t cap) {
   const wallclock::Civil c = wallclock::toCivil(sf::kMinMs + static_cast<uint64_t>(day) * sf::kDayMs);
   snprintf(out, cap, "%04d-%02d-%02d", c.year, c.month, c.day);
 }
-// Recently played's `when` (minutes since 2026-01-01, or the undated codes).
+// Recently played's `when` (minutes since 2026-01-01, or the codes: a dated
+// snapshot's rows with no dated play, and every row of an undated one, a
+// dated row of an earlier session's among them: the owner's call,
+// 2026-11-24).
 void whenText(uint32_t when, char* out, size_t cap) {
   if (when == sv::kWhenSession || when == sv::kWhenEarlier) {
-    snprintf(out, cap, "%s", when == sv::kWhenSession ? "undated, this session" : "undated, before it");
+    snprintf(out, cap, "%s", when == sv::kWhenSession ? "this session (no time)" : "earlier (no time)");
     return;
   }
   const wallclock::Civil c = wallclock::toCivil(sf::kMinMs + static_cast<uint64_t>(when) * 60000);
@@ -214,17 +216,17 @@ void listenedText(uint32_t ms, char* out, size_t cap) {
 
 const char* srcName(uint8_t s) { return s == sf::kAutoDj ? "Auto DJ" : s == sf::kShuffle ? "shuffle" : "you"; }
 
-// Whether Not played yet may open (call 4, O5: S3b's statsview::
-// notPlayedOpen() decides the shelf; this is the visit's grade): dated, 30
-// counting days or more; with no clock, perhaps (DAYS' span, the ask's
-// report, decides it), so the visit asks for its played set too.
+// Whether Not played yet may open (call 4, O5: statsview::notPlayedOpen()
+// decides the shelf; this is the visit's grade): dated, 30 counting days or
+// more; with no clock, perhaps (DAYS' span, the ask's report, decides it),
+// so the visit asks for its played set too. The rule is lib/core's
+// (statsvisit::notPlayedMayOpen(), host-tested), the shelf's too, so the
+// two can't disagree.
 bool notPlayedMayOpen(const sf::Fold& fold) {
   const uint64_t now = boardclock::now();
   uint16_t today = 0;
-  if (!sf::todayOf(now, &today)) return true;
-  const uint16_t since = fold.sinceDayNow(now);
-  if (since == sf::kUnsetDay) return false;
-  return static_cast<long>(today) - static_cast<long>(since) + 1 >= kNotPlayedDays;
+  if (!sf::todayOf(now, &today)) return sv::notPlayedMayOpen(false, 0, sf::kUnsetDay);
+  return sv::notPlayedMayOpen(true, today, fold.sinceDayNow(now));
 }
 
 }  // namespace
@@ -345,9 +347,10 @@ void StatsLists::command(const char* arg) {
       if (!snap_) {
         Serial.println("[listen] Hu0: no snapshot held");
       } else if (!(flags_ & kFake)) {
-        Serial.printf("[listen] Hu0: the snapshot held (%lu B at 0x%08lx) isn't Hu's (a stats page's, or an ask's "
-                      "under way): kept\n",
-                      static_cast<ul>(snapshotBytes()), static_cast<ul>(reinterpret_cast<uintptr_t>(snap_)));
+        Serial.printf("[listen] Hu0: the snapshot held (%lu B at 0x%08lx) isn't Hu's (%s): kept\n",
+                      static_cast<ul>(snapshotBytes()), static_cast<ul>(reinterpret_cast<uintptr_t>(snap_)),
+                      snap_->madeUp() ? "a made-up view's, uiSx: uiSx0 ends it"
+                                      : "a stats page's, or an ask's under way");
       } else {
         freeSnap("Hu0");
       }
@@ -714,9 +717,19 @@ void StatsLists::turnVisit(const Gates& g) {
       lineUs += freeSnap("short of the library's albums now (past the Dance tab's 4,096 B block: 18,432 albums)");
     }
     if (snap_) {
+      // (A made-up view's among them: a console Hv or Hu under uiSx<n>.
+      // This ask's write() (finishVisit()) clears the mark, so the real
+      // snapshot replaces it; the pages read it once the view ends:
+      // Ui::statsSnapshot(). An ask that ends before its write (every grade
+      // refused, the rank's fault, the card's) leaves it as it was, still
+      // the view's: it didn't borrow it, so nothing frees it. So the line
+      // says what is to come, not what is done.)
       const int64_t p0 = esp_timer_get_time();
-      Serial.printf("[listen] %s: the snapshot held at 0x%08lx (%lu B of the Dance tab's block): rewritten whole\n",
-                    name(), static_cast<ul>(reinterpret_cast<uintptr_t>(snap_)), static_cast<ul>(need));
+      Serial.printf("[listen] %s: the snapshot held at 0x%08lx (%lu B of the Dance tab's block): rewritten whole%s\n",
+                    name(), static_cast<ul>(reinterpret_cast<uintptr_t>(snap_)), static_cast<ul>(need),
+                    snap_->madeUp() ? " (a made-up view's, uiSx: replaced by this ask's real one at its write; "
+                                      "kept, still the view's, if the ask ends before)"
+                                    : "");
       lineUs += esp_timer_get_time() - p0;
     } else {
       const size_t f0 = psramFreeBytes();
@@ -768,7 +781,12 @@ void StatsLists::turnVisit(const Gates& g) {
   }
   if (!p) {
     if ((flags_ & kCarved) && snap_) freeSnap("every grade refused (this ask borrowed it)");
-    endVisit(cr.why == autodj::Close::NoBlock ? Outcome::NoBlock : Outcome::NoRoom, "every grade refused: No room");
+    // (A made-up view's held, not borrowed by this ask: kept and still
+    // served under the view, as the turn's line said it may be.)
+    endVisit(cr.why == autodj::Close::NoBlock ? Outcome::NoBlock : Outcome::NoRoom,
+             snap_ && snap_->madeUp() ? "every grade refused: No room (the made-up view's snapshot kept, still served "
+                                        "under it)"
+                                      : "every grade refused: No room");
     return;
   }
   block_ = new (p) Ask;
@@ -845,6 +863,10 @@ bool StatsLists::prepare() {
   // (A visit's layout made undated has no window room: it ranks undated,
   // should the clock be set since its turn.)
   if (visiting() && !a.y.dated) a.in.hasToday = false;
+  // The round this session's live plays have: ranked with no clock,
+  // Recently played's rows of it first (This session: the owner's call,
+  // 2026-11-24), and the copy-out's This session by the same round.
+  a.in.liveRound = fold.liveRound();
   if (rank_) {
     const uint32_t records = sf::kRecords;
     const bool lists = !visiting() || a.mem.lists;  // (the lean ask's played-set-only rank: TRKD's alone)
@@ -1221,7 +1243,7 @@ void StatsLists::finishVisit(const Gates& g) {
     ctx.trackCount = idx.trackCount();
     ctx.albums = idx.albumCount();
     ctx.time = a.in.hasToday && sf::todayOf(nowMs, &today) ? sf::timeOf(nowMs) : 0;
-    ctx.liveRound = glue_->fold().liveRound();
+    ctx.liveRound = a.in.liveRound;  // (prepare()'s Fold::liveRound(): the one the rank marked This session by)
     ctx.sinceDay = glue_->fold().sinceDayNow(nowMs);
     ctx.window = snap_->written() ? snap_->window() : sv::kAllTime;  // (a re-ask keeps the page's window)
     ctx.version = version_;
@@ -1229,6 +1251,9 @@ void StatsLists::finishVisit(const Gates& g) {
     // write() unserves it, its rows wanted-set indices until the landing,
     // so the version moves, as at a release (the phase stays Working).
     const bool served = snapshot() != nullptr;
+    // (An Hk past its header ends: the block written over is another
+    // snapshot's from here, as freeSnap() says for a release.)
+    if (hkPart_ >= 2) hkPart_ = kHkCut;
     const bool written = sv::write(a.ranker, a.wanted, r, ctx, snap_, snapshotBytes());
     a.writeUs = static_cast<uint32_t>(esp_timer_get_time() - w0);
     if (served && !snapshot()) ++version_;
@@ -1418,17 +1443,21 @@ void StatsLists::landVisit(const Gates& g) {
       count = snap_->notPlayedCount();
       if (!counted) note = " (the snapshot's key isn't the index's: not written)";
     }
-  } else if (snap_ && snap_->resolved()) {
+  } else if (snap_ && snap_->resolved() && !snap_->madeUp()) {
     const int64_t n0 = esp_timer_get_time();
     counted = sv::notPlayed(a.map, idx, snap_);
     a.notPlayedUs = static_cast<uint32_t>(esp_timer_get_time() - n0);
     count = snap_->notPlayedCount();
     if (!counted) note = " (the held snapshot's key isn't the index's: its count not written)";
   } else if (!(flags_ & kFromUi)) {
+    // (Over a made-up view's, uiSx's, nothing real is written into it: a
+    // console Hn's count from the walk's bits, as with none held. A page's
+    // lean ask never comes under a view: the pages ask nothing then.)
     const LibraryIndex::Span az = idx.albumsAZ();
     for (uint32_t i = 0; i < az.count; ++i) count += a.map.albumPlayed(az[i]) ? 0 : 1;
     counted = true;
-    note = " (no snapshot held: counted from the walk's bits)";
+    note = snap_ && snap_->madeUp() ? " (a made-up view's held: counted from the walk's bits, not written)"
+                                    : " (no snapshot held: counted from the walk's bits)";
   } else {
     note = " (no snapshot held any more: dropped)";
   }
@@ -1540,9 +1569,11 @@ void StatsLists::printLists(const Gates& g) {
       case sr::kRecent:
         timeText(e.at, t, sizeof(t));
         if (e.at) {
-          snprintf(what, sizeof(what), "%lu plays, last %s", static_cast<ul>(e.count), t);
+          snprintf(what, sizeof(what), "%lu plays, last %s%s", static_cast<ul>(e.count), t,
+                   e.session ? " (this session)" : "");
         } else {
-          snprintf(what, sizeof(what), "%lu plays, undated (round %lu)", static_cast<ul>(e.count), static_cast<ul>(e.ord));
+          snprintf(what, sizeof(what), "%lu plays, undated (round %lu%s)", static_cast<ul>(e.count),
+                   static_cast<ul>(e.ord), e.session ? ", this session" : "");
         }
         break;
       default:
@@ -1638,6 +1669,72 @@ void StatsLists::cancel() {
 void StatsLists::release(const char* why) {
   cancel();
   freeSnap(why);
+}
+
+// S3b's made-up views (9.3's uiSx<n>, look only: StatsLists.h). The
+// selector, the console and the pages' guards are the Ui's (S12; D16:
+// nothing asks while one is on, and its rises write it again); this is the
+// write and its release.
+bool StatsLists::madeUp(uint8_t n, const LibraryIndex* index) {
+  const unsigned view = n;
+  if (n == 0) {
+    if (snap_ && snap_->madeUp()) freeSnap("uiSx0: the made-up view ended");
+    return true;
+  }
+  const bool ready = index && index->ready();
+  statsview::MadeUpView v;
+  if (!statsview::madeUpView(n, ready ? index->buildStamp() : 0, ready ? index->trackCount() : 0,
+                             ready ? index->albumCount() : 0, &v)) {
+    Serial.printf("[listen] uiSx%u: no such made-up view (1-9; 0 the card's own)\n", view);
+    return false;
+  }
+  // A console visit or lean ask under way writes into the held snapshot (its
+  // rows, its count) on the loop, and would write into the view's: it ends
+  // here, its result dropped, as the Dance tab's coming up ends one (the
+  // block's other claimant; stop(): on the card worker, at its step's end,
+  // its rank's block alone touched meanwhile). So every false below for 1-9
+  // leaves nothing held, as UiHost::statsMadeUp() says, and no view stands
+  // on a snapshot that isn't its own.
+  if (visiting() && state_.load() != kIdle && !(flags_ & kFromUi)) {
+    stop(Outcome::Cancelled, "a made-up view (uiSx) put on: dropped (it would write into the view's snapshot)");
+  }
+  // Whatever is held released first (a page's ask cancelled; a page's
+  // snapshot, Hu's, a console ask's or another view's), so a view's look
+  // never stands on a real snapshot: the views with none (2, 5-9) read their
+  // phase, not Served. (release()'s own lines.)
+  release("a made-up view (uiSx)");
+  if (!v.snapshot) return true;
+  if (!ready) {
+    Serial.printf("[listen] uiSx%u: no made-up snapshot: the library's index isn't ready (behind the update's "
+                  "fence)\n",
+                  view);
+    return false;
+  }
+  // The Dance tab's block, lent as a visit's (refused while that tab is up,
+  // past 18,432 albums, or with no block), written whole as a landed one
+  // reads: nothing ranked or read, the live index's key (the key check in
+  // loop() keeps it), kFlagMadeUp in its header.
+  const size_t need = sv::bytesFor(index->albumCount());
+  void* s = statshold::borrow(need);
+  if (!s) {
+    Serial.printf("[listen] uiSx%u: no block for the made-up snapshot's %lu B: %s\n", view, static_cast<ul>(need),
+                  noLoanText(need));
+    return false;
+  }
+  sv::Snapshot* snap = sv::Snapshot::at(s);
+  if (!sv::writeMadeUp(v.spec, snap, sv::kBound)) {
+    Serial.printf("[listen] uiSx%u: the made-up snapshot refused (a library past 65,534 tracks or 65,535 "
+                  "albums)\n",
+                  view);
+    return false;
+  }
+  snap_ = snap;
+  ++version_;  // (what snapshot() serves changed: the pages' news())
+  Serial.printf("[listen] uiSx%u: a made-up snapshot, look only (nothing ranked or read), %lu B in the Dance tab's "
+                "block at 0x%08lx, lent: served over the library's index (%lu tracks, %lu albums)\n",
+                view, static_cast<ul>(need), static_cast<ul>(reinterpret_cast<uintptr_t>(s)),
+                static_cast<ul>(index->trackCount()), static_cast<ul>(index->albumCount()));
+  return true;
 }
 
 StatsLists::Phase StatsLists::phase() const { return phaseAt(millis(), static_cast<Wait>(rankWait_)); }
@@ -1824,17 +1921,26 @@ uint32_t StatsLists::freeSnap(const char* why) {
   if (!snap_) return 0;
   const size_t n = snapshotBytes();
   void* p = snap_;
+  // (A made-up view's, uiSx<n>, released here as any other: the pages'
+  // falls, the fence, and loop()'s the stats off, the card, another key.
+  // Its view's next rise writes it again: S3b's S12.)
+  const bool madeUpOne = snap_->madeUp();
   // (The pointer dropped: the block is the Dance tab's, lent, never the
   // stats' to free.)
   snap_ = nullptr;
+  // An Hk past its header ends at its next step: what it would print from
+  // here is another snapshot's, if one is written into the block in this
+  // call (a made-up view's, uiSx<n> or a rise's: S3b's review, finding 2).
+  if (hkPart_ >= 2) hkPart_ = kHkCut;
   flags_ = static_cast<uint8_t>(flags_ & ~(kFake | kCarved));
   // (What snapshot() serves changed: the pages' news(), whether or not the
   // phase moves with it.)
   ++version_;
   const int64_t p0 = esp_timer_get_time();
-  Serial.printf("[listen] the stats pages' snapshot released (%lu B at 0x%08lx, the Dance tab's block: nothing "
+  Serial.printf("[listen] the stats pages' %ssnapshot released (%lu B at 0x%08lx, the Dance tab's block: nothing "
                 "freed): %s\n",
-                static_cast<ul>(n), static_cast<ul>(reinterpret_cast<uintptr_t>(p)), why);
+                madeUpOne ? "made-up (uiSx) " : "", static_cast<ul>(n),
+                static_cast<ul>(reinterpret_cast<uintptr_t>(p)), why);
   return static_cast<uint32_t>(esp_timer_get_time() - p0);
 }
 
@@ -1861,14 +1967,18 @@ __attribute__((noinline)) bool StatsLists::printSnapshot(const Gates& g, const c
     timeText(s.time(), asked, sizeof(asked));
     dayText(s.today(), today, sizeof(today));
     dayText(s.sinceDay(), since, sizeof(since));
-    Serial.printf("[listen] %s: the snapshot %lu B at 0x%08lx (its block %lu B; %s, %s, %s): key %016llx, %lu tracks, "
-                  "%lu albums%s; asked %s (today %s, the live round %lu); counting since %s; Most played's window %s; "
-                  "version %lu\n",
+    // (A made-up view's says so: its figures are a recipe's, nothing ranked
+    // or read, never the card's plays: 9.3's uiSx<n>, S3b's S12. The line
+    // stays inside kHkPieceRoom with the label.)
+    Serial.printf("[listen] %s: the snapshot %lu B at 0x%08lx (its block %lu B; %s, %s, %s%s): key %016llx, %lu "
+                  "tracks, %lu albums%s; asked %s (today %s, the live round %lu); counting since %s; Most played's "
+                  "window %s; version %lu\n",
                   who, static_cast<ul>(s.bytes()), at, static_cast<ul>(snapshotBytes()), sv::gradeName(s.grade()),
                   s.dated() ? "dated" : "undated", s.resolved() ? "landed" : "NOT landed",
-                  static_cast<ull>(s.buildStamp()), static_cast<ul>(s.trackCount()), static_cast<ul>(s.albums()),
-                  g.index && !mine ? " (NOT this index's)" : "", asked, today, static_cast<ul>(s.liveRound()), since,
-                  windowName(s.window()), static_cast<ul>(s.version()));
+                  s.madeUp() ? "; MADE UP by uiSx, look only: not the card's plays" : "",
+                  static_cast<ull>(s.buildStamp()), static_cast<ul>(s.trackCount()),
+                  static_cast<ul>(s.albums()), g.index && !mine ? " (NOT this index's)" : "", asked, today,
+                  static_cast<ul>(s.liveRound()), since, windowName(s.window()), static_cast<ul>(s.version()));
     Serial.printf("[listen] %s: rows (of every row offered): most played 7 days %lu (%lu), 30 days %lu (%lu), All "
                   "time %lu (%lu); new finds %lu (%lu); old favourites %lu (%lu); recently played %lu (%lu)\n",
                   who, static_cast<ul>(s.rows(sr::kMost7)), static_cast<ul>(s.total(sr::kMost7)),
@@ -1922,9 +2032,12 @@ __attribute__((noinline)) void StatsLists::stepHk(const Gates& g) {
     hkRow_ = 0;
     return;
   }
-  if (!snap_ || !snap_->written()) {
-    Serial.println("[listen] Hk: the snapshot released, or under an ask's rewrite, since its header: the rest not "
-                   "printed");
+  // (kHkCut: released or written over since the header, another one perhaps
+  // written in the same call: a made-up view's, an ask's. S3b's review,
+  // finding 2.)
+  if (hkPart_ == kHkCut || !snap_ || !snap_->written()) {
+    Serial.println("[listen] Hk: the snapshot released or written over, or under an ask's rewrite, since its "
+                   "header: the rest not printed");
     hkPart_ = 0;
     return;
   }

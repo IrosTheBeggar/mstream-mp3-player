@@ -1,7 +1,7 @@
 {
   "@@locale": "fr",
   "@@autonym": "Français",
-  "@@note": "Machine translation, not yet reviewed by a native French speaker. Made from the mobile app's French (mstream_music, lib/l10n/app_fr.arb, master at bdb174e, GPL-3.0) and the terminal player's (mstream-terminal-player, locales/fr.yml, main at b89ad0a, GPL-3.0) wherever they had the text or its words (vous, « morceau » for a track, « file » for the queue, « casque », « carte SD », « calibrage tactile », « Minuterie de veille », « Aléatoire »), and translated by a Fable agent (Claude) for the rest, then reviewed by a second Fable agent (meaning, terms, grammar, typography), fitted to the rooms with the width checker. Paths (/music/Artist/Album/) and format names stay as they are. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The Auto DJ texts (October 2026, the engine's UI: toast.autodj_*, now_playing.autodj*, library.autodj_here, empty.autodj, output.autodj*, autodj.*) were made the same way: the mobile app's words for Auto DJ, Ancre, Suivre l'ambiance, titre de départ, Seuil de similarité, Continuité du BPM and Mixage harmonique (its autoDj* keys), translated by a Fable agent otherwise, fitted to en.json's rooms (the notes say where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_fr.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' Auto DJ text (November 2026, docs/MOOD-FILTERS.md 8.2: autodj.status_waits_fit) was made the same way: the mobile app's autoDjSeedNoMatch and its word for the filters (moodFilters), from mstream_music master at d17c3fa5, fitted to en.json's room, not yet reviewed by a native speaker. The mood filters' Auto DJ page (November 2026, docs/MOOD-FILTERS.md 8, S5): mood.smart_filters, mood.any and mood.no_data are the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_fr.arb: autoDjMoodTitle, autoDjAny, autoDjNoMoodData); autodj.smart_sub, autodj.status_fits, autodj.status_coverage_mood, autodj.status_few, autodj.status_few_sub, toast.autodj_few, toast.autodj_no_close, toast.autodj_plays_once, toast.autodj_no_mood and empty.no_track_fits were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjNoMoodData for the mood, autoDjSeedNoMatch, mainSync for a sync), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The screen's touch setting (November 2026, Output > Touch when off and the glance it can show: settings.screen_touch, its three values and their lines, glance.hint; settings.screen_off_sub rewritten, since a touch no longer wakes the screen unless the setting says so) was translated by a Fable agent (Claude), in this file's words for the screen's other settings, fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker.",
+  "@@note": "Machine translation, not yet reviewed by a native French speaker. Made from the mobile app's French (mstream_music, lib/l10n/app_fr.arb, master at bdb174e, GPL-3.0) and the terminal player's (mstream-terminal-player, locales/fr.yml, main at b89ad0a, GPL-3.0) wherever they had the text or its words (vous, « morceau » for a track, « file » for the queue, « casque », « carte SD », « calibrage tactile », « Minuterie de veille », « Aléatoire »), and translated by a Fable agent (Claude) for the rest, then reviewed by a second Fable agent (meaning, terms, grammar, typography), fitted to the rooms with the width checker. Paths (/music/Artist/Album/) and format names stay as they are. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The Auto DJ texts (October 2026, the engine's UI: toast.autodj_*, now_playing.autodj*, library.autodj_here, empty.autodj, output.autodj*, autodj.*) were made the same way: the mobile app's words for Auto DJ, Ancre, Suivre l'ambiance, titre de départ, Seuil de similarité, Continuité du BPM and Mixage harmonique (its autoDj* keys), translated by a Fable agent otherwise, fitted to en.json's rooms (the notes say where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_fr.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' Auto DJ text (November 2026, docs/MOOD-FILTERS.md 8.2: autodj.status_waits_fit) was made the same way: the mobile app's autoDjSeedNoMatch and its word for the filters (moodFilters), from mstream_music master at d17c3fa5, fitted to en.json's room, not yet reviewed by a native speaker. The mood filters' Auto DJ page (November 2026, docs/MOOD-FILTERS.md 8, S5): mood.smart_filters, mood.any and mood.no_data are the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_fr.arb: autoDjMoodTitle, autoDjAny, autoDjNoMoodData); autodj.smart_sub, autodj.status_fits, autodj.status_coverage_mood, autodj.status_few, autodj.status_few_sub, toast.autodj_few, toast.autodj_no_close, toast.autodj_plays_once, toast.autodj_no_mood and empty.no_track_fits were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjNoMoodData for the mood, autoDjSeedNoMatch, mainSync for a sync), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The screen's touch setting (November 2026, Output > Touch when off and the glance it can show: settings.screen_touch, its three values and their lines, glance.hint; settings.screen_off_sub rewritten, since a touch no longer wakes the screen unless the setting says so) was translated by a Fable agent (Claude), in this file's words for the screen's other settings, fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The listening stats' words (November 2026, docs/LISTENING-STATS.md 8.1: stats.title, stats.plays_n, stats.days_n, stats.today, stats.yesterday, stats.shelf_empty, stats.listened, stats.plays_label) are the mobile app's from mstream_music at d17c3fa5 (lib/l10n/app_fr.arb: its listening* keys), as it writes them; stats.recent, stats.window_all and stats.empty_title, too wide for their rooms, were left out then (English drawn) until short forms were written (below). The listening stats' other texts (November 2026, docs/LISTENING-STATS.md 8.2: toast.stats_*, the other stats.* texts, format.day_month, format.weekday_date, format.day_range, format.day_range_month, day.*, month.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_fr.arb: its listening* keys, « lecture » for a play and « séance » for a sitting, agoMinutes, agoHours, songInfoLastPlayed, listeningEmptyDevice, discoverPageTitle) and the terminal player's from mstream-terminal-player at b89ad0a (locales/fr.yml: gui.nav.most_played, gui.top.mp3 for the MP3 Player tab, « Lecteur MP3 », sta.note_top_track's « dernière », sta.weekdays_short, sta.months_short, sta.day_label and sta.day_key for the dates), and were translated by a Claude agent (Claude Opus 5.5) otherwise, then reviewed by a second, fitted to en.json's rooms and test_ui_library's (a note says where a room made a text shorter); the short forms written for the three ARB words that did not fit (stats.recent « Lectures récentes », the app's listeningRecent; stats.window_all « Toujours », its discoverPageWindowAll; stats.empty_title « Pas encore de lectures ») depart from the ARB, each with a note saying why. Not yet reviewed by a native speaker.",
   "boot.touch_hint": "Tactile déréglé ? Gardez un doigt sur l'écran.",
   "coach.header_tip": "Astuce {0} sur {1}",
   "coach.header_hint": "touchez : suite",
@@ -96,6 +96,8 @@
     "note": "With a ': ' to split at: 'Joué une fois, puis les filtres s'appliquent' is 323 px in Body, the toast's line 284."
   },
   "toast.autodj_no_mood": "Pas de données d'ambiance : synchronisez la carte depuis mStream",
+  "toast.stats_needs_dates": "Dates requises : {0}",
+  "toast.stats_needs_month": "Un mois de lectures requis : {0}",
   "hud.bluetooth": "Bluetooth : {0}",
   "hud.bluetooth_connecting": "Bluetooth : connexion…",
   "hud.speaker_paused": "Haut-parleur, pause : B pour lire",
@@ -304,6 +306,127 @@
   "mood.smart_filters": "Filtres intelligents",
   "mood.any": "Indifférent",
   "mood.no_data": "Pas de données d'ambiance",
+  "stats.title": "Statistiques d'écoute",
+  "stats.entry_empty": "Les lectures apparaissent ici",
+  "@stats.entry_empty": {
+    "note": "The mobile app's listeningEmptyDevice, its first sentence without 'au fil de vos écoutes': 'Les lectures apparaissent ici au fil de vos écoutes' is 324 px in Small 204."
+  },
+  "stats.counting": "Comptage des lectures…",
+  "stats.waiting": "En attente de la carte…",
+  "stats.no_room": "Mémoire insuffisante pour l'instant",
+  "stats.unread": "Statistiques illisibles",
+  "stats.card_back": "Carte réinsérée",
+  "@stats.card_back": {
+    "note": "The device's words for a card back (card.back, 'Carte réinsérée'), also for a card mounted again."
+  },
+  "stats.no_card": "Pas de carte : lectures non comptées",
+  "@stats.no_card": {
+    "note": "'Pas de carte : impossible de compter les lectures' is 393 px in Body 300: 'lectures non comptées' (298 px)."
+  },
+  "stats.since": "{0} depuis {1}",
+  "@stats.since": {
+    "note": "Without the article French puts before a day ('depuis le 30 mars'): with it, the test's worst, '99 999 h 59+ min depuis le 30 mars', is 236 px in the Small 232 room (Not played yet's line, which draws albums there: '99 999 albums depuis le 30 mars' is 216 px). 'depuis 30 mars' is 220 px; 'dès le 30 mars' (216 px) reads 'from', not 'since'. stats.since_only keeps 'depuis le'. For a native review."
+  },
+  "stats.since_only": "depuis le {0}",
+  "stats.last7": "7 derniers jours",
+  "stats.time_plays": "{0} · {1}",
+  "stats.plays_n": {
+    "one": "{0} lecture",
+    "other": "{0} lectures"
+  },
+  "stats.most_played": "Plus écoutés",
+  "stats.new_finds": "Découvertes",
+  "@stats.new_finds": {
+    "note": "The mobile app has only Discover ('Découvrir', discoverPageTitle): 'Découvertes', also the hub's line (stats.new_finds_sub), and 'découverts' for first heard (stats.first_heard)."
+  },
+  "stats.new_finds_sub": {
+    "one": "{0} découverte en 30 jours",
+    "other": "{0} découvertes en 30 jours"
+  },
+  "@stats.new_finds_sub": {
+    "note": "« découvertes » (finds), the shelf's title: '{0} morceaux découverts en 30 jours' is 237 px from 10 tracks in Small 232, so the short form would be drawn at almost every count; this is 176 px at 99 and 204 at 99 999. CLDR's one is 0 and 1: '0 découverte'."
+  },
+  "stats.new_finds_sub_short": {
+    "one": "{0} nouveau en 30 jours",
+    "other": "{0} nouveaux en 30 jours"
+  },
+  "stats.old_favourites": "Anciens favoris",
+  "stats.old_favourites_sub": {
+    "one": "{0} morceau très écouté autrefois",
+    "other": "{0} morceaux très écoutés autrefois"
+  },
+  "@stats.old_favourites_sub": {
+    "note": "'{0} morceaux, souvent écoutés, pas récemment' is 310 px in Small 232 even at 12, so it would never be drawn: 'très écoutés autrefois' (much played, in the past: 231 px at 99), else the count alone (library.tracks_n). For a native review: 'autrefois' may say longer ago than 30 days."
+  },
+  "stats.not_played": "Pas encore écoutés",
+  "stats.recent": "Lectures récentes",
+  "@stats.recent": {
+    "note": "Departs from the mobile app's autoDjRecentlyPlayed: 'Écoutés récemment' is 180 px in Bold 179, the shelf's title ('Récemment écoutés' 184). 'Lectures récentes' (163 px) is the app's own name for the list of recent plays in its listening stats (listeningRecent, 'Recent plays'), with this file's « lecture » for a play. 'Récents' (72 px, the app's autoDjFirstSongRecent and the terminal player's sta.tab_recent) fits too, but the terminal's nav says 'Récents' for recently added (gui.nav.recent) and 'Derniers lus' for recently played (gui.nav.last_played)."
+  },
+  "stats.no_dates": "Pas de dates : l'heure n'est pas réglée",
+  "@stats.no_dates": {
+    "note": "'Pas encore de dates : l'horloge n'est pas réglée' is 308 px in Small 250 ('Pas de dates : l'horloge n'est pas réglée' 260, 'Pas encore de dates : heure non réglée' 253): 'Pas de dates', and 'l'heure' (the time) for the clock (248 px)."
+  },
+  "stats.clock_fix": "Branchez-le (onglet Lecteur MP3)",
+  "@stats.clock_fix": {
+    "note": "'Lecteur MP3' is the terminal player's name for its MP3 Player tab (gui.top.mp3), 'branchez' its word for plugged in (dev.tabs_plugged, 'branchés'); 'le' is the player. The tab in brackets, as where it happens: 'Branchez-le à l'onglet Lecteur MP3' (225 px) would plug it into a tab. 'Branchez-le à l'ordinateur (onglet Lecteur MP3)' is 306 px in Small 250, 'Branchez-le et ouvrez l'onglet Lecteur MP3' 278."
+  },
+  "stats.needs_dates": "Dates requises",
+  "stats.warming": "Disponible le {0}, après un mois",
+  "@stats.warming": {
+    "note": "'Disponible le {0}, après un mois de lectures' is 318 px in Small 250 and 389 in Body 300 (30 mars), so it would never be drawn: 'après un mois' (242 and 295 px); the toast (toast.stats_needs_month) says 'Un mois de lectures requis'."
+  },
+  "stats.warming_short": "Disponible le {0}",
+  "stats.window_all": "Toujours",
+  "@stats.window_all": {
+    "note": "Departs from the mobile app's listeningPeriodAll: 'Depuis le début' is 141 px in Bold and 102 in Small, the tray's cell 92 (the terminal player's 'Depuis toujours' 142 and 102). 'Toujours' (78 px in Bold) is the app's own word for All time in Discover's window (discoverPageWindowAll)."
+  },
+  "stats.days_n": {
+    "one": "{0} jour",
+    "other": "{0} jours"
+  },
+  "stats.sub_last7": "7 derniers jours",
+  "stats.sub_last30": "30 derniers jours",
+  "stats.first_heard": "découverts en 30 jours",
+  "stats.not_in_30": "délaissés depuis 30 jours",
+  "@stats.not_in_30": {
+    "note": "'pas écoutés depuis 30 jours' is 181 px in Small 179: 'délaissés' (left aside, 164 px). 'pas écoutés en 30 jours' (154) calques English's 'not in 30 days' (French says 'depuis' with a negative); 'pas écoutés depuis 30 j' (153) would be the only '30 j' among the stats' '30 jours'."
+  },
+  "stats.found_autodj": "trouvé par Auto DJ",
+  "stats.found_shuffle": "trouvé en aléatoire",
+  "stats.last_on": "dernière le {0}",
+  "@stats.last_on": {
+    "note": "'dernière' (the last play), as the terminal player writes it (sta.note_top_track, 'dernière %{day}'), with the article French puts before a day. At 9 999 plays '9 999 lectures · dernière le 30 mars' (231 px) leaves the artist under 32 px of 264, so the row draws the count alone, as with the found_* parts at 9 999 (29 of the test's pairs; at 999 plays they fit: 219 px). The terminal's form without 'le' (215 px) would keep them."
+  },
+  "stats.ago_min": "il y a {0} min",
+  "stats.ago_h": "il y a {0} h",
+  "stats.today": "Aujourd'hui",
+  "stats.yesterday": "Hier",
+  "stats.this_session": "Cette séance",
+  "@stats.this_session": {
+    "note": "'séance', the mobile app's word for a sitting (listeningTileSessions, 'Séances'); the terminal player says 'sessions'."
+  },
+  "stats.earlier": "Plus tôt",
+  "stats.shelf_empty": "Rien sur cette période.",
+  "stats.utc": "{0} (UTC)",
+  "stats.listened": "Temps d'écoute",
+  "stats.plays_label": "Lectures",
+  "stats.big_day": "Jour le plus écouté : {0}, {1}",
+  "@stats.big_day": {
+    "note": "'Jour le plus écouté' (the day listened to most), as the apps put it ('Le plus le {date}', listeningMostOnDay; 'surtout le', sta.note_days); day.monday..day.sunday are lowercase, mid-sentence. 'Votre grand jour : {0}, {1}' (266 px) keeps English's tone, but reads as a wedding day."
+  },
+  "stats.autodj_right": "Auto DJ a vu juste dans {0} des cas",
+  "stats.empty_title": "Pas encore de lectures",
+  "@stats.empty_title": {
+    "note": "Departs from the mobile app's listeningEmptyTitle: 'Aucune lecture pour l'instant' is 369 px in Title 304. 'Pas encore de lectures' (286 px): the app's word for a play, with the terminal player's 'pas encore' (sta.empty_state, 'pas encore d'écoutes'); 'Aucune lecture' (190 px) drops the 'yet'."
+  },
+  "stats.empty_rule": "Une lecture compte dès 30 s ou à mi-durée",
+  "@stats.empty_rule": {
+    "note": "'Une lecture compte dès 30 s ou la moitié du morceau' is 349 px in Small 304: 'à mi-durée' (at half its length, 281 px)."
+  },
+  "stats.empty_rule_short": "Une lecture compte dès 30 s",
+  "stats.empty_card": "Vos statistiques restent sur cette carte",
+  "stats.made_up": "Statistiques de test : consultation seule",
   "card.another": "Autre carte : redémarrage",
   "card.back": "Carte réinsérée : redémarrage",
   "queue_cap.full": {
@@ -859,5 +982,41 @@
   "format.mb": "{0} Mo",
   "format.khz": "{0} kHz",
   "format.hz": "{0} Hz",
-  "format.list_sep": ", "
+  "format.list_sep": ", ",
+  "format.day_month": "{0} {1}",
+  "format.weekday_date": "{0} {1}",
+  "@format.weekday_date": {
+    "note": "The terminal player's order (sta.day_key) and short weekdays (sta.weekdays_short, day.mon..day.sun), lowercase as French writes them, also at the head of Recently played's sections: 'sam. 30 sept.'."
+  },
+  "format.day_range": "{0} – {1}",
+  "@format.day_range": {
+    "note": "Spaced, as French writes a span of dates across two months ('28 sept. – 4 oct.', CLDR's French interval), so the abbreviation's full stop doesn't touch the dash; in one month (format.day_range_month) unspaced, '25–31 mars'."
+  },
+  "format.day_range_month": "{0}–{1} {2}",
+  "day.mon": "lun.",
+  "day.tue": "mar.",
+  "day.wed": "mer.",
+  "day.thu": "jeu.",
+  "day.fri": "ven.",
+  "day.sat": "sam.",
+  "day.sun": "dim.",
+  "day.monday": "lundi",
+  "day.tuesday": "mardi",
+  "day.wednesday": "mercredi",
+  "day.thursday": "jeudi",
+  "day.friday": "vendredi",
+  "day.saturday": "samedi",
+  "day.sunday": "dimanche",
+  "month.jan": "janv.",
+  "month.feb": "févr.",
+  "month.mar": "mars",
+  "month.apr": "avr.",
+  "month.may": "mai",
+  "month.jun": "juin",
+  "month.jul": "juil.",
+  "month.aug": "août",
+  "month.sep": "sept.",
+  "month.oct": "oct.",
+  "month.nov": "nov.",
+  "month.dec": "déc."
 }

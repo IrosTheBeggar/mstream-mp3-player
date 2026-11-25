@@ -693,11 +693,11 @@ void PlaybackController::currentMoved() {
   }
 }
 
-bool PlaybackController::playNow(const uint32_t* tracks, uint32_t n, uint32_t start, bool shuffle) {
+bool PlaybackController::playNow(IdView tracks, uint32_t start, bool shuffle) {
   if (fenced_) return false;  // (the queue is the build's: nothing to edit)
   Act act(*this);
   const Found f = found();
-  if (!queue_.replace(tracks, n, start, shuffle)) return false;
+  if (!queue_.replace(tracks, start, shuffle)) return false;
   edited(f);
   failuresInARow_ = 0;
   clearStartPoint();
@@ -709,20 +709,20 @@ bool PlaybackController::playNow(const uint32_t* tracks, uint32_t n, uint32_t st
   return true;
 }
 
-bool PlaybackController::playNext(const uint32_t* tracks, uint32_t n) {
+bool PlaybackController::playNext(IdView tracks) {
   if (fenced_) return false;
   Act act(*this);
   const Found f = found();
-  const bool made = queue_.insertNext(tracks, n);
+  const bool made = queue_.insertNext(tracks);
   edited(f);
   return made;
 }
 
-bool PlaybackController::addToQueue(const uint32_t* tracks, uint32_t n) {
+bool PlaybackController::addToQueue(IdView tracks) {
   if (fenced_) return false;
   Act act(*this);
   const Found f = found();
-  const bool made = queue_.append(tracks, n);
+  const bool made = queue_.append(tracks);
   edited(f);
   return made;
 }
