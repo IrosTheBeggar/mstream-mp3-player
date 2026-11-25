@@ -7,115 +7,164 @@ ELF {{ELF}} for this build; ELF {{DIO_ELF}} for the `-dio-full.bin`).
 Source for this binary: {{SOURCE_URL}}, and with its libraries in
 `{{SOURCE_TAR}}` below.
 
-## What's new in 0.14.0
+## What's new in 0.15.0
 
-- **The player formats a card itself.** A card it can't use, exFAT (as
-  cards of 64 GB and up come), NTFS, GPT (a card a Mac erased whole) or
-  one it can't read, now shows **Format...** beside Try again, on the
-  Library, the Queue and Now Playing. It asks twice: "Format this card?"
-  (Format... or Cancel), then "Erase the whole card?", where **Hold to
-  erase**, the red button, has to be held for 2 seconds by a hand: it
-  fills from the left while the finger stays on it, and a tap, a run of
-  taps, a lift or a slide off it does nothing. Either question goes away
-  with Cancel, or by itself after a minute with no answer. Then the
-  player restarts, shows "Formatting the card" over a bar ("Leave the
-  card in and the player on"), and makes the card FAT32 on an MBR with
-  an empty `/music`: 7.8 s for a 32 GB card on the Core2, a few minutes
-  for a card of a terabyte or two (estimated: only the 32 GB card was
-  formatted). "Card formatted: ready for your music" says it is done.
-  Everything on the card is erased, even what the player can't read; a
-  card it can't read at all is first sent to a computer ("Check it on a
-  computer first": a disk check may save what is on it), and erasing it
-  is the second step. With no card in the slot, there is no Format...
-  button. So an exFAT, NTFS or GPT card no longer needs a computer
-  ([The microSD card](#the-microsd-card), below).
-- **The player has a clock, set by a computer.** The Core2's own clock
-  chip keeps the time, in UTC; a computer on USB sets it (below), and
-  the player believes it from then on, at every start. It is there to
-  date the play history; nothing on the screen shows it yet. Until a
-  computer sets it once, the clock reads as unset, even when the chip
-  has a time: the Core2 comes with one, and other firmware sets it to
-  local time, hours out read as UTC.
-- **The player keeps a play history on the card,** in
-  `/.player/plays.jnl`, for the transfer software: each track played
-  from the card, when it started (once the clock is set), how long it
-  played, how it ended (to its end, skipped, or stopped) and whether
-  Auto DJ or the shuffle picked it. A sync reads it and reports the
-  plays to the mStream server the card came from, which then tells the
-  player which it has, so the player can clear them. Each play is
-  written about 2 s into the next track, away from the moment one track
-  joins the next (15 to 17 ms a play on the Core2); plays under a
-  second aren't kept, nor the built-in tracks. The transfer software
-  isn't available yet: until it is, the history only grows, to about
-  13,000 plays (1 MB on the card), and the oldest 6,500 then make room.
-- **A touch on the dark screen does nothing now, by default.** Output
-  has a new row after Brightness, **Touch when off**, with three
-  choices (a tap takes the next): **Nothing**, the default, so a pocket
-  or a bag can't light the screen or keep the player from turning
-  itself off: the power button turns it on; **Wake**, what every touch
-  did before 0.14.0; **Track**, a screen of what is playing for 10 s,
-  with nothing to tap (the cover, the title, the artist and the album,
-  the time and the waveform, and the output, volume and battery at the
-  top); another touch shows it 10 s more, and the power button opens
-  the whole screen. A dim screen still brightens at a touch, whatever
-  the choice, and the headphones lost, a track that failed or USB
-  plugged in or out still light it.
-- **Smoother lists.** A moving list draws a frame for each refresh of
-  the panel, about 70 a second, instead of 30, timed to the panel's
-  scan so it doesn't show a frame half drawn, and a row draws in 3.0 to
-  3.4 ms instead of 5.6. A fling on the Artists list of a 1 TB card
-  went from 30 to 68 frames a second with nothing playing, and from 30
-  to 54 with an MP3 playing; the A-Z rail's scrub follows the finger 16
-  times a second instead of 6.6 (8.5 instead of 5.3 with an MP3). The
-  lists feel the same: the same speed cap, the same snap to a row.
-- **For a computer on USB** (the software that talks to the player:
-  `docs/HOST-STATUS.md` in the source): `@time` asks the player's time
-  or sets it (`@time <unix-ms>`, answered `@time ok`); `@format` puts
-  the format's two questions on the player's screen, and only the
-  listener's tap and 2 s hold there format the card: nothing a computer
-  sends can erase it. `@status` gains `clock=ok` or `clock=unset`, and
-  `/.player/device.txt` says `history=1` (this firmware keeps a play
-  history). An older firmware answers `@time` and `@format` with
-  `@err 7`.
-- **The new messages** (the format's, Touch when off and its choices)
-  are in all ten languages, machine translations in the nine other
-  than English; the French and Polish "Hold to erase" are shortened to
-  fit their button.
-- Tested on a Core2 v1.3 (2026-11-09 and 10), in a silent test mode:
-  on a spare 32 GB card, the clock read at each start and set from a
-  computer (the chip had lost 74.6 s in about three weeks); plays
-  written while tracks played back to back; the format's questions
-  cancelled and left to their minute (nothing formatted), and holds the
-  console made that never format (a computer can't stand in for a
-  hand); a real format by hand, 7.8 s, the card then checked on a
-  computer (one FAT32 partition, no errors); the update from settings
-  written by earlier test builds. Then, with no card in the slot, the
-  update from settings 0.13.0 wrote: every setting kept, the clock unset
-  until a computer set it, then kept through a restart. Before they were
-  merged: Touch when off's three choices, and the lists, with every
-  number above, on the 1 TB card.
-  **Not checked on the Core2 for this release:** formatting an exFAT or
-  a GPT card (only the host tests format such cards, simulated), a card
-  pulled during a format, a card pulled and put back around plays, a
-  play or the library on a card right after the update from 0.13.0, the
-  idle power-off on battery, Bluetooth playback, a long listening
-  session, a real finger on the lists, and the 1 TB card on this build.
-- **The firmware is a little bigger:** about 4.52 MB, up from 4.45 MB
-  in 0.13.0, for the format, the clock, the play history, Touch when off
-  and the lists (72 % of the space it has on the flash, 71 % before).
-  The steps below are the same.
-- **The update from 0.13.0** keeps the settings, the paired headphones,
-  the queue and the library (its file is the same: no rebuild); a touch
-  on the dark screen then does nothing (**Touch when off**, Nothing):
-  set it to Wake for 0.13.0's way. The clock reads as unset until a
-  computer sets it once, even if the Core2's chip has a time.
-  From 0.12.0 it is the same, with 0.13.0's library rebuild; from older
+- **Listening stats.** The Library's Artists list starts with a
+  **Listening stats** row: the time listened on this card since
+  counting began ("74 h 10 min since 1 Sep"). A tap opens its page, a
+  row each for **Last 7 days** (the week's time and plays, a bar a day,
+  your big day, and how often Auto DJ's picks were played rather than
+  skipped), **Most played** (opening on All time, with 7 days and 30
+  days beside it), **New finds** (first heard in the last 30 days, and
+  whether Auto DJ or the shuffle found them), **Old favourites** (5
+  plays or more, none in 30 days), **Not played yet** (the albums with
+  no track played, A-Z) and **Recently played** (newest first, under
+  Today, Yesterday and the date). Their tracks play as an album's do: a
+  tap for Play, Play next or + Queue, a hold for the track's sheet, the
+  top bar for the whole list. With nothing played yet, the stats offer
+  Shuffle all.
+- **How plays count.** A play is 30 s of a track, or half of it when
+  that is shorter, as mStream counts them; a track skipped before that
+  is a skip, and every second heard counts toward the time. Every
+  player's plays on the card count, 0.14.0's included: the player works
+  them out from the play history it keeps on the card and saves them
+  there at each start and every 24 tracks, skipped ones too
+  (`/.player/stats.bin`, and beside it 24 bytes a track played: 467 KB
+  for 19,478 tracks). Nothing is kept on the player itself. The
+  history's oldest plays are saved into the stats before it makes room
+  for new ones, and once a sync has reported them (the mStream terminal
+  player's MP3 Player tab, since its 0.16.0), its files are cleared only
+  when the stats hold their plays.
+- **Opening them** takes 2.1 to 2.3 s of "Counting plays..." with nothing
+  playing and 2.8 to 2.9 s with an MP3 (on a test card of 19,417
+  tracks), and for about a minute after a start, "Waiting for the
+  card...". The lists stay while you move between the stats and the
+  albums opened from them, and are counted again after another tab, Now
+  Playing or the dark screen: a play counted while a page is open shows
+  the next time. With the card out they say so, and offer Try again
+  once it is back ("The card is back").
+- **Before the clock is set, and in the first month.** Plays get a date
+  only once a computer has set the player's clock (0.14.0's `@time`,
+  which the terminal player's MP3 Player tab sends). Until then the
+  time listened, Most played (All time) and Recently played work ("This
+  session", then "Earlier"), and the rest says it needs dates ("Plug in
+  to the MP3 Player tab"), but Not played yet on a card whose dated
+  plays span a month. New finds, Old favourites and Not played yet open
+  after a month of counting ("Opens 6 Dec, after a month of plays"),
+  and Most played offers 7 days after a week and 30 days after a month.
+  Days are UTC for now: Last 7 days says so.
+- **Headphones connect sooner.** After a restart or a power-on the
+  player can be reached, and calls them, a third of a second after
+  Bluetooth is up, not 10 s later: on the Core2 they linked 6.6 to
+  7.1 s after a restart instead of 14.7 to 17.3 s, and 4.5 to 5.2 s
+  after a minute off instead of 14.6 to 15.6 s. Connect, a B hold or a
+  play now tries 8 times, about a minute, instead of 3 ("try 2 of 8"
+  on Output): headphones connected to a phone hardly answer anyone else
+  (twice they answered only after 38 and 41 s), so disconnecting them
+  there first is still quicker. "Couldn't connect" comes after about a
+  minute, not 20 to 25 s; a tap still cancels the wait.
+- **No more 5 s stalls on a nearly full card.** On a card with almost
+  no room left (one free cluster on a 32 GB card), every second save of
+  the queue held the player about 5.3 s, long enough to break the music
+  (148 underruns after one); each save now takes 135 to 146 ms. The fix
+  acts only with about 3.9 MB or less free on such a card. The first
+  write after a computer filled the card still takes 5.3 to 5.5 s, at
+  the start that follows.
+- **More memory to spare when the headphones link at a start.** The
+  player's background work on the card now waits while the headphones'
+  link is set up and until their remote control is ready, and each open
+  file's 4 KB buffer goes to the Core2's larger memory first. In the
+  start that ran lowest (an MP3 playing as they linked during the walk
+  of the card) the least free internal memory rose from 35.9 to 45.1 KB
+  in a silent test: 42.8 KB with the listening stats, 50.6 to 50.8 KB
+  with the headphones really playing. The speaker was muted, and the
+  headphones played an album of silence. New music on the card shows
+  about 4 s later after a link, and an MP3 at 320 kbit/s takes half a
+  point more of a core (25.5 % instead of 25 %), a CD-quality FLAC
+  (16-bit, 44.1 kHz) about 1.5 points more (estimated).
+- **An empty Now Playing no longer redraws itself all the time.** Since
+  0.14.0, Now Playing with nothing queued and a card in drew its whole
+  "Nothing playing" screen again on every pass while the screen was
+  lit: touches on that screen were read about 8 times less often (the
+  loop's 16 passes a second, now 123 to 140), and Auto DJ's join at a
+  start took 5 to 6.5 s instead of under 2 s (on the Core2, 6.2 to 6.4 s
+  before the listening stats came in and 5.3 s with them, now 1.6 s).
+  It is drawn once again, and again only when it changes.
+- **The new messages** (the listening stats', 84 of them) are in all
+  ten languages. Eleven are the mStream app's own words, as its
+  translations have them, with 20 of those shortened in seven languages
+  where they didn't fit; the other 73 were translated by Claude agents
+  in the nine languages other than English, each language reviewed by
+  a second. No native speaker has read them yet.
+- Tested on a Core2 v1.3 (2026-11-17 to 25), in a silent test mode
+  (but for three runs with the headphones really playing), through the
+  console, with nobody's finger on the screen but to tap Connect for
+  the headphones' asks. Before they were merged, on a spare 32 GB card
+  with a made-up library (19,417 tracks) and made-up play histories:
+  each start's count saved before the history's files were cleared
+  after a sync made by a test tool; the history's rotations (in a test
+  build keeping 8 plays), each saved first, no play lost or counted
+  twice; a full history's first start; the nearly full card; the lists
+  equal to a reference worked out on a PC; every stats page in each of
+  its states, drawn, opened and timed (79 screenshots read beside the
+  designs), Most played's tray tapped by a scripted finger; the
+  headphones' connect times (one pair, by a build that left the card
+  alone; an ask with 3 and with 6 tries) and a start with an MP3
+  playing as they linked; the empty Now Playing; each with the numbers
+  given here. Then, with this release's code and nothing played, the
+  1 TB music card (19,671 tracks), which an earlier test build had
+  begun counting: the 15 tracks it had logged since counted (12 of them
+  plays), a sync, the history's file cleared at the next start, and the
+  track lists, each as worked out beforehand on a PC from copies of the
+  card (Not played yet counted on the player alone). Last, the update
+  itself (2026-11-25), on the spare card with its stats files taken off
+  as 0.14.0 leaves cards: the published 0.14.0 played three tracks
+  from it and paused a fourth; this release's first start then counted
+  the 6,682 tracks the history held (5,889 of them plays and 777 skips;
+  6,537 made up on a PC, the other 145 this Core2's own test plays) and
+  saved them in 1.7 s (the save 1.1 s of it), its stats files equal
+  byte for byte to those worked out beforehand on a PC, with the
+  settings, the paired headphones, the queue at its paused second and
+  the library kept; the next start changed nothing.
+  **Not checked on the Core2 for this release:** going back to 0.14.0;
+  the update with a full history (about 13,000 tracks) on a card with
+  no stats yet (that start was measured over made-up stats already on
+  the card); a real finger on the stats pages, and their haptics; a card
+  pulled and put back with a stats page open; the clock set while a
+  page shows, a UTC midnight on a page, and the stats with the clock
+  unset (drawn only from made-up figures); the nine other languages on
+  the screen (their fits were measured on a computer); the stats while
+  Bluetooth plays; a connect with 8 tries, a play waiting for the
+  headphones, and headphones that open their own link just as a start's
+  walk of the card begins (only the host tests reach that wait); a queue
+  of over 400 tracks on a nearly full card; the idle power-off on
+  battery; and a long listening session.
+- **The firmware is a little bigger:** about 4.70 MB, up from 4.52 MB
+  in 0.14.0, most of it the listening stats and their messages (75 % of
+  the space it has on the flash, 72 % before). The steps below are the
+  same.
+- **The update from 0.14.0** keeps the settings, the paired headphones,
+  the queue and the library (their files are the same: no rebuild). Its
+  first start with a card 0.14.0 played from counts the play history
+  0.14.0 kept, so the stats begin with those plays (up to about 13,000),
+  counting since the day of the first one with a date (with none, the
+  day of the update if the clock is set; with it unset, the day the card
+  was last synced, or else the first day it plays or starts with the
+  clock set). With a full history that start takes longer, once a card:
+  on the Core2, 13,106 plays (made up, on a card whose stats already
+  held 19,000 made-up tracks) were counted in 1.2 to 1.4 s and saved in
+  2.5 to 2.7 s, a track asked for meanwhile started 4.4 to 4.8 s late,
+  and the next start tidied the files in 1.3 to 1.4 s. From 0.13.0 it
+  is the same, with 0.14.0's changes (Touch when off, the clock: read
+  its notes) and stats that start at the first play; from older
   versions, read their notes too.
-- **Going back to 0.13.0 later** keeps the settings, the paired
-  headphones and the queue; a touch wakes the screen again, no play
-  history is kept, and coming back to 0.14.0 finds Touch when off, the
-  clock and the history as they were (from the code: not tried on the
-  Core2).
+- **Going back to 0.14.0 later** keeps the settings, the paired
+  headphones, the queue and the library. 0.14.0 leaves the stats' files
+  alone and goes on keeping the play history, which 0.15.0 counts when
+  it comes back; but on a card synced meanwhile 0.14.0 clears the
+  synced history without counting it, so the stats miss those plays
+  (none is counted twice). An ask for the headphones has 3 tries again
+  (from the code: not tried on the Core2).
 
 ## Hardware
 
@@ -181,8 +230,8 @@ if unsure, install both. On Linux, add yourself to the `dialout` group.
 - **The player can format it** (since 0.14.0): put the card in, tap
   **Format...** under that message, then hold the red **Hold to erase**
   for 2 seconds. It restarts and makes the card FAT32 on an MBR with an
-  empty `/music`. Formatting erases the whole card: copy anything on it
-  off first.
+  empty `/music`. Formatting erases the whole card, the listening stats
+  with it: copy anything on it off first.
 - Or format it on a computer (check the disk you pick is the card). Up
   to 32 GB (and not GPT), the computer's own Format, FAT32, does it.
   Over 32 GB, or a GPT card:
@@ -233,15 +282,17 @@ if unsure, install both. On Linux, add yourself to the `dialout` group.
   Chinese menus too). Other scripts (Hebrew, Arabic, Thai, Devanagari
   and others) and rarer characters show as `?`. The menus are in ten
   languages, nine of them machine translations no native speaker has
-  read yet, Auto DJ's texts included; the serial console is in English,
-  but for the lines that quote the screen. In three of Auto DJ's
-  messages on two lines in Japanese and Chinese, shown only with an Auto
-  DJ index, the first line touches the message's outline.
+  read yet, Auto DJ's and the listening stats' texts included; the
+  serial console is in English, but for the lines that quote the
+  screen. In three of Auto DJ's messages on two lines in Japanese and
+  Chinese, shown only with an Auto DJ index, the first line touches the
+  message's outline.
 - **Auto DJ's matching, the waveforms and the mood filters need files
-  only the transfer software will write,** and that isn't available
-  yet: until it is, Auto DJ adds random tracks from the library, Now
-  Playing shows the plain line, the Albums list has no Filters row, and
-  Auto DJ's Smart filters row is dim. With an index, tracks it doesn't
+  only the transfer software writes:** the mStream terminal player's
+  MP3 Player tab (its 0.16.0 and later) puts them on the card at a
+  sync. On a card filled another way, Auto DJ adds random tracks from
+  the library, Now Playing shows the plain line, the Albums list has no
+  Filters row, and Auto DJ's Smart filters row is dim. With an index, tracks it doesn't
   cover are never picked and don't steer it. Its session (what steers
   it, what it avoids) and the DJ marks aren't kept across a restart; its
   switch and its settings are. Over a long session, Stay on seed
@@ -260,6 +311,30 @@ if unsure, install both. On Linux, add yourself to the `dialout` group.
   always the next one. Only the Albums list and Auto DJ filter: Artists
   and Folders always show everything. The Albums filter is forgotten at
   a restart; Auto DJ's is kept.
+- **The listening stats are the card's.** They count only the plays
+  from this card, whichever player made them, and live only on it: a
+  format on the player (or `/.player` deleted) starts them again, and
+  another card has its own. Days are UTC days until the player is told
+  the time zone: in the evening west of UTC, or the morning east of it,
+  "today" isn't the listener's. Plays made while the clock was unset
+  count in the totals, Most played (All time) and Recently played, but
+  in no day. A renamed or converted file is a new track to them: its
+  old plays stay in the totals and leave the lists. Very heavy
+  listening (over 4,096 tracks in a month, a track counted once for
+  each day it played) shortens Most played's 30 days, which then says
+  how many days it holds ("23 days"). Not played yet can very rarely
+  hide an album with no play (at most about a 1 in 10,000 chance with
+  20,000 tracks, more in a larger library, estimated; an album hidden
+  this way stays hidden); it never shows a played one. Past 18,432
+  albums the lists can't be counted ("Not enough memory right now").
+  The stats wait for the card ("Waiting for the card...") for about a
+  minute after a start, and on a fresh card or after a Rescan until the
+  tags have been read: minutes for 20,000 tracks (3 to 6, estimated).
+  Opening the Dance tab lets their lists go: they are counted again on
+  the way back. A stats file the card can't read keeps the stats off,
+  their row gone, until a disk check on a computer mends it; a damaged
+  one is put aside as `stats.bad`, and counting starts again from the
+  play history.
 - The card taken out while the player runs and put back (music copied
   to it on a computer meanwhile) has its tag files, the Auto DJ index
   and the waveforms read again, but its folders aren't walked again
