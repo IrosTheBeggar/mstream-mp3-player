@@ -596,6 +596,45 @@ nothing else moves between a track with a shape and one without.
 The glance (section 7) draws the bar at rest with no knob on the plain
 line, as the bars have none: it can't be touched there.
 
+**No line before the bars** (2026-11-27: the owner saw some waveforms flash
+once or twice as a track loaded). Three rules, all from what the page drew
+last (`wave::showsBars()`, `wave::heldForShape()`, `wave::stripOf()`;
+test_wave_bar, test_wave_state). They come from reading the code. They are
+on the owner's Core2 since the same day, where the console can't show them
+(`ui` says what the strip would show, not what stays on the screen, and a
+read there took 8 ms): whether the flash is gone is the owner's eyes' to
+say, and they haven't yet.
+
+- **Bars up stay up under an estimate.** A file that says no length at its
+  start has the backend's estimate instead, from its second second on
+  (ARCHITECTURE.md, "The length of a track"): a figure that moves as the
+  file is read. Tested against the shape's length at every pass, each
+  crossing of the agreement drew the strip whole: the bars, the line, the
+  bars. Now such a length can put the bars up but not take them down: with
+  this track's bars up from this shape, they stay. A length the file says
+  (`AppState::durationKnown`, the backend's `durationKnown()`: its header's,
+  or its end reached) decides at every pass as before, so a file replaced
+  under its path still shows no other recording's shape.
+- **No plain line between two waveforms.** A track change dropped the old
+  shape at once, drew the line for the passes the new read takes (two at
+  least), then the new bars: the strip whole twice. Now bars at rest stay
+  as drawn while the new track's shape is on its way
+  (`WaveState::coming()`: its first read not answered, 500 ms at most, and
+  one such wait for a burst of skips), and the strip is drawn once: when
+  the shape lands, or when the wait ends with none (the line). The text row
+  isn't held, so the new track's time shows at once. Never under a finger.
+- **Nothing before a shape that is coming.** A repaint has none of the
+  strip on the screen to keep: the page entered or the screen woken on a
+  track that changed meanwhile (nothing is read for Now Playing while it
+  isn't up, or in the dark). It drew the line, then the bars over it some
+  passes later. Now, while the shape is on its way (the same 500 ms at
+  most), the strip is its background alone (`wave::Fill::Blank`: no line,
+  no playhead, no knob), then the bars; the line only when the read comes
+  to nothing or doesn't come in time. A finger on the bar meanwhile gets
+  its pressed line at once. On a card with no waveform file nothing is
+  ever coming, and the line is drawn as before. `ui` says `the bar: blank
+  (its shape is being read)`.
+
 The fill and every x go through `SeekBar::xOf()`, as they always did:
 `min(pos, len) · 296 / len`. At rest pos is the whole second (4.5), under a
 finger the live ms.
@@ -742,7 +781,9 @@ The tab bar's hairline and the Dance tab's line read the same snapshot
     6 px a second of a 52 s track moves, 819 px for the 30 of a 10 s track. A
     px is 0.8 s of a 4 min song, and past 5 min some seconds move none.
   - The whole strip, 320 x 21 = 6,720 px: a look, a new shape, the bars
-    coming or going, a track, a play state, a repaint, a scrub frame.
+    coming or going, a track, a play state, a repaint, a scrub frame. A
+    track change over bars is one of them, not two: the strip waits for
+    the new shape (4.1, "No line before the bars").
   - Entering a scrub look clears the text row once, leaving draws it, and a
     second that changes during a scrub draws nothing there.
 - **A whole strip with the text row due is one push** (`wave::pushedAsOne()`;
