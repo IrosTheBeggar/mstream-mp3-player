@@ -1058,6 +1058,104 @@ void test_touch_no_hold_for_the_rail() {
   TEST_ASSERT_EQUAL_STRING("down;tap;down;long press;", t.types().c_str());
 }
 
+// A finger that lands on a moving list (ListView calls grab() on the Down that
+// stopped it): a drag once it moves past a smear, not past the tap's 12 px;
+// never a long press; still a tap when it lifts where it landed. Only that
+// touch: the next one has its slop and its hold.
+void test_touch_grab_of_a_moving_list() {
+  Rec g;
+  g.at(0, true, 150, 120);
+  g.r.grab();
+  g.at(10, true, 151, 122);  // a smear: within the grab's slop
+  TEST_ASSERT_EQUAL_STRING("down;", g.types().c_str());
+  g.at(20, true, 150, 123);  // 3 px: a drag
+  TEST_ASSERT_EQUAL_STRING("down;drag start;", g.types().c_str());
+  TEST_ASSERT_EQUAL_INT(3, g.events[1].dy);  // from where it landed
+  g.at(30, true, 150, 133);
+  g.at(40, true, 150, 143);
+  g.at(50, false);
+  TEST_ASSERT_EQUAL_STRING("down;drag start;drag;drag;drag end;fling;", g.types().c_str());
+  TEST_ASSERT_EQUAL_INT(10, g.events[2].dy);  // since the last
+  // The same finger without it: 13 px in before anything moves.
+  Rec n;
+  n.at(0, true, 150, 120);
+  n.at(10, true, 151, 122);
+  n.at(20, true, 150, 123);
+  TEST_ASSERT_EQUAL_STRING("down;", n.types().c_str());
+  n.at(30, true, 150, 133);
+  TEST_ASSERT_EQUAL_STRING("down;drag start;", n.types().c_str());
+  TEST_ASSERT_EQUAL_INT(13, n.events[1].dy);
+  // Resting on the list it stopped, past the hold time, then sliding: no long
+  // press came, so it still drags.
+  Rec r;
+  r.at(0, true, 150, 120);
+  r.r.grab();
+  r.at(600, true, 150, 121);
+  r.at(900, true, 151, 121);
+  TEST_ASSERT_EQUAL_STRING("down;", r.types().c_str());
+  r.at(950, true, 150, 150);
+  r.at(1200, false);
+  TEST_ASSERT_EQUAL_STRING("down;drag start;drag end;", r.types().c_str());
+  // Lifted where it landed, however long it was down: a tap (the list's stop).
+  Rec t;
+  t.at(0, true, 150, 120);
+  t.r.grab();
+  t.at(700, true, 150, 122);
+  t.at(750, false);
+  TEST_ASSERT_EQUAL_STRING("down;tap;", t.types().c_str());
+  // The next touch has its slop and its hold again.
+  t.at(1000, true, 100, 100);
+  t.at(1016, true, 100, 108);
+  t.at(1600, true, 100, 108);
+  TEST_ASSERT_EQUAL_STRING("down;tap;down;long press;", t.types().c_str());
+  // The figures: under a quarter of the tap's slop.
+  TEST_ASSERT_EQUAL_INT(2, TouchRecognizer::kGrabSlopPx);
+  TEST_ASSERT_EQUAL_INT(12, TouchRecognizer::Config{}.slopPx);
+}
+
+// The list's side of it, wired as ListView wires the two: a fling, a finger
+// that lands on it and pulls the other way. The list stops under the finger
+// either way; grabbed, it follows from the finger's third px, by the px (it
+// stood still for 12, then jumped the 13).
+void test_a_finger_turns_a_flinging_list() {
+  using T = InputEvent::Type;
+  for (bool grab : {false, true}) {
+    KineticScroll k;
+    k.setExtent(42.0f * 500, 168.0f);
+    k.jumpTo(42.0f * 100);
+    k.fling(0, 1500.0f);  // up the list
+    for (uint32_t ms = 14; ms <= 140; ms += 14) k.update(ms);
+    TEST_ASSERT_TRUE(k.phase() == KineticScroll::Phase::Flinging);
+    // The finger lands (ListView's Down): the list stops there.
+    Rec f;
+    const bool wasMoving = k.moving();
+    f.at(150, true, 160, 100);
+    if (grab && wasMoving) f.r.grab();
+    k.press(150, 100);
+    const float held = k.offset();
+    TEST_ASSERT_TRUE(held > 42.0f * 100);
+    // It pulls down a px a ms; the list gets the drag's events.
+    int stoodFor = -1;
+    float firstStep = 0;
+    for (int i = 1; i <= 20; ++i) {
+      const size_t before = f.events.size();
+      f.at(150 + i, true, 160, 100 + i);
+      for (size_t e = before; e < f.events.size(); ++e) {
+        const InputEvent& ev = f.events[e];
+        if (ev.type == T::DragStart || ev.type == T::DragMove) k.drag(ev.ms, ev.y);
+      }
+      if (stoodFor < 0 && k.offset() != held) {
+        stoodFor = i - 1;
+        firstStep = held - k.offset();
+      }
+    }
+    TEST_ASSERT_EQUAL_INT(grab ? 2 : 12, stoodFor);
+    TEST_ASSERT_EQUAL_FLOAT(grab ? 3.0f : 13.0f, firstStep);
+    TEST_ASSERT_EQUAL_FLOAT(held - 20.0f, k.offset());  // 1:1 from there
+    TEST_ASSERT_TRUE(k.phase() == KineticScroll::Phase::Dragging);
+  }
+}
+
 void test_touch_drag_and_capped_fling() {
   Rec d;
   d.at(0, true, 150, 200);
@@ -1954,6 +2052,8 @@ int main(int, char**) {
   RUN_TEST(test_policy_clicks_with_nothing_to_play_are_inert);
   RUN_TEST(test_touch_tap_and_long_press);
   RUN_TEST(test_touch_no_hold_for_the_rail);
+  RUN_TEST(test_touch_grab_of_a_moving_list);
+  RUN_TEST(test_a_finger_turns_a_flinging_list);
   RUN_TEST(test_touch_drag_and_capped_fling);
   RUN_TEST(test_touch_button_strip_and_cancel);
   RUN_TEST(test_touch_from_strip);
