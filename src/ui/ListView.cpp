@@ -44,8 +44,6 @@ constexpr int32_t kSpinUs = 250;
 constexpr int32_t kLateOkUs = 230;
 // A hold's time besides its lines (the window's commands, the clip).
 constexpr uint32_t kHoldExtraUs = 60;
-// A second row is rendered ahead from this many lines a frame.
-constexpr int kAheadTwoStep = 10;
 // A list moving by itself sleeps up to this long for its frame's window
 // (a finger's frames poll instead: its latest place counts).
 constexpr int32_t kSleepMaxUs = 13000;
@@ -515,19 +513,25 @@ void ListView::setExpanded(int32_t row) {
 
 // ---- rendering ----
 
+// Which item each sprite holds and which range is kept are the list's (the
+// sprites' block and two words here); what to do with them is lib/core's
+// (RowSlots, host-tested): the sprite an item takes, the range a frame keeps,
+// the rows rendered ahead.
+rowslots::Held ListView::held() const {
+  rowslots::Held h;
+  for (int i = 0; i < kSlots; ++i) h.item[i] = slots_[i].item;
+  return h;
+}
+
+void ListView::setKeep(rowslots::Keep k) {
+  keepFirst_ = k.first;
+  keepLast_ = k.last;
+}
+
 ListView::Slot* ListView::slotFor(uint32_t item) {
-  for (int i = 0; i < kSlots; ++i) {
-    if (slots_[i].item == static_cast<int32_t>(item)) return &slots_[i];
-  }
-  for (int i = 0; i < kSlots; ++i) {
-    const int32_t r = slots_[i].item;
-    if (r < 0 || r < static_cast<int32_t>(keepFirst_) || r > static_cast<int32_t>(keepLast_)) {
-      slots_[i].item = -1;
-      return &slots_[i];
-    }
-  }
-  slots_[0].item = -1;
-  return &slots_[0];
+  const rowslots::Claim c = rowslots::claim(held(), keep(), static_cast<int32_t>(item));
+  if (c.fresh) slots_[c.slot].item = -1;
+  return &slots_[c.slot];
 }
 
 ListView::Slot* ListView::renderedSlot(uint32_t item) {
@@ -648,9 +652,7 @@ int ListView::render(int32_t off, ListScroller::Gate* gate) {
   // stay where they show.
   bodyUp_ = n == 0 && src_->drawBody(gfx::strip(), kTop, height_);
   if (force_ || bodyUp_) vs_->invalidate();
-  const int32_t top = std::max<int32_t>(off, 0);
-  keepFirst_ = static_cast<uint32_t>(top / kPitch);
-  keepLast_ = std::min<uint32_t>(n ? n - 1 : 0, static_cast<uint32_t>((top + height_ - 1) / kPitch));
+  setKeep(rowslots::shown(off, height_, n));
   const int lines = vs_->scrollTo(off, *this, nullptr, gate);
   const bool body = bodyUp_;
   bodyUp_ = false;
@@ -667,15 +669,11 @@ int ListView::render(int32_t off, ListScroller::Gate* gate) {
 // A move's new lines, before its commit: every item they come from, drawn now.
 void ListView::prepare(const VScrollMap::Span* spans, int n) {
   if (n <= 0) return;
-  const auto items = static_cast<int32_t>(layout_.itemCount());
-  const int32_t first = spans[0].contentY;
-  const int32_t end = spans[n - 1].contentY + spans[n - 1].h;
-  const int32_t i0 = std::max<int32_t>(0, first / kPitch);
-  const int32_t i1 = std::min<int32_t>(items - 1, (end - 1) / kPitch);
-  if (i1 < i0) return;
-  keepFirst_ = static_cast<uint32_t>(i0);
-  keepLast_ = static_cast<uint32_t>(i1);
-  for (int32_t i = i0; i <= i1; ++i) renderedSlot(static_cast<uint32_t>(i));
+  const rowslots::Items on = rowslots::ofLines(spans[0].contentY, spans[n - 1].contentY + spans[n - 1].h,
+                                               static_cast<int32_t>(layout_.itemCount()));
+  if (on.none()) return;
+  setKeep(rowslots::Keep{static_cast<uint32_t>(on.first), static_cast<uint32_t>(on.last)});
+  for (int32_t i = on.first; i <= on.last; ++i) renderedSlot(static_cast<uint32_t>(i));
 }
 
 // Content lines [contentY, + h) into GRAM lines [gramY, + h), item by item.
@@ -989,9 +987,7 @@ bool ListView::bandStep(bool frameDue) {
   }
   // The rows of the band keep their slots while it is drawn.
   const uint32_t n = layout_.itemCount();
-  const int32_t top = std::max<int32_t>(band_.off, 0);
-  keepFirst_ = static_cast<uint32_t>(top / kPitch);
-  keepLast_ = std::min<uint32_t>(n ? n - 1 : 0, static_cast<uint32_t>((top + height_ - 1) / kPitch));
+  setKeep(rowslots::shown(band_.off, height_, n));
   const VScrollMap::Span& span = band_.span[band_.at];
   const int32_t end = span.contentY + span.h;
   // Up to the end of this line's item (a row), or of the span.
@@ -1076,10 +1072,7 @@ uint32_t ListView::holdFor(int d) const { return static_cast<uint32_t>(d < 0 ? -
 // A row took `us` to render: what the next one is taken to cost (a render
 // the decoder cut into counts for less: it would only scare the look-ahead
 // off).
-void ListView::noteRowTime(uint32_t us) {
-  if (us > rowUs_ * 3) us = rowUs_ * 3;
-  rowUs_ = (rowUs_ * 3 + us) / 4;
-}
+void ListView::noteRowTime(uint32_t us) { rowUs_ = rowslots::rowTime(rowUs_, us); }
 
 // Where the scan was when a move's address went out: `line` read at
 // `readUs`, the address at `sentUs`. Counted from the band's last row: up
@@ -1099,17 +1092,11 @@ void ListView::noteAddress(int line, int64_t readUs, int64_t sentUs) {
 // The rows a move from the drawn offset to `off` brings on, rendered now:
 // before the bus, and before the move's window.
 void ListView::prerender(int32_t off) {
-  const auto items = static_cast<int32_t>(layout_.itemCount());
-  const bool up = off > drawnOffset_;
-  const int32_t a = up ? drawnOffset_ + height_ : off;  // content lines [a, b)
-  const int32_t b = up ? off + height_ : drawnOffset_;
-  const int32_t i0 = std::max<int32_t>(0, a / kPitch);
-  const int32_t i1 = std::min<int32_t>(items - 1, (b - 1) / kPitch);
+  const uint32_t items = layout_.itemCount();
+  const rowslots::Items on = rowslots::broughtOn(drawnOffset_, off, height_, static_cast<int32_t>(items));
   // The rows on screen after the move keep their slots.
-  const int32_t top = std::max<int32_t>(off, 0);
-  keepFirst_ = static_cast<uint32_t>(top / kPitch);
-  keepLast_ = std::min<uint32_t>(items ? items - 1 : 0, static_cast<uint32_t>((top + height_ - 1) / kPitch));
-  for (int32_t i = i0; i <= i1; ++i) renderedSlot(static_cast<uint32_t>(i));
+  setKeep(rowslots::shown(off, height_, items));
+  for (int32_t i = on.first; i <= on.last; ++i) renderedSlot(static_cast<uint32_t>(i));
 }
 
 // A move drawn where the panel's scan doesn't see it half done (lib/core
@@ -1292,59 +1279,27 @@ bool ListView::renderAhead(uint32_t untilDueMs) {
   if (!src_ || !slots_ || drawnOffset_ < 0 || force_ || jumped_ || lastDir_ == 0 || !moving()) return false;
   const auto n = static_cast<int32_t>(layout_.itemCount());
   if (n == 0) return false;
-  // Time for a row before the next frame's window (or its deadline)?
+  // Time for a row before the next frame's window (on the panel's scan: a
+  // refresh after the last hold began; as a fling slows, later: its window
+  // follows the step), or its deadline?
   if (onScan() && lastHoldUs_) {
-    // The next hold begins about a refresh after the last one did (later,
-    // as a fling slows: its window follows the step). A row must be done a
-    // millisecond before; once that moment is near, or just past, the
-    // frame comes first. (A hold two refreshes ago says nothing: a
-    // motion's first frames take what comes.)
-    const int64_t frameUs = scan_->sync().panel().frameUs;
-    const int64_t since = esp_timer_get_time() - lastHoldUs_;
-    if (since < 2 * frameUs && since + rowUs_ + 1000 > frameUs) return false;
-  } else if (untilDueMs * 1000 < rowUs_ + 2000) {
+    if (!rowslots::roomOnScan(esp_timer_get_time() - lastHoldUs_, scan_->sync().panel().frameUs, rowUs_)) return false;
+  } else if (!rowslots::roomOnClock(untilDueMs, rowUs_)) {
     return false;
   }
-  const int32_t first = std::max<int32_t>(0, drawnOffset_ / kPitch);
-  const int32_t last = std::min<int32_t>(n - 1, (drawnOffset_ + height_ - 1) / kPitch);
   // The row past the edge the list moves toward, and from a fast step the
-  // one after it (the frame that brings two rows on would render one).
-  for (int k = 1; k <= (lastStep_ >= kAheadTwoStep ? 2 : 1); ++k) {
-    const int32_t next = lastDir_ > 0 ? last + k : first - k;
-    if (next < 0 || next >= n) return false;
-    bool ready = false;
-    for (int i = 0; i < kSlots; ++i) ready = ready || slots_[i].item == next;
-    if (ready) continue;
-    // The rows on screen keep their slots (the next move pushes the rest
-    // of the edge ones), and the first row ahead; a spare one takes this.
-    // With none spare, the second row ahead takes the slot of the row
-    // about to leave at the other edge: its lines are on the glass, and
-    // only a turn back would want them again (it is rendered again then).
-    keepFirst_ = static_cast<uint32_t>(lastDir_ > 0 ? first : std::max<int32_t>(0, first - (k - 1)));
-    keepLast_ = static_cast<uint32_t>(lastDir_ > 0 ? std::min<int32_t>(n - 1, last + (k - 1)) : last);
-    if (k == 2) {
-      bool spare = false;
-      for (int i = 0; i < kSlots; ++i) {
-        const int32_t r = slots_[i].item;
-        spare = spare || r < 0 || r < static_cast<int32_t>(keepFirst_) || r > static_cast<int32_t>(keepLast_);
-      }
-      if (!spare) {
-        if (lastDir_ > 0) {
-          ++keepFirst_;
-        } else {
-          --keepLast_;
-        }
-      }
-    }
-    Slot* s = slotFor(static_cast<uint32_t>(next));
-    const uint32_t t0 = micros();
-    renderItem(s->sprite, static_cast<uint32_t>(next));
-    noteRowTime(micros() - t0);
-    s->item = next;
-    ++aheadRenders_;
-    return true;
-  }
-  return false;
+  // one after it (the frame that brings two rows on would render one):
+  // which, and whose slots are kept for it, is rowslots::ahead()'s.
+  const rowslots::Next next = rowslots::ahead(held(), drawnOffset_, height_, n, lastDir_, lastStep_);
+  if (next.item < 0) return false;
+  setKeep(next.keep);
+  Slot* s = slotFor(static_cast<uint32_t>(next.item));
+  const uint32_t t0 = micros();
+  renderItem(s->sprite, static_cast<uint32_t>(next.item));
+  noteRowTime(micros() - t0);
+  s->item = next.item;
+  ++aheadRenders_;
+  return true;
 }
 
 // While the list rests: the row just above the band and the row just
@@ -1355,34 +1310,23 @@ bool ListView::renderNeighbours() {
   if (scroll_.moving() || touchOn_ != TouchOn::None || offset() != drawnOffset_) return false;
   const auto n = static_cast<int32_t>(layout_.itemCount());
   if (n == 0) return false;
-  const int32_t first = std::max<int32_t>(0, drawnOffset_ / kPitch);
-  const int32_t last = std::min<int32_t>(n - 1, (drawnOffset_ + height_ - 1) / kPitch);
-  keepFirst_ = static_cast<uint32_t>(std::max<int32_t>(0, first - 1));
-  keepLast_ = static_cast<uint32_t>(std::min<int32_t>(n - 1, last + 1));
-  for (const int32_t next : {last + 1, first - 1}) {
-    if (next < 0 || next >= n) continue;
-    bool ready = false, spare = false;
-    for (int i = 0; i < kSlots; ++i) {
-      const int32_t r = slots_[i].item;
-      ready = ready || r == next;
-      spare = spare || r < 0 || r < static_cast<int32_t>(keepFirst_) || r > static_cast<int32_t>(keepLast_);
-    }
-    if (ready || !spare) continue;
-    Slot* s = slotFor(static_cast<uint32_t>(next));
-    renderItem(s->sprite, static_cast<uint32_t>(next));
-    s->item = next;
-    ++aheadRenders_;
-    return true;
-  }
-  return false;
+  // (The rows on screen and one either side are kept from here, a row to
+  // render or not: rowslots::neighbour().)
+  const rowslots::Next next = rowslots::neighbour(held(), drawnOffset_, height_, n);
+  setKeep(next.keep);
+  if (next.item < 0) return false;
+  Slot* s = slotFor(static_cast<uint32_t>(next.item));
+  renderItem(s->sprite, static_cast<uint32_t>(next.item));
+  s->item = next.item;
+  ++aheadRenders_;
+  return true;
 }
 
 void ListView::forgetHidden() {
   if (!src_ || !slots_ || drawnOffset_ < 0) return;
-  const int32_t first = drawnOffset_ / kPitch;
-  const int32_t last = (drawnOffset_ + height_ - 1) / kPitch;
+  const rowslots::Items band = rowslots::inBand(drawnOffset_, height_);
   for (int i = 0; i < kSlots; ++i) {
-    if (slots_[i].item < first || slots_[i].item > last) slots_[i].item = -1;
+    if (slots_[i].item < band.first || slots_[i].item > band.last) slots_[i].item = -1;
   }
 }
 
