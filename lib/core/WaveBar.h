@@ -23,6 +23,11 @@
 // (showsBars()) draws the plain line on the same centre row. The strip and the
 // text row are separate draws on separate triggers, regionToDraw() and textDraw(),
 // and go as one push when both fall due with the strip whole (pushedAsOne()).
+// Three rules keep the strip from showing the line and then the bars, all from
+// what the page drew last: bars up stay up under a length that is only an
+// estimate (showsBars()); at a track change they stay until the new shape is
+// read (heldForShape()); and a strip with nothing on the screen yet (a repaint)
+// is its background alone until then (stripOf(), Fill::Blank).
 // Portable, host-tested (test_wave_bar; the rows against the fonts, test_ui_library).
 namespace wave {
 
@@ -171,8 +176,19 @@ constexpr Ink barInk(Look look, int i, int playheadAt, int reach) {
 // Whether the bar is drawn as bars: a shape, a look that takes one, and a length
 // that agrees with `lengthMs` (the bar's frozen one under a finger, else the
 // player's). Anything else is the plain line.
-constexpr bool showsBars(Look look, const Shape* shape, uint32_t lengthMs) {
-  return shape != nullptr && look != Look::Inert && lengthAgrees(shape->lengthMs, lengthMs);
+//
+// A length the player only estimates (`lengthKnown` false: a file that says none
+// at its start, so the backend works it out from the bytes a frame it has read,
+// progress::estimateDurationMs()) moves with every decoder pass in a track's
+// first seconds, in and out of the agreement, and each crossing would draw the
+// whole strip again: the bars, the line, the bars. So such a length can put the
+// bars up but not take them down: with them up for this track and this shape
+// (`shown`: barsUp()), they stay. A length the file says, or its end reached,
+// decides at every pass, as before: it doesn't move.
+constexpr bool showsBars(Look look, const Shape* shape, uint32_t lengthMs, bool lengthKnown = true,
+                         bool shown = false) {
+  return shape != nullptr && look != Look::Inert &&
+         (lengthAgrees(shape->lengthMs, lengthMs) || (shown && !lengthKnown));
 }
 
 // The look of a touch's phase: at rest, inert unless the track can be sought.
@@ -185,11 +201,20 @@ constexpr Look lookOf(SeekBar::Phase phase, bool seekable, bool playing) {
                                               : Look::RestPaused;
 }
 
+// A look with no finger on the bar.
+constexpr bool atRest(Look look) {
+  return look == Look::Inert || look == Look::RestPlaying || look == Look::RestPaused;
+}
+
 // What the strip has about its centre row: the bars; or the plain line; or, with
-// no length known, the line's dots.
-enum class Fill : uint8_t { Dots, Line, Bars };
-constexpr Fill fillOf(Look look, const Shape* shape, uint32_t lengthMs) {
-  return showsBars(look, shape, lengthMs) ? Fill::Bars : lengthMs > 0 ? Fill::Line : Fill::Dots;
+// no length known, the line's dots; or nothing, its background alone, while a
+// shape is on its way to a strip that shows none yet (stripOf()).
+enum class Fill : uint8_t { Dots, Line, Bars, Blank };
+constexpr Fill fillOf(Look look, const Shape* shape, uint32_t lengthMs, bool lengthKnown = true,
+                      bool shown = false) {
+  return showsBars(look, shape, lengthMs, lengthKnown, shown) ? Fill::Bars
+         : lengthMs > 0                                       ? Fill::Line
+                                                              : Fill::Dots;
 }
 
 // What the strip shows: all a pass compares. The page keeps the one it drew; a
@@ -206,14 +231,31 @@ struct Strip {
   int playheadX = -1;
   int markerX = -1;
 };
+// The strip the page drew last shows `track`'s bars from the shape at `version`
+// (showsBars()'s `shown`).
+constexpr bool barsUp(const Strip& drawn, uint32_t track, uint32_t version) {
+  return drawn.playheadX >= 0 && drawn.fill == Fill::Bars && drawn.track == track && drawn.version == version;
+}
 // From the touch, the player's snapshot and the wave record. Under a finger they
 // are the bar's: its length frozen at the Down, and its knob, on the live x. At rest
-// the playhead is on the whole second (restPlayheadX()).
+// the playhead is on the whole second (restPlayheadX()). `lengthKnown`: the
+// player's length is the file's own, not an estimate; `drawn`: the strip as last
+// drawn (showsBars(): bars up under an estimate stay up). `shapeComing`: the
+// track's shape is still on its way from the card (WaveState::coming(), half a
+// second at most). With nothing of the strip on the screen (a repaint: the page
+// entered, the screen woken), or its background alone, the strip is then its
+// background alone, at rest: drawn as it stands, it was the line for the passes
+// the read takes and the bars over it.
 inline Strip stripOf(const SeekBar& bar, bool seekable, bool playing, uint32_t posMs, uint32_t durationMs,
-                     const Shape* shape, uint32_t track, uint32_t version) {
+                     const Shape* shape, uint32_t track, uint32_t version, bool lengthKnown = true,
+                     const Strip& drawn = Strip{}, bool shapeComing = false) {
   Strip s;
   s.look = lookOf(bar.phase(), seekable, playing);
-  s.fill = fillOf(s.look, shape, bar.active() ? bar.lengthMs() : durationMs);
+  s.fill = fillOf(s.look, shape, bar.active() ? bar.lengthMs() : durationMs, lengthKnown,
+                  barsUp(drawn, track, version));
+  if (shapeComing && s.fill != Fill::Bars && atRest(s.look) && (drawn.playheadX < 0 || drawn.fill == Fill::Blank)) {
+    s.fill = Fill::Blank;
+  }
   s.playing = playing;
   s.track = track;
   s.version = s.fill == Fill::Bars ? version : 0;
@@ -222,14 +264,32 @@ inline Strip stripOf(const SeekBar& bar, bool seekable, bool playing, uint32_t p
   return s;
 }
 
+// The strip stays as drawn for now: it shows bars, at rest, the strip to draw
+// has none, and the shape that would give it some is still on its way from the
+// card (`shapeComing`: WaveState::coming(), a new track's first read, half a
+// second at most). Drawn at once, a track change was the last track's bars, the
+// plain line for the passes the read takes, then the new bars: the strip whole
+// twice. Held, it is drawn once, when the shape lands (the new bars) or the wait
+// ends with none (the line). The text row isn't held: the new track's time shows
+// at once. Never under a finger, nor over a look a finger left.
+constexpr bool heldForShape(const Strip& drawn, const Strip& now, bool shapeComing) {
+  return shapeComing && drawn.playheadX >= 0 && drawn.fill == Fill::Bars && now.fill != Fill::Bars &&
+         atRest(drawn.look) && atRest(now.look);
+}
+
 // What of the strip a pass redraws, from what was drawn and what it shows now. A
 // look, a shape, a track, a play state or a scrub's marker that changed: all of it.
-// Only the playhead moved: the part movedRegion() says. Nothing: w 0. Neither the
-// second nor the length is here: they are the text row's, and they move the strip
-// only by moving the playhead. (While a finger scrubs, the page draws any of this
-// as a whole frame, on the frame deadlines.)
-constexpr Region regionToDraw(const Strip& drawn, const Strip& now) {
-  return drawn.playheadX < 0 || drawn.look != now.look || drawn.fill != now.fill || drawn.playing != now.playing ||
+// Only the playhead moved: the part movedRegion() says. Nothing: w 0, as while the
+// strip is held for a shape (heldForShape()), or is its background alone and stays
+// so (Fill::Blank has no playhead to move). Neither the second nor the length is
+// here: they are the text row's, and they move the strip only by moving the
+// playhead. (While a finger scrubs, the page draws any of this as a whole frame,
+// on the frame deadlines.)
+constexpr Region regionToDraw(const Strip& drawn, const Strip& now, bool shapeComing = false) {
+  return heldForShape(drawn, now, shapeComing) ||
+                 (drawn.playheadX >= 0 && drawn.fill == Fill::Blank && now.fill == Fill::Blank)
+             ? Region{0, 0}
+         : drawn.playheadX < 0 || drawn.look != now.look || drawn.fill != now.fill || drawn.playing != now.playing ||
                  drawn.track != now.track || drawn.version != now.version || drawn.markerX != now.markerX
              ? Region{0, kScreenW}
          : drawn.playheadX != now.playheadX ? movedRegion(drawn.playheadX, now.playheadX)

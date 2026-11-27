@@ -247,7 +247,8 @@ private:
   // the strip and the text row follow); a touch's seek, its tick and its log
   // line.
   bool seekable() const;
-  wave::Strip stripNow() const;
+  // (`shapeComing`: Waves::coming(), asked once a pass.)
+  wave::Strip stripNow(bool shapeComing) const;
   void drawReadout();
   void endScrub();
   void seekTo(const SeekBar::Out& o, uint32_t nowMs);

@@ -12,13 +12,22 @@ void WaveState::begin(bool named) {
   why_ = cc::Why::Ok;
 }
 
-void WaveState::want(uint64_t pathHash) {
+void WaveState::want(uint64_t pathHash, uint32_t nowMs) {
   if (pathHash == wanted_) return;
   const bool had = holds();
+  // (Before the hash changes: the wait under way is the last want's.)
+  if (!coming(nowMs)) wantedAtMs_ = nowMs;
   wanted_ = pathHash;
   ioFails_ = 0;
   waiting_ = false;
   if (had || holds()) ++version_;
+}
+
+bool WaveState::coming(uint32_t nowMs) const {
+  if (wanted_ == 0 || file_ != File::Named || injected_) return false;
+  if (heldHash_ == wanted_ || ioFails_ > 0 || waiting_) return false;
+  // (Elapsed, as wantsRead()'s wait.)
+  return nowMs - wantedAtMs_ < kComingMs;
 }
 
 bool WaveState::wantsRead(uint32_t nowMs) const {

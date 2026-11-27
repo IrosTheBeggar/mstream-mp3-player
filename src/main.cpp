@@ -746,6 +746,7 @@ struct MainUiHost : ui::UiHost {
       // knows none.
       player.shownTime(&s.positionMs, &s.durationMs);
     }
+    s.durationKnown = audio.durationKnown();
     s.shuffle = player.shuffle();
     s.repeat = static_cast<uint8_t>(player.repeat());
     BtSink& bt = audio.bluetooth();

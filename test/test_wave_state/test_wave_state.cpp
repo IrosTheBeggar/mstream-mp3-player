@@ -7,8 +7,8 @@
 // twice, a file that didn't open); a burst of wants while a job runs; a remount
 // before, during and after a job; the worker refusing; the retry's wait across
 // millis()'s wrap; version() against shape(); the test hook; the counters; with
-// the real scheduler; and a random session against a card whose answers are
-// known. Run: pio test -e native
+// the real scheduler; a random session against a card whose answers are known;
+// and how long a new track's shape counts as on its way. Run: pio test -e native
 #include <unity.h>
 
 #include <cstdint>
@@ -818,6 +818,99 @@ void test_a_random_session() {
   }
 }
 
+// A new track's shape is on its way until its first read answers, for half a
+// second at most: Now Playing leaves the bars it shows that long, so a track
+// change draws no plain line between two waveforms (wave::heldForShape()).
+void test_a_shape_on_its_way() {
+  constexpr uint32_t kWait = WaveState::kComingMs;
+  // No file: nothing comes. The file and no want, or the hash of 0: the same.
+  WaveState none;
+  none.want(kA, 1000);
+  TEST_ASSERT_FALSE(none.coming(1000));
+  WaveState s = named();
+  TEST_ASSERT_FALSE(s.coming(1000));
+  s.want(0, 1000);
+  TEST_ASSERT_FALSE(s.coming(1000));
+  // A want: coming, while its read waits for the worker and while it runs.
+  s.want(kA, 1000);
+  TEST_ASSERT_TRUE(s.coming(1000));
+  TEST_ASSERT_TRUE(s.coming(1000 + kWait - 1));
+  s.started();
+  TEST_ASSERT_TRUE(s.coming(1100));
+  // Its shape: here, so nothing is coming.
+  TEST_ASSERT_EQUAL(F::Recorded, s.finished(hit(), 1100));
+  TEST_ASSERT_FALSE(s.coming(1101));
+  // The next track, answered with none: known, the same.
+  s.want(kB, 5000);
+  TEST_ASSERT_TRUE(s.coming(5050));
+  s.started();
+  TEST_ASSERT_EQUAL(F::None, s.finished(answer(Read::Miss), 5050));
+  TEST_ASSERT_FALSE(s.coming(5051));
+  // The track whose record is kept: its shape shows with no read, none to come.
+  s = holding(kA);
+  s.want(kB, 6000);
+  s.want(kA, 6100);
+  TEST_ASSERT_NOT_NULL(s.shape());
+  TEST_ASSERT_FALSE(s.coming(6100));
+  // A read that doesn't start (the worker in a long step of its own): the wait
+  // ends by itself, and doesn't come back.
+  s.want(kC, 9000);
+  TEST_ASSERT_TRUE(s.wantsRead(9000 + kWait));
+  TEST_ASSERT_TRUE(s.coming(9000 + kWait - 1));
+  TEST_ASSERT_FALSE(s.coming(9000 + kWait));
+  TEST_ASSERT_FALSE(s.coming(60000));
+  // The worker refused, or the read failed: the next try is a second or two
+  // away, so not coming.
+  s = named();
+  s.want(kA, 1000);
+  s.refused(1010);
+  TEST_ASSERT_FALSE(s.coming(1011));
+  s = named();
+  s.want(kA, 1000);
+  s.started();
+  TEST_ASSERT_EQUAL(F::Retry, s.finished(answer(Read::Io), 1020));
+  TEST_ASSERT_FALSE(s.coming(1021));
+  // ... and the track after it starts over.
+  s.want(kB, 1100);
+  TEST_ASSERT_TRUE(s.coming(1100));
+  // The file went off: nothing comes for any track.
+  s.started();
+  TEST_ASSERT_EQUAL(F::Absent, s.finished(answer(Read::Absent, cc::Why::Comp), 1150));
+  s.want(kC, 1200);
+  TEST_ASSERT_FALSE(s.coming(1200));
+  // The test hook's shape is there whatever is wanted.
+  s = named();
+  const uint8_t flat[wave::kColumns] = {};
+  s.inject(flat);
+  s.want(kA, 1000);
+  TEST_ASSERT_FALSE(s.coming(1000));
+}
+
+// A burst of skips has one wait, from its first: the bars of the track before
+// the burst don't stay for as long as the listener keeps skipping.
+void test_a_burst_of_skips_has_one_wait() {
+  constexpr uint32_t kWait = WaveState::kComingMs;
+  WaveState s = holding(kA);
+  s.want(kB, 1000);
+  s.want(kC, 1300);
+  s.want(kB, 1450);
+  TEST_ASSERT_TRUE(s.coming(1000 + kWait - 1));
+  TEST_ASSERT_FALSE(s.coming(1000 + kWait));
+  // A want once that wait is over begins its own.
+  s.want(kC, 1000 + kWait + 100);
+  TEST_ASSERT_TRUE(s.coming(1000 + 2 * kWait + 99));
+  TEST_ASSERT_FALSE(s.coming(1000 + 2 * kWait + 100));
+  // Across millis()'s wrap the wait is as long.
+  WaveState t = named();
+  t.want(kA, 0xFFFFFF00u);
+  TEST_ASSERT_TRUE(t.coming(0xFFFFFFFFu));
+  TEST_ASSERT_TRUE(t.coming(0x00000010u));
+  TEST_ASSERT_FALSE(t.coming(0xFFFFFF00u + kWait));
+  // A want long answered isn't coming again an uptime later.
+  WaveState u = holding(kA);
+  TEST_ASSERT_FALSE(u.coming(100));
+}
+
 // Small enough to sit in DRAM, the record in it.
 void test_its_size() {
   TEST_ASSERT_TRUE(sizeof(WaveState) < 320);
@@ -842,6 +935,8 @@ int main(int, char**) {
   RUN_TEST(test_the_counters);
   RUN_TEST(test_with_the_scheduler);
   RUN_TEST(test_a_random_session);
+  RUN_TEST(test_a_shape_on_its_way);
+  RUN_TEST(test_a_burst_of_skips_has_one_wait);
   RUN_TEST(test_its_size);
   return UNITY_END();
 }

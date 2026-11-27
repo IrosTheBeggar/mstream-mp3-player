@@ -367,10 +367,10 @@ bool NowPlayingPage::seekable() const {
   return s.current >= 0 && !s.failed && s.seekable && SeekBar::seekable(s.durationMs);
 }
 
-wave::Strip NowPlayingPage::stripNow() const {
+wave::Strip NowPlayingPage::stripNow(bool shapeComing) const {
   const AppState& s = ui_.state();
   return wave::stripOf(bar_, seekable(), s.play == PlayState::Playing, s.positionMs, s.durationMs, ui_.waves().shape(),
-                       s.trackId, ui_.waves().version());
+                       s.trackId, ui_.waves().version(), s.durationKnown, drawn_.strip, shapeComing);
 }
 
 // The strip's x rx..rx + rw - 1, all of it or the part a moved playhead needs, into
@@ -379,6 +379,8 @@ wave::Strip NowPlayingPage::stripNow() const {
 // pushed.
 void NowPlayingPage::drawBar(M5Canvas& c, const wave::Strip& now, int rx, int rw) {
   c.fillRect(0, 0, rw, wave::kStripH, col::BG);
+  // (Its background alone while the track's shape is on its way: wave::stripOf().)
+  if (now.fill == wave::Fill::Blank) return;
   const wave::Inks in = wave::inksOf(now.look);
   if (now.fill == wave::Fill::Bars) {
     // (A Bars strip has the record: fillOf().)
@@ -967,9 +969,13 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   uint32_t sleep = s.sleepFading ? 1u : 0u;
   for (const char* p = s.sleepShort; *p; ++p) sleep = sleep * 31u + static_cast<unsigned char>(*p);
   // The seek bar is two draws on two triggers (docs/SEEK-BAR.md 4.5). The strip
-  // when what it shows changed; the text row when what it says did.
-  const wave::Strip strip = stripNow();
-  const wave::Region region = wave::regionToDraw(drawn_.strip, strip);
+  // when what it shows changed (while a new track's shape is still being read,
+  // never the plain line first: bars up stay until it lands, wave::
+  // heldForShape(), and a strip not on the screen yet is its background alone,
+  // wave::stripOf()); the text row when what it says did.
+  const bool shapeComing = ui_.waves().coming();
+  const wave::Strip strip = stripNow(shapeComing);
+  const wave::Region region = wave::regionToDraw(drawn_.strip, strip, shapeComing);
   const wave::TextDraw text = wave::textDraw(strip.look, drawn_.textRow,
                                              second != drawn_.second || durS != drawn_.durationS || s.play != drawn_.play ||
                                                  s.failed != drawn_.failed || s.current != drawn_.current ||
@@ -1373,34 +1379,39 @@ void NowPlayingPage::describe(char* buf, size_t size) const {
   char* rest = buf + n;
   size_t room = size - static_cast<size_t>(n);
   int m = 0;
-  const wave::Strip strip = stripNow();
+  const wave::Strip strip = stripNow(ui_.waves().coming());
   const bool bars = strip.fill == wave::Fill::Bars;
-  switch (strip.look) {
-    case wave::Look::Inert: m = snprintf(rest, room, "; the bar: inert"); break;
-    case wave::Look::RestPlaying:
-    case wave::Look::RestPaused:
-      // (The live x, where a touch finds the knob: what is drawn stands on the
-      // whole second, up to a second's px behind it. The glance's plain line
-      // has no knob: its fill ends there.)
-      m = snprintf(rest, room, "; the bar: rest, %s at x %d",
-                   bars        ? "the playhead"
-                   : readOnly_ ? "the fill's end (no knob on the glance)"
-                               : "the knob",
-                   wave::playheadX(s.positionMs, s.durationMs));
-      break;
-    case wave::Look::Pressed: m = snprintf(rest, room, "; the bar: pressed"); break;
-    case wave::Look::Off: m = snprintf(rest, room, "; the bar: off"); break;
-    case wave::Look::Scrubbing: {
-      if (bar_.staying()) {
-        m = snprintf(rest, room, "; the bar: staying");
+  if (strip.fill == wave::Fill::Blank) {
+    // (A repaint with the track's shape still on its way: wave::stripOf().)
+    m = snprintf(rest, room, "; the bar: blank (its shape is being read)");
+  } else {
+    switch (strip.look) {
+      case wave::Look::Inert: m = snprintf(rest, room, "; the bar: inert"); break;
+      case wave::Look::RestPlaying:
+      case wave::Look::RestPaused:
+        // (The live x, where a touch finds the knob: what is drawn stands on the
+        // whole second, up to a second's px behind it. The glance's plain line
+        // has no knob: its fill ends there.)
+        m = snprintf(rest, room, "; the bar: rest, %s at x %d",
+                     bars        ? "the playhead"
+                     : readOnly_ ? "the fill's end (no knob on the glance)"
+                                 : "the knob",
+                     wave::playheadX(s.positionMs, s.durationMs));
+        break;
+      case wave::Look::Pressed: m = snprintf(rest, room, "; the bar: pressed"); break;
+      case wave::Look::Off: m = snprintf(rest, room, "; the bar: off"); break;
+      case wave::Look::Scrubbing: {
+        if (bar_.staying()) {
+          m = snprintf(rest, room, "; the bar: staying");
+          break;
+        }
+        char to[16], live[16];
+        mmss(bar_.targetMs(), to, sizeof(to));
+        mmss(bar_.liveMs(), live, sizeof(live));
+        m = snprintf(rest, room, "; the bar: scrubbing to %s (%s; readout %s; %s plays)", to,
+                     bar_.knobGrab() ? "drag from the knob" : "drag", bar_.readoutLeft() ? "left" : "right", live);
         break;
       }
-      char to[16], live[16];
-      mmss(bar_.targetMs(), to, sizeof(to));
-      mmss(bar_.liveMs(), live, sizeof(live));
-      m = snprintf(rest, room, "; the bar: scrubbing to %s (%s; readout %s; %s plays)", to,
-                   bar_.knobGrab() ? "drag from the knob" : "drag", bar_.readoutLeft() ? "left" : "right", live);
-      break;
     }
   }
   if (m < 0 || static_cast<size_t>(m) >= room) return;

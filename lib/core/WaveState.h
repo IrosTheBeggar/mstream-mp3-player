@@ -26,6 +26,9 @@
 // - Io: read again once after kIoRetryMs, then none until the track changes.
 // - A remount: everything goes, the file may be another, and an answer that
 //   started before it is dropped. The wanted hash is asked for again.
+// - A track change shows no plain line between two waveforms: while the new
+//   hash's shape may still land (coming(): its first read not answered, the want
+//   under kComingMs old), the page leaves the bars it shows (wave::heldForShape()).
 //
 // version() is what the page compares in its update(): no callback, as
 // namesVersion(). A test hook (the console's gw=, gw-) sets a shape with no card
@@ -38,6 +41,10 @@ public:
   static constexpr uint32_t kIoRetryMs = 2000;
   static constexpr uint32_t kIoReads = 2;       // the failed reads after which a track has none
   static constexpr uint32_t kRefusedMs = 1000;  // the worker wouldn't take a job: asked again after this (as covers)
+  // How long a new track's shape counts as on its way (coming()): a read is about
+  // 20 ms once the worker is free, and the worker's own step or a start's refill
+  // can keep it a few hundred. Past this the bar shows what it has: the line.
+  static constexpr uint32_t kComingMs = 500;
 
   // The file: the root names none; it does; it did, and it failed (why() says
   // how: off until a remount).
@@ -53,9 +60,15 @@ public:
 
   // The track Now Playing shows: its path hash, 0 when it has none (a built-in
   // tone, no library). The hash it holds already: nothing changes. Another: its
-  // record, if that is the one kept, shows with no read.
-  void want(uint64_t pathHash);
+  // record, if that is the one kept, shows with no read. `nowMs` starts
+  // coming()'s wait, unless the want before it is still inside its own: a burst
+  // of skips has one wait, from its first.
+  void want(uint64_t pathHash, uint32_t nowMs = 0);
   uint64_t wanted() const { return wanted_; }
+  // The wanted hash's shape may land any moment: the file may be read, its first
+  // read hasn't answered (no record for it, no failed read, no refusal's wait),
+  // and it was wanted under kComingMs ago.
+  bool coming(uint32_t nowMs) const;
 
   // A job should start now: a hash is wanted, its answer isn't known, the file
   // may be read, and no job is under way.
@@ -126,6 +139,7 @@ private:
   uint32_t waitFromMs_ = 0, waitMs_ = 0;
   uint32_t reads_ = 0, hits_ = 0, misses_ = 0, damaged_ = 0, absents_ = 0, ioErrors_ = 0, dropped_ = 0;
   uint32_t slotReads_ = 0;
+  uint32_t wantedAtMs_ = 0;  // coming()'s wait began (in the 4 B before jobMsSum_: ui::Ui's size is pinned, Ui.cpp)
   uint64_t jobMsSum_ = 0;
   uint32_t jobMsMax_ = 0;
 };
