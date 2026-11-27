@@ -1558,7 +1558,7 @@ and `boardclock::now()` is how the firmware reads it). Older firmware answers
 
 ## Storage
 
-`LocalStorage` mounts the SD card (shared SPI bus with the LCD, 25 MHz) if one
+`LocalStorage` mounts the SD card (shared SPI bus with the LCD, asked for 25 MHz, which the SPI driver runs at 20: [SWAP-MODE.md](SWAP-MODE.md) section 7) if one
 is present, otherwise the 3.8 MB LittleFS partition ([Flash layout](#flash-layout)). It walks `/music` for
 the library (up to 8 folders deep, no cap, hidden names skipped) through the
 VFS's `readdir`, which names each entry and says whether it's a folder, rather
@@ -5241,9 +5241,13 @@ their own (the player stopped first, so nothing follows them).
   name that no longer matches; a build logs `iram_diet: 51 of 51 libc
   objects moved to flash`. About 5 KB of IRAM is left (5,176 B from the
   seek bar on; 5,161 B on 2026-11-06, with the mood filters' data path
-  and editor or without; neither they nor the MP3 pin below take any). Adding WiFi
-  will need more: likely pioarduino's `custom_sdkconfig` to rebuild the
-  framework without the workaround.
+  and editor or without; neither they nor the MP3 pin below take any).
+  WiFi fits in it. The ESP-NOW link spike (2026-10-19) measured the
+  WiFi driver and ESP-NOW, without lwIP, at 2,676 B: 5,161 B free
+  before, 2,485 B after. It costs so little because Arduino's prebuilt
+  libraries keep WiFi's optional IRAM code in flash
+  ([SWAP-MODE.md](SWAP-MODE.md) section 5.2; section 6 ranks what to
+  free next).
 - **malloc's internal limit is 4,095 B, not the core's 4,096**
   (2026-11-19; main.cpp's `kMallocInternalMax`, set first thing in
   `setup()`, logged after `[heap] boot` as `[heap] malloc: up to 4095 B
