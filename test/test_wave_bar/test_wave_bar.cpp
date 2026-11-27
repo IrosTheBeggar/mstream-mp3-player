@@ -8,8 +8,11 @@
 // reach at their edges; the ink table, every look; when a track shows bars at
 // all; the plain line's rows, the text row's and the readout's; what the strip
 // shows through a real touch; which pass draws what, the second's move through a
-// whole track and what goes as one push. No test can see the page: what it draws
-// by is held here.
+// whole track and what goes as one push; and how often a track's strip is drawn
+// whole: bars up under a length that is only an estimate, the bars left up while
+// the next track's shape is read, a strip not on the screen yet left blank until
+// then, and a track change and a wake pass by pass with the wave record
+// (WaveState). No test can see the page: what it draws by is held here.
 // Run: pio test -e native
 #include <unity.h>
 
@@ -21,6 +24,7 @@
 #include "TrackSeek.h"
 #include "WaveBar.h"
 #include "WaveShape.h"
+#include "WaveState.h"
 
 using namespace wave;
 
@@ -582,6 +586,375 @@ void test_what_a_pass_redraws_of_the_strip() {
   assertRegion(0, 0, regionToDraw(line, line));
 }
 
+// A length the player only estimates can put the bars up, not take them down
+// (showsBars()): in a track's first seconds it moves in and out of the agreement
+// with every decoder pass, and each crossing was the strip drawn whole.
+void test_bars_up_stay_up_under_an_estimate() {
+  using T = InputEvent::Type;
+  Shape shape;
+  shape.lengthMs = kL;
+  SeekBar b;
+  const auto fill = [&](uint32_t lengthMs, bool known, const Strip& drawn, const Shape* sh = nullptr,
+                        uint32_t track = 7, uint32_t version = 42, bool seekable = true) {
+    return stripOf(b, seekable, true, 2000, lengthMs, sh ? sh : &shape, track, version, known, drawn).fill;
+  };
+  const uint32_t kOff = 200000;  // 45 s short: no agreement (2 % of it is 4 s)
+  TEST_ASSERT_FALSE(lengthAgrees(kL, kOff));
+  const Strip up = stripOf(b, true, true, 2000, kL, &shape, 7, 42, false);
+  TEST_ASSERT_TRUE(up.fill == Fill::Bars);
+  TEST_ASSERT_TRUE(barsUp(up, 7, 42));
+  // The file says its length: the agreement decides at every pass, bars up or
+  // not (a file replaced under its path shows no other recording's shape).
+  TEST_ASSERT_TRUE(fill(kOff, true, up) == Fill::Line);
+  TEST_ASSERT_TRUE(fill(kL, true, up) == Fill::Bars);
+  // An estimate: the bars up stay, wherever it wanders.
+  for (uint32_t ms : {kOff, 150000u, 239000u, kL, 400000u, 10000u}) {
+    const Strip now = stripOf(b, true, true, 2000, ms, &shape, 7, 42, false, up);
+    TEST_ASSERT_TRUE(now.fill == Fill::Bars);
+    TEST_ASSERT_EQUAL_UINT32(42, now.version);
+    // ... so nothing of the strip is drawn again for it but a playhead's move.
+    TEST_ASSERT_TRUE(regionToDraw(up, now).w < kScreenW);
+  }
+  // It can't keep up what isn't: the line stays the line until it agrees, once.
+  const Strip line = stripOf(b, true, true, 2000, kOff, &shape, 7, 42, false);
+  TEST_ASSERT_TRUE(line.fill == Fill::Line);
+  TEST_ASSERT_FALSE(barsUp(line, 7, 42));
+  TEST_ASSERT_TRUE(fill(kOff, false, line) == Fill::Line);
+  TEST_ASSERT_TRUE(fill(kL - 1000, false, line) == Fill::Bars);
+  // Nothing drawn yet (a repaint): as the line.
+  TEST_ASSERT_TRUE(fill(kOff, false, Strip{}) == Fill::Line);
+  // Only this track's bars, from this shape: another track's, or a shape read
+  // since (WaveState::version()), start over.
+  TEST_ASSERT_TRUE(fill(kOff, false, up, nullptr, 8, 42) == Fill::Line);
+  TEST_ASSERT_TRUE(fill(kOff, false, up, nullptr, 7, 43) == Fill::Line);
+  // Still no bars with no shape, nor under the inert look.
+  TEST_ASSERT_TRUE(stripOf(b, true, true, 2000, kOff, nullptr, 7, 42, false, up).fill == Fill::Line);
+  TEST_ASSERT_TRUE(fill(kOff, false, up, nullptr, 7, 42, false) == Fill::Line);
+  // Under a finger the bar's own length, frozen at the Down, is judged the same.
+  TEST_ASSERT_TRUE(b.down(ev(T::Down, 200), 1, 60000, kOff));
+  TEST_ASSERT_TRUE(stripOf(b, true, true, 60000, kOff, &shape, 7, 42, false, up).fill == Fill::Bars);
+  TEST_ASSERT_TRUE(stripOf(b, true, true, 60000, kOff, &shape, 7, 42, true, up).fill == Fill::Line);
+  b.cancel();
+  // The rule alone.
+  TEST_ASSERT_TRUE(showsBars(Look::RestPlaying, &shape, kOff, false, true));
+  TEST_ASSERT_FALSE(showsBars(Look::RestPlaying, &shape, kOff, false, false));
+  TEST_ASSERT_FALSE(showsBars(Look::RestPlaying, &shape, kOff, true, true));
+  TEST_ASSERT_FALSE(showsBars(Look::Inert, &shape, kOff, false, true));
+  TEST_ASSERT_FALSE(showsBars(Look::RestPlaying, nullptr, kOff, false, true));
+}
+
+// At a track change the bars stay as drawn while the new shape is read
+// (heldForShape()): one whole strip for the change, not the line and then the bars.
+void test_the_bars_stay_while_a_shape_is_read() {
+  const Strip bars = restStrip(100);  // track 7's, playing
+  Strip line = restStrip(12);         // track 8 at its start, no shape yet
+  line.track = 8;
+  line.fill = Fill::Line;
+  line.version = 0;
+  // Coming: nothing of the strip is drawn.
+  TEST_ASSERT_TRUE(heldForShape(bars, line, true));
+  assertRegion(0, 0, regionToDraw(bars, line, true));
+  // Not coming (answered with none, a failed read, the wait over): the line.
+  TEST_ASSERT_FALSE(heldForShape(bars, line, false));
+  assertRegion(0, kScreenW, regionToDraw(bars, line, false));
+  assertRegion(0, kScreenW, regionToDraw(bars, line));
+  // The shape landed: the new bars, whole, whatever the wait says.
+  Strip next = restStrip(12);
+  next.track = 8;
+  next.version = 43;
+  assertRegion(0, kScreenW, regionToDraw(bars, next, true));
+  assertRegion(0, kScreenW, regionToDraw(bars, next, false));
+  // The new track with no length yet (the dots, inert), or paused: held the same.
+  Strip dots = line;
+  dots.look = Look::Inert;
+  dots.fill = Fill::Dots;
+  assertRegion(0, 0, regionToDraw(bars, dots, true));
+  Strip paused = line;
+  paused.look = Look::RestPaused;
+  paused.playing = false;
+  assertRegion(0, 0, regionToDraw(bars, paused, true));
+  Strip pausedBars = bars;
+  pausedBars.look = Look::RestPaused;
+  pausedBars.playing = false;
+  assertRegion(0, 0, regionToDraw(pausedBars, line, true));
+  // Only bars are held: a line is drawn again at once (its fill back at the start).
+  Strip oldLine = restStrip(100);
+  oldLine.fill = Fill::Line;
+  oldLine.version = 0;
+  assertRegion(0, kScreenW, regionToDraw(oldLine, line, true));
+  // Never under a finger, nor over a look a finger left.
+  for (Look look : {Look::Pressed, Look::Scrubbing, Look::Off}) {
+    Strip touched = line;
+    touched.look = look;
+    assertRegion(0, kScreenW, regionToDraw(bars, touched, true));
+    Strip left = bars;
+    left.look = look;
+    assertRegion(0, kScreenW, regionToDraw(left, line, true));
+  }
+  // A repaint (nothing drawn) draws what there is.
+  assertRegion(0, kScreenW, regionToDraw(Strip{}, line, true));
+  // Bars up with nothing changed, or their playhead moved: as without the wait.
+  assertRegion(0, 0, regionToDraw(bars, bars, true));
+  assertRegion(96, 10, regionToDraw(bars, restStrip(101), true));
+}
+
+namespace {
+
+// What the page's update() does with the strip (NowPlayingPage.cpp), without the
+// drawing: the strip now, the part to draw, and the strip kept when any of it
+// was drawn. It counts the strips drawn whole.
+struct PageModel {
+  Strip drawn;
+  int whole = 0;
+  int lines = 0;  // ... and those of them that were the plain line (or its dots)
+  Fill pass(const WaveState& w, uint32_t nowMs, uint32_t track, uint32_t posMs, uint32_t lengthMs, bool known) {
+    SeekBar bar;
+    const bool coming = w.coming(nowMs);
+    const Strip now = stripOf(bar, true, true, posMs, lengthMs, w.shape(), track, w.version(), known, drawn, coming);
+    const Region r = regionToDraw(drawn, now, coming);
+    if (r.w == kScreenW) ++whole;
+    if (r.w == kScreenW && (now.fill == Fill::Line || now.fill == Fill::Dots)) ++lines;
+    if (r.w > 0) drawn = now;
+    return drawn.fill;
+  }
+};
+
+ReadResult hitOf(uint32_t lengthMs) {
+  ReadResult r;
+  r.read = Read::Hit;
+  r.jobMs = 20;
+  r.shape.lengthMs = lengthMs;
+  for (uint8_t& h : r.shape.heights) h = 5;
+  return r;
+}
+
+constexpr uint64_t kHashA = 0xA1, kHashB = 0xB2;
+
+// Track 7 playing with its bars up, at `nowMs`.
+void barsUpFor7(WaveState* w, PageModel* page, uint32_t nowMs) {
+  w->begin(true);
+  w->want(kHashA, nowMs);
+  w->started();
+  w->finished(hitOf(kL), nowMs);
+  TEST_ASSERT_TRUE(page->pass(*w, nowMs, 7, 240000, kL, true) == Fill::Bars);
+  page->whole = 0;
+}
+
+}  // namespace
+
+// A track change, pass by pass, with the wave record: the strip is drawn whole
+// once, when the new shape lands. (Before the bars were left up: twice, the line
+// first.) Then a length that is only an estimate, wandering through the track's
+// first seconds, draws no strip whole at all.
+void test_a_track_change_draws_the_strip_once() {
+  WaveState w;
+  PageModel page;
+  barsUpFor7(&w, &page, 10000);
+  // Track 8: wanted in the pass that sees it; its read takes four passes.
+  uint32_t t = 20000;
+  w.want(kHashB, t);
+  TEST_ASSERT_NULL(w.shape());
+  for (int i = 0; i < 4; ++i, t += 20) {
+    TEST_ASSERT_TRUE(page.pass(w, t, 8, 0, 200000, true) == Fill::Bars);  // (track 7's, as drawn)
+    if (i == 0) w.started();
+  }
+  TEST_ASSERT_EQUAL_INT(0, page.whole);
+  TEST_ASSERT_EQUAL(WaveState::Finish::Recorded, w.finished(hitOf(200000), t));
+  TEST_ASSERT_TRUE(page.pass(w, t, 8, 0, 200000, true) == Fill::Bars);
+  TEST_ASSERT_EQUAL_INT(1, page.whole);
+  TEST_ASSERT_EQUAL_UINT32(8, page.drawn.track);
+  // Its length is an estimate from its second second on (a file with none in its
+  // header): 9 % short, closing in, the next pass's a little off the last's.
+  for (uint32_t ms = 1000; ms < 12000; ms += 20) {
+    const uint32_t off = 200000u * 90 / ms;                 // 18 s at 1 s, 1.5 s at 12 s
+    const uint32_t est = 200000u - (ms / 20 % 2 ? off : 0);  // every other pass
+    TEST_ASSERT_TRUE(page.pass(w, t + ms, 8, ms, est, false) == Fill::Bars);
+  }
+  TEST_ASSERT_EQUAL_INT(1, page.whole);
+  // (The same passes with the bars taken down at each: the rule before.)
+  int flips = 0;
+  bool was = true;
+  for (uint32_t ms = 1000; ms < 12000; ms += 20) {
+    const uint32_t off = 200000u * 90 / ms;
+    const bool agrees = lengthAgrees(200000, 200000u - (ms / 20 % 2 ? off : 0));
+    flips += agrees != was;
+    was = agrees;
+  }
+  TEST_ASSERT_TRUE(flips > 100);
+}
+
+// The read doesn't come in time, or comes to nothing: the line, once.
+void test_a_track_change_with_no_shape_in_time() {
+  // A track with no slot: the line at the pass after the answer.
+  {
+    WaveState w;
+    PageModel page;
+    barsUpFor7(&w, &page, 10000);
+    w.want(kHashB, 20000);
+    TEST_ASSERT_TRUE(page.pass(w, 20000, 8, 0, 200000, true) == Fill::Bars);
+    w.started();
+    ReadResult miss;
+    miss.read = Read::Miss;
+    TEST_ASSERT_EQUAL(WaveState::Finish::None, w.finished(miss, 20040));
+    TEST_ASSERT_TRUE(page.pass(w, 20040, 8, 0, 200000, true) == Fill::Line);
+    TEST_ASSERT_EQUAL_INT(1, page.whole);
+  }
+  // The worker busy with a step of its own: the line when the wait is over, the
+  // bars when the read lands after all.
+  {
+    WaveState w;
+    PageModel page;
+    barsUpFor7(&w, &page, 10000);
+    w.want(kHashB, 20000);
+    uint32_t t = 20000;
+    for (; t < 20000 + WaveState::kComingMs; t += 20) {
+      TEST_ASSERT_TRUE(page.pass(w, t, 8, 0, 200000, true) == Fill::Bars);
+    }
+    TEST_ASSERT_EQUAL_INT(0, page.whole);
+    TEST_ASSERT_TRUE(page.pass(w, t, 8, 0, 200000, true) == Fill::Line);
+    TEST_ASSERT_EQUAL_INT(1, page.whole);
+    w.started();
+    w.finished(hitOf(200000), t + 3000);
+    TEST_ASSERT_TRUE(page.pass(w, t + 3000, 8, 3000, 200000, true) == Fill::Bars);
+    TEST_ASSERT_EQUAL_INT(2, page.whole);
+  }
+  // A repaint in the wait (a sheet closed over it) has none of the old bars
+  // left to keep: the strip's background alone, then the bars. No line.
+  {
+    WaveState w;
+    PageModel page;
+    barsUpFor7(&w, &page, 10000);
+    w.want(kHashB, 20000);
+    TEST_ASSERT_TRUE(page.pass(w, 20000, 8, 0, 200000, true) == Fill::Bars);
+    page.drawn = Strip{};
+    TEST_ASSERT_TRUE(page.pass(w, 20020, 8, 0, 200000, true) == Fill::Blank);
+    w.started();
+    w.finished(hitOf(200000), 20060);
+    TEST_ASSERT_TRUE(page.pass(w, 20060, 8, 0, 200000, true) == Fill::Bars);
+    TEST_ASSERT_EQUAL_INT(0, page.lines);
+  }
+}
+
+// A strip with nothing on the screen yet (a repaint: the page entered, the
+// screen woken) while the track's shape is on its way: its background alone,
+// then the bars. Drawn as it stood it was the line, then the bars over it.
+void test_a_strip_not_on_the_screen_waits_blank() {
+  Shape shape;
+  shape.lengthMs = kL;
+  SeekBar b;
+  const Strip none;
+  // At rest, with the shape coming and none to show: blank. Each rest look.
+  for (bool playing : {true, false}) {
+    const Strip s = stripOf(b, true, playing, 5000, kL, nullptr, 7, 42, true, none, true);
+    TEST_ASSERT_TRUE(s.fill == Fill::Blank);
+    TEST_ASSERT_EQUAL_UINT32(0, s.version);
+    TEST_ASSERT_TRUE(s.look == (playing ? Look::RestPlaying : Look::RestPaused));
+  }
+  TEST_ASSERT_TRUE(stripOf(b, false, true, 0, 0, nullptr, 7, 42, true, none, true).fill == Fill::Blank);  // (inert)
+  // Not coming: what there is, as ever.
+  TEST_ASSERT_TRUE(stripOf(b, true, true, 5000, kL, nullptr, 7, 42, true, none, false).fill == Fill::Line);
+  TEST_ASSERT_TRUE(stripOf(b, false, true, 0, 0, nullptr, 7, 42, true, none, false).fill == Fill::Dots);
+  // The shape here: the bars, coming or not.
+  TEST_ASSERT_TRUE(stripOf(b, true, true, 5000, kL, &shape, 7, 42, true, none, true).fill == Fill::Bars);
+  // Blank stays blank while it comes, whatever else moves: nothing is drawn.
+  const Strip blank = stripOf(b, true, true, 5000, kL, nullptr, 7, 42, true, none, true);
+  Strip later = stripOf(b, true, false, 9000, kL, nullptr, 8, 43, true, blank, true);
+  TEST_ASSERT_TRUE(later.fill == Fill::Blank);
+  assertRegion(0, 0, regionToDraw(blank, later, true));
+  assertRegion(0, 0, regionToDraw(blank, later, false));
+  // The wait over with none: the line, whole. The shape landed: the bars, whole.
+  later = stripOf(b, true, true, 5000, kL, nullptr, 7, 42, true, blank, false);
+  TEST_ASSERT_TRUE(later.fill == Fill::Line);
+  assertRegion(0, kScreenW, regionToDraw(blank, later, false));
+  later = stripOf(b, true, true, 5000, kL, &shape, 7, 43, true, blank, false);
+  TEST_ASSERT_TRUE(later.fill == Fill::Bars);
+  assertRegion(0, kScreenW, regionToDraw(blank, later, false));
+  // Only a strip not on the screen: a line drawn stays a line through a track
+  // change (no blank between two lines), and bars are held (heldForShape()).
+  Strip line = restStrip(100);
+  line.fill = Fill::Line;
+  line.version = 0;
+  TEST_ASSERT_TRUE(stripOf(b, true, true, 0, kL, nullptr, 8, 42, true, line, true).fill == Fill::Line);
+  TEST_ASSERT_TRUE(stripOf(b, true, true, 0, kL, nullptr, 8, 42, true, restStrip(100), true).fill == Fill::Line);
+  // Never under a finger: the bar pressed shows its line at once.
+  using T = InputEvent::Type;
+  TEST_ASSERT_TRUE(b.down(ev(T::Down, 200), 1, 5000, kL));
+  const Strip pressed = stripOf(b, true, true, 5000, kL, nullptr, 7, 42, true, blank, true);
+  TEST_ASSERT_TRUE(pressed.look == Look::Pressed);
+  TEST_ASSERT_TRUE(pressed.fill == Fill::Line);
+  assertRegion(0, kScreenW, regionToDraw(blank, pressed, true));
+  b.cancel();
+}
+
+// A wake onto a track that changed in the dark, pass by pass: the strip's
+// background, then the bars. And the cases around it.
+void test_a_wake_draws_no_line_before_the_bars() {
+  // The read takes three passes.
+  {
+    WaveState w;
+    PageModel page;
+    w.begin(true);
+    uint32_t t = 30000;
+    w.want(kHashB, t);
+    TEST_ASSERT_TRUE(page.pass(w, t, 8, 61000, 200000, true) == Fill::Blank);
+    w.started();
+    for (int i = 0; i < 3; ++i) {
+      t += 20;
+      TEST_ASSERT_TRUE(page.pass(w, t, 8, 61000 + 20 * (i + 1), 200000, true) == Fill::Blank);
+    }
+    TEST_ASSERT_EQUAL_INT(1, page.whole);  // (the background, with the text row's push)
+    w.finished(hitOf(200000), t);
+    TEST_ASSERT_TRUE(page.pass(w, t, 8, 61080, 200000, true) == Fill::Bars);
+    TEST_ASSERT_EQUAL_INT(2, page.whole);
+    TEST_ASSERT_EQUAL_INT(0, page.lines);
+  }
+  // The track that was playing when the screen went off: its record is kept,
+  // the bars at once.
+  {
+    WaveState w;
+    PageModel page;
+    barsUpFor7(&w, &page, 10000);
+    page.drawn = Strip{};
+    TEST_ASSERT_TRUE(page.pass(w, 30000, 7, 250000, kL, true) == Fill::Bars);
+    TEST_ASSERT_EQUAL_INT(1, page.whole);
+  }
+  // A card with no waveform file: nothing is coming, the line at once.
+  {
+    WaveState w;
+    PageModel page;
+    w.begin(false);
+    w.want(kHashB, 30000);
+    TEST_ASSERT_TRUE(page.pass(w, 30000, 8, 0, 200000, true) == Fill::Line);
+    TEST_ASSERT_EQUAL_INT(1, page.whole);
+  }
+  // A track with no slot: blank until the read says so, then the line.
+  {
+    WaveState w;
+    PageModel page;
+    w.begin(true);
+    w.want(kHashB, 30000);
+    TEST_ASSERT_TRUE(page.pass(w, 30000, 8, 0, 200000, true) == Fill::Blank);
+    w.started();
+    ReadResult miss;
+    miss.read = Read::Miss;
+    w.finished(miss, 30040);
+    TEST_ASSERT_TRUE(page.pass(w, 30040, 8, 0, 200000, true) == Fill::Line);
+    TEST_ASSERT_EQUAL_INT(1, page.lines);
+  }
+  // No read in time: the line when the wait is over, half a second in.
+  {
+    WaveState w;
+    PageModel page;
+    w.begin(true);
+    w.want(kHashB, 30000);
+    uint32_t t = 30000;
+    for (; t < 30000 + WaveState::kComingMs; t += 20) {
+      TEST_ASSERT_TRUE(page.pass(w, t, 8, t - 30000, 200000, true) == Fill::Blank);
+    }
+    TEST_ASSERT_TRUE(page.pass(w, t, 8, t - 30000, 200000, true) == Fill::Line);
+  }
+}
+
 // A second that changes during a scrub draws nothing there; the blank goes in
 // once; leaving draws it; a repaint under any look starts it over.
 void test_what_a_pass_does_to_the_text_row() {
@@ -730,6 +1103,12 @@ int main(int, char**) {
   RUN_TEST(test_what_the_strip_has);
   RUN_TEST(test_the_strip_through_a_touch);
   RUN_TEST(test_what_a_pass_redraws_of_the_strip);
+  RUN_TEST(test_bars_up_stay_up_under_an_estimate);
+  RUN_TEST(test_the_bars_stay_while_a_shape_is_read);
+  RUN_TEST(test_a_track_change_draws_the_strip_once);
+  RUN_TEST(test_a_track_change_with_no_shape_in_time);
+  RUN_TEST(test_a_strip_not_on_the_screen_waits_blank);
+  RUN_TEST(test_a_wake_draws_no_line_before_the_bars);
   RUN_TEST(test_what_a_pass_does_to_the_text_row);
   RUN_TEST(test_the_playhead_moves_with_the_second);
   RUN_TEST(test_what_goes_as_one_push);

@@ -100,7 +100,9 @@ class PanelScan;
 // (NavModel::PageRef): attach() restores them, detach() saves them (not
 // while the source's rows are pending: 7.2, its place kept for them).
 // Presses highlight at once (the Down), act on the Tap (with the tap tick);
-// a drag never taps, nor does a press that stops a moving list.
+// a drag never taps, nor does a press that stops a moving list: that one
+// takes hold of it, and drags it as soon as the finger moves (no slop first,
+// no long press: Input::grab()), the rail and the scroll bar still hidden.
 // Loop task only.
 namespace ui {
 
@@ -535,7 +537,8 @@ private:
   };
 
   // The list moves on screen: flinging, snapping, or a finger dragging it
-  // (a finger that is only down, for a tap, doesn't hide the rail).
+  // (a finger that is only down, for a tap, doesn't hide the rail; one that
+  // stopped the moving list holds it, and it still counts as moving).
   bool moving() const;
   int layoutWidth() const { return listlayout::widthOf(edge_); }
   int pushWidth() const { return railUp_ || railWanted_ ? layoutWidth() : 320; }
@@ -635,7 +638,7 @@ private:
   int pressedX_ = -1;       // the finger on the pressed row
   int emptyPressed_ = -1;   // the empty state's button under a finger
   int32_t downItem_ = -1;   // the item under a Down on a still list (-1: none): an inert row's tap
-  bool dragged_ = false;  // this touch moved the list
+  bool dragged_ = false;  // this touch moved the list, or took hold of it while it moved
   bool stageBand_ = false;  // the jump owed is a recount's: drawn as a band a row a pass (listlayout::Way::Band)
   bool bodyUp_ = false;     // render(): the source drew its body, push() fills nothing under it
   uint32_t keepFirst_ = 0, keepLast_ = 0;

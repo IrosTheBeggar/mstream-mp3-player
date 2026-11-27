@@ -73,10 +73,13 @@ public:
 
   // ---- for Now Playing ----
   // The playing track's path hash, 0 when it has none (WaveState::want()).
-  void want(uint64_t pathHash) { state_.want(pathHash); }
+  void want(uint64_t pathHash);
   // The wanted track's shape once it came, else nullptr. Moves on version().
   const wave::Shape* shape() const { return state_.shape(); }
   uint32_t version() const { return state_.version(); }
+  // Its shape may still land any moment (WaveState::coming(): a new track's first
+  // read, half a second at most): the page leaves the bars it shows meanwhile.
+  bool coming() const;
 
   // ---- for the card worker (app/CardTasks) ----
   // A read should start now (ScanScheduler's In::wave).

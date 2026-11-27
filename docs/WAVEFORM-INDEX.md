@@ -464,8 +464,14 @@ does (7.4). docs/SEEK-BAR.md has the bar's look.
 - **On a track change,** Now Playing wants that track's path hash. A worker
   job in the covers' lane opens the file, checks the frame and the root's
   row (8.1, 8.2, 7.2), runs the lookup, closes the file and reduces the
-  bars. No handle is kept between jobs. About 20 ms (ESTIMATED). An answer
-  for a track no longer wanted, or from before a remount, is dropped.
+  bars. No handle is kept between jobs. About 20 ms (ESTIMATED; the one
+  read MEASURED so far, on a card of 19,671 tracks with nothing playing,
+  2026-11-27: 3 probes, 8 ms, `gw?`). An answer
+  for a track no longer wanted, or from before a remount, is dropped. While
+  that first read hasn't answered (500 ms at most: `WaveState::coming()`),
+  the bar shows no plain line: bars already on the screen stay as drawn,
+  and a strip drawn from nothing (the page entered, the screen woken) is its
+  background alone (docs/SEEK-BAR.md 4.1).
 - **One record** is kept, whichever hash it answers for: the shape, or that
   there is none (a miss, a damaged slot). So a repaint and a library update's
   new ids read no card.
@@ -476,7 +482,11 @@ does (7.4). docs/SEEK-BAR.md has the bar's look.
   plain line, in the same place. A stopped track the player doesn't hold
   takes its record's length (docs/SEEK-BAR.md 5.3), so its shape shows before
   the first play; the check then compares the record with itself, and a file
-  that isn't the record's shows as the plain line from the play on.
+  that isn't the record's shows as the plain line from the play on. That
+  holds for a length the file says. A length the backend only estimates (a
+  file with none in its header) moves as the file is read: it can put the
+  bars up, but with them up it can't take them down again (docs/SEEK-BAR.md
+  4.1).
 - **The reduction to 99 columns** (`lib/core/WaveShape`): each column is the
   RMS of its bars, then a stretch from the 10th percentile column to the
   loudest. At face value loud masters are a brick.

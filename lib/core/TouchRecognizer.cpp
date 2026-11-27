@@ -151,6 +151,7 @@ int TouchRecognizer::update(uint32_t ms, const Sample& s, InputEvent* out) {
       }
       state_ = State::Pressed;
       holdOff_ = false;
+      grabbed_ = false;
       downMs_ = ms;
       downX_ = lastX_ = s.x;
       downY_ = lastY_ = s.y;
@@ -171,7 +172,7 @@ int TouchRecognizer::update(uint32_t ms, const Sample& s, InputEvent* out) {
   remember(ms, s.x, s.y);
   if (state_ == State::Pressed) {
     const int moved = std::max(std::abs(s.x - downX_), std::abs(s.y - downY_));
-    if (moved > config_.slopPx) {
+    if (moved > (grabbed_ ? kGrabSlopPx : config_.slopPx)) {
       state_ = State::Dragging;
       InputEvent e = make(T::DragStart, ms, s);
       e.dx = static_cast<int16_t>(s.x - downX_);
@@ -181,7 +182,7 @@ int TouchRecognizer::update(uint32_t ms, const Sample& s, InputEvent* out) {
       out[0] = e;
       return 1;
     }
-    if (!holdOff_ && ms - downMs_ >= config_.holdMs) {
+    if (!holdOff_ && !grabbed_ && ms - downMs_ >= config_.holdMs) {
       state_ = State::LongPressed;
       InputEvent e = make(T::LongPress, ms, s);
       e.x = downX_;

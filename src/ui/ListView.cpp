@@ -1591,10 +1591,22 @@ void ListView::onEvent(const InputEvent& e) {
     }
     // A press that stops a moving list is not a tap on a row. (The offset
     // can't tell: in the pass after a frame it equals the drawn one while
-    // the fling goes on.)
+    // the fling goes on.) It takes hold of the list instead: a drag as soon
+    // as the finger moves past a smear, with no slop to cross while the list
+    // stands still under it and no long press (Input::grab()). And the list
+    // counts as moving from here, as under a swipe from the strip: the rail
+    // and the scroll bar stay down until it rests. (They came up under the
+    // finger and went again as it moved off: a column pushed and filled in
+    // the turn of an up-then-down swipe.)
     const bool wasMoving = scroll_.moving();
     touchOn_ = TouchOn::List;
-    dragged_ = false;
+    dragged_ = wasMoving;
+    if (wasMoving) {
+      input_->grab();
+      // (Which way it goes next is the finger's: no row rendered ahead on
+      // the fling's word while it rests, as before it counted as moving.)
+      lastDir_ = 0;
+    }
     scroll_.press(e.ms, e.y);
     // Highlight what's under the finger (only once the list is still). A
     // Down that stopped the list, or with the frame behind the scroll, is

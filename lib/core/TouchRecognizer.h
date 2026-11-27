@@ -13,7 +13,8 @@
 //   Tap        lifted within slopPx of where it landed, before holdMs
 //   LongPress  holdMs down without moving slopPx (fires while still down,
 //              once); the lift that follows is a Release, never a tap
-//   DragStart  moved more than slopPx (Chebyshev) before a LongPress; then
+//   DragStart  moved more than slopPx (Chebyshev) before a LongPress (a touch
+//              that grabbed something moving: more than kGrabSlopPx, grab()); then
 //   DragMove   each time the point changes, and on the lift
 //   DragEnd    with the release velocity over the last velocityWindowMs,
 //              capped at maxFlingPxPerS, and a
@@ -59,6 +60,10 @@ public:
   };
 
   static constexpr int kMaxEvents = 3;  // per update: e.g. DragMove, DragEnd, Fling
+  // The slop of a touch that grabbed something moving (grab()): what a finger
+  // set down to stop a list smears by, no more. (A constant, not Config's: the
+  // recognizer sits in internal RAM with the input layer.)
+  static constexpr int kGrabSlopPx = 2;
 
   TouchRecognizer() = default;
   explicit TouchRecognizer(const Config& c) : config_(c) {}
@@ -76,6 +81,15 @@ public:
   // LongPress for it; it stays a press until it moves past the slop (a
   // drag) or lifts (a tap). The next touch has its hold again.
   void noHold() { holdOff_ = true; }
+  // The touch in progress took hold of something that was moving (a list in
+  // its fling or its snap, which the Down stopped): there is nothing under it
+  // to tap or to hold, so it needn't cross slopPx to be a drag, 12 px of
+  // finger with the list standing still under it. It is one once it moves
+  // more than kGrabSlopPx, and it never becomes a LongPress: a finger that
+  // rests on the list it stopped, then slides, still scrolls it. Lifted
+  // within kGrabSlopPx it is a Tap as ever (the list takes it for the stop it
+  // was). The next touch has its slop and its hold again.
+  void grab() { grabbed_ = true; }
   // The touch in progress, which landed on the button strip, is a swipe up
   // from it (StripButtons' `scroll`): the next update, with the same
   // sample, makes it a drag from that point. Nothing for any other touch
@@ -103,6 +117,7 @@ private:
   Config config_;
   State state_ = State::Idle;
   bool holdOff_ = false;  // noHold(): this touch never becomes a LongPress
+  bool grabbed_ = false;  // grab(): this touch drags past kGrabSlopPx, and never becomes a LongPress
   bool handOver_ = false;  // fromStrip(): the next update starts the drag
   bool strip_ = false;     // this touch is a swipe from the strip (its events say so)
   bool scripted_ = false;  // this touch was the scripted finger's, in part at least (its events say so)

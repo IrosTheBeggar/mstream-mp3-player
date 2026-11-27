@@ -133,6 +133,10 @@ void Waves::begin() {
   }
 }
 
+void Waves::want(uint64_t pathHash) { state_.want(pathHash, millis()); }
+
+bool Waves::coming() const { return state_.coming(millis()); }
+
 bool Waves::start(CardWorker& worker, uint8_t priority, uint32_t nowMs) {
   if (!wantsRead(nowMs)) return false;
   Job& j = *job_;

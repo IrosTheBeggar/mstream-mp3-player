@@ -3499,7 +3499,29 @@ layer is suspended).
   frame of the hardware scroll moves more than its 84-line step and becomes
   a full redraw. A touch that lands on the button strip (raw y >= 240) is
   the buttons' and makes no glass events, unless it is a swipe up from the
-  strip (below).
+  strip (below). **A finger that lands on a moving list takes hold of it**
+  (2026-11-27, `TouchRecognizer::grab()`, which `ListView` asks for at the
+  Down that stops a fling or a snap; test_touch_input): the owner saw a lag
+  between a quick scroll up and a quick scroll down. That press can't be a
+  tap on a row, yet it had to cross the tap's 12 px before it was a drag,
+  the list standing still under it, then jumping the 13. Now it is a drag
+  once it moves more than 2 px (a smear), and it never becomes a long press:
+  a finger that rests on the list it stopped, then slides, still scrolls it
+  (before, the long press at 500 ms took the rest of that touch). Lifted
+  where it landed it is a Tap as ever, the list's stop. The list counts as
+  moving from that Down, so the A-Z rail or the scroll bar no longer comes
+  up under the finger and goes again as it moves off (a column pushed, then
+  filled, in the turn). Host-tested, and on the owner's Core2 the same day
+  (v0.15.0's code with this, its 19,671-track card, nothing playing): the
+  scripted finger set down on a flinging Artists list for 0.8 s
+  (`uis160,220,160,90,60`, then `uih160,120`) logged its `[touch] down` and
+  its `[touch] tap` with no `[touch] long press` between them; a catch and
+  a pull back (`uid160,100,160,180,300`) drew 51 frames at 52.8 a second,
+  6.2 ms at most; and the owner, by hand: "The scrolling is a lot
+  smoother." Left as it was: the row the turn brings back is still rendered
+  in its first frame (the six row sprites hold no row behind a fast fling),
+  and no row is rendered ahead while the finger rests (which way it goes is
+  the finger's).
 - **The button strip** (`StripButtons`, host-tested). The three buttons
   are made from the same touch point as the glass, not taken from
   M5Unified's BtnA/B/C: those press for any point in the strip that isn't
@@ -3937,7 +3959,8 @@ Queue, Dance and Output (with its Pair and About pages).
   vertical scroll** (`ListScroller`), inertia from `KineticScroll` with
   **flings capped at 2,000 px/s**, presses highlighted on the Down and acted
   on at the Tap (a drag never taps, nor does a press that stops a moving
-  list), long press on rows that have a hold, a top action bar (a
+  list: that one **takes hold of the list**, below), long press on rows that
+  have a hold, a top action bar (a
   container's Play / Play next / + Queue) and **inline action rows** (a tap on
   a track opens its bar under it; `ListLayout` keeps the tapped row where it
   was and scrolls just enough to show the bar), and **selection mode**
@@ -4947,6 +4970,14 @@ Queue, Dance and Output (with its Pair and About pages).
     with the text row due too, one push of 11,840 px in one hold. A scrub's
     readout is 8,640 where it was 10,560 (SEEK-BAR.md 4.5).
   - **IRAM and static DRAM:** none.
+  - **No line before the bars** (2026-11-27, SEEK-BAR.md 4.1): while a
+    track's shape is read (`WaveState::coming()`, 500 ms at most) bars up
+    stay as drawn and a strip drawn from nothing (a wake, the page entered)
+    is its background alone; and a length the backend only estimates can't
+    take bars down (`AppState::durationKnown`). Their bytes sit in padding:
+    `WaveState`'s 4 before `jobMsSum_`, `AppState`'s 2 after `seekable`.
+    `ui::Ui` is still 9,416 B, and IRAM, `.data` and `.bss` are main's to
+    the byte (125,915 / 25,112 / 36,392 B, both built here the same day).
 - **The length of a track** for the progress: the decoders don't expose it,
   so the backend reads it when the track opens (`TrackProgress`, host-tested):
   a FLAC file's from its STREAMINFO, a VBR MP3's from the Xing/Info or VBRI

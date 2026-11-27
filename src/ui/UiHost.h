@@ -30,6 +30,11 @@ struct AppState {
   PlayState play = PlayState::Stopped;
   bool failed = false;           // the current track can't be played
   bool seekable = true;          // ... can start part of the way in (PlaybackController::seekable(): the entry's path asked of the backend; the seek bar's knob)
+  // The backend knows the playing file's length (its header's, or its end
+  // reached); false: `durationMs`, while it is the backend's, is an estimate
+  // that moves as the file is read (the waveform's bars: wave::showsBars()).
+  // (In the 2 B after `seekable`: ui::Ui's size is pinned, Ui.cpp.)
+  bool durationKnown = true;
   uint32_t trackId = 0xFFFFFFFFu;  // TrackCatalog id of the current entry
   uint32_t currentKey = 0xFFFFFFFFu;
   int32_t current = -1;          // queue position

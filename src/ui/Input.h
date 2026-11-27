@@ -100,6 +100,10 @@ public:
   // The touch in progress has nothing to hold (the A-Z rail): no LongPress
   // for it (TouchRecognizer::noHold()).
   void noHold() { glass_.noHold(); }
+  // The touch in progress took hold of a moving list (ListView, at the Down
+  // that stopped it): a drag as soon as it moves past a smear, never a long
+  // press (TouchRecognizer::grab()).
+  void grab() { glass_.grab(); }
   // What the last update() read of the panel: a finger on it (its first
   // touch point, or the scripted finger), where (corrected, as the
   // events'), and whether it is the scripted one. For what has to see the
