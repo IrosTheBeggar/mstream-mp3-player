@@ -131,7 +131,12 @@ public:
   void pause() override;
   void resume() override;
   void stop() override;
-  void loop(uint32_t nowMs) override;
+  void loop(uint32_t nowMs) override { loop(nowMs, false); }
+  // `cardWritesHeld`: the loop's rule for its own card writes holds them
+  // this pass (main.cpp's loopWrites(): a list moves, a finger is down, or
+  // the audio's own moments): the Opus open cache's save, due or not, waits
+  // for a pass that lets it.
+  void loop(uint32_t nowMs, bool cardWritesHeld);
   bool isPlaying() const override;
   uint32_t positionMs() const override;
   // False while the decode task hasn't taken the last play() up (Pending):

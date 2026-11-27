@@ -289,11 +289,11 @@ void QueueStore::keepUnread() {
   saver_.keptFile(saver_.generation(), saver_.fileLine());
 }
 
-void QueueStore::loop(uint32_t nowMs) {
+void QueueStore::loop(uint32_t nowMs, QueueSaver::Hold hold) {
   if (!storage_.available() || carrying()) return;
   keepUnread();
   noteTransport();
-  saver_.loop(nowMs);
+  saver_.loop(nowMs, hold);
   noteFailures();
 }
 
@@ -686,10 +686,16 @@ void QueueStore::printStatus() const {
                 queue_.current() + 1, (unsigned long)queue_.upNext(),
                 queue_.shuffled() ? "on" : "off", repeatName(static_cast<uint8_t>(player_.repeat())),
                 kEdits[static_cast<int>(queue_.undoable())], undoMode, undoBack, (unsigned long)saver_.generation(),
-                saver_.writingSnapshot() ? " (writing a snapshot)"
-                : saver_.writing()       ? " (writing)"
-                : saver_.contentDirty()  ? " (to write)"
-                                         : "",
+                // (A write the loop's rule holds says what for: QueueSaver::Hold.)
+                saver_.held() == QueueSaver::Hold::Screen  ? (saver_.writing()
+                                                                  ? " (writing: held while a list moves or a finger is down)"
+                                                                  : " (to write: held while a list moves or a finger is down)")
+                : saver_.held() == QueueSaver::Hold::Audio ? (saver_.writing() ? " (writing: held for the audio)"
+                                                                               : " (to write: held for the audio)")
+                : saver_.writingSnapshot()                 ? " (writing a snapshot)"
+                : saver_.writing()                         ? " (writing)"
+                : saver_.contentDirty()                    ? " (to write)"
+                                                           : "",
                 (unsigned long)saver_.writes(), (unsigned long)saver_.snapshotWrites(),
                 (unsigned long)saver_.lastWriteMs(), (unsigned long)saver_.failures());
   // The resume point in NVS, and the player's start point (qs<sec>).

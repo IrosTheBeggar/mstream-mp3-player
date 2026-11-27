@@ -1755,6 +1755,211 @@ void test_saver_writes_after_the_edits_settle() {
   TEST_ASSERT_FALSE(saver.busy());
 }
 
+// ---- the loop's rule for its own card writes (QueueSaver::Hold) ----
+
+// While a list moves or a finger is on the glass nothing is asked of the
+// card, however long; the pass it rests, the write begins. A write under
+// way stops between two passes, not a byte more written, and goes on where
+// it was.
+void test_the_saver_waits_for_a_list_or_a_finger() {
+  using Hold = QueueSaver::Hold;
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  MemStore st;
+  QueueSaver saver(st, q, c);
+  saver.setGeneration(3);
+  saver.loaded(3, false, 0);
+  fillLong(q);  // 201 lines: 7 passes
+  saver.loop(100, Hold::Screen);
+  TEST_ASSERT_TRUE(saver.held() == Hold::None);  // (nothing is due yet: nothing is held)
+  // Its 2 s are over, and a list has moved since before them: a minute of
+  // it (past kMaxStaleMs too).
+  uint32_t t = 2100;
+  for (; t < 62100; t += 20) {
+    saver.loop(t, Hold::Screen);
+    TEST_ASSERT_TRUE(saver.held() == Hold::Screen);
+  }
+  TEST_ASSERT_EQUAL_INT(0, st.opens);
+  TEST_ASSERT_TRUE(saver.busy());
+  TEST_ASSERT_TRUE(saver.contentDirty());
+  // It rests: the write, at once. Three passes of it, then a finger.
+  for (int i = 0; i < 3; ++i, t += 20) saver.loop(t, Hold::None);
+  TEST_ASSERT_EQUAL_INT(1, st.opens);
+  TEST_ASSERT_TRUE(saver.writing());
+  TEST_ASSERT_TRUE(saver.held() == Hold::None);
+  const size_t written = st.temp->size();
+  TEST_ASSERT_TRUE(written > 0);
+  for (int i = 0; i < 500; ++i, t += 20) {  // 10 s of it
+    saver.loop(t, Hold::Screen);
+    TEST_ASSERT_TRUE(saver.writing());
+    TEST_ASSERT_TRUE(saver.held() == Hold::Screen);
+  }
+  TEST_ASSERT_EQUAL_size_t(written, st.temp->size());
+  TEST_ASSERT_EQUAL_INT(0, st.commits);
+  TEST_ASSERT_EQUAL_INT(0, st.discards);
+  // It lifts: the four passes left, and the file is the queue.
+  int passes = 0;
+  for (; saver.writing(); t += 20, ++passes) saver.loop(t, Hold::None);
+  TEST_ASSERT_EQUAL_INT(4, passes);
+  TEST_ASSERT_EQUAL_INT(1, st.opens);
+  TEST_ASSERT_EQUAL_INT(1, st.commits);
+  TEST_ASSERT_EQUAL_STRING(wholeText(q, c, 4).c_str(), st.file.c_str());
+  TEST_ASSERT_EQUAL_UINT32(4, st.posGeneration);
+  TEST_ASSERT_EQUAL_INT(5, st.pos);
+  TEST_ASSERT_FALSE(saver.busy());
+  TEST_ASSERT_EQUAL_UINT32(1, saver.writes());
+  TEST_ASSERT_TRUE(saver.held() == Hold::None);
+}
+
+// An edit while a write is held: the write is dropped at the pass that lets
+// it go on (its writer sees the queue changed, as it would have then), and
+// the queue as it is is written once the edit has settled.
+void test_an_edit_under_a_held_write_starts_it_again() {
+  using Hold = QueueSaver::Hold;
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  MemStore st;
+  QueueSaver saver(st, q, c);
+  saver.setGeneration(3);
+  saver.loaded(3, false, 0);
+  fillLong(q);
+  saver.loop(100);
+  saver.loop(2100);
+  saver.loop(2120);
+  TEST_ASSERT_TRUE(saver.writing());
+  uint32_t t = 2140;
+  for (; t < 2600; t += 20) saver.loop(t, Hold::Screen);
+  TEST_ASSERT_TRUE(q.appendQuiet(2));  // the listener adds a track, the finger still down
+  for (; t < 3000; t += 20) {
+    saver.loop(t, Hold::Screen);
+    TEST_ASSERT_TRUE(saver.writing());  // (held: nothing looks at the queue)
+  }
+  TEST_ASSERT_EQUAL_INT(0, st.discards);
+  saver.loop(t, Hold::None);  // it lifts: the write finds the queue changed
+  TEST_ASSERT_FALSE(saver.writing());
+  TEST_ASSERT_EQUAL_INT(1, st.discards);
+  TEST_ASSERT_EQUAL_INT(0, st.commits);
+  TEST_ASSERT_TRUE(saver.busy());
+  // 2 s after that edit: the queue as it is.
+  for (t += 20; t < 2600 + QueueSaver::kContentDelayMs; t += 20) {
+    saver.loop(t, Hold::None);
+    TEST_ASSERT_FALSE(saver.writing());
+  }
+  settle(saver, t);
+  TEST_ASSERT_EQUAL_INT(2, st.opens);
+  TEST_ASSERT_EQUAL_INT(1, st.commits);
+  TEST_ASSERT_EQUAL_UINT32(201, q.size());
+  TEST_ASSERT_EQUAL_STRING(wholeText(q, c, 4).c_str(), st.file.c_str());
+}
+
+// The audio's moments (a start's refill, the gapless window, the ring, an
+// underrun) hold the file too, but not for ever: once it is kMaxStaleMs
+// behind the queue it is written through them, as a list's hold never is.
+// (Tracks shorter than those moments, one after another, never leave them.)
+void test_the_audio_holds_the_saver_until_the_file_is_too_far_behind() {
+  using Hold = QueueSaver::Hold;
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  MemStore st;
+  QueueSaver saver(st, q, c);
+  saver.setGeneration(3);
+  saver.loaded(3, false, 0);
+  fillLong(q);
+  saver.loop(100, Hold::Audio);  // the edit, seen at 100: the file is behind from here
+  uint32_t t = 120;
+  for (; t < 100 + QueueSaver::kMaxStaleMs; t += 20) {
+    saver.loop(t, Hold::Audio);
+    TEST_ASSERT_EQUAL_INT(0, st.opens);
+    if (t >= 100 + QueueSaver::kContentDelayMs) TEST_ASSERT_TRUE(saver.held() == Hold::Audio);
+  }
+  // 30 s behind: written through the hold. The plain write: its edits
+  // settled long ago.
+  int passes = 0;
+  for (; passes == 0 || saver.writing(); t += 20, ++passes) {
+    saver.loop(t, Hold::Audio);
+    TEST_ASSERT_TRUE(saver.held() == Hold::None);
+  }
+  TEST_ASSERT_EQUAL_INT(7, passes);
+  TEST_ASSERT_EQUAL_INT(1, st.commits);
+  TEST_ASSERT_EQUAL_UINT32(0, saver.snapshotWrites());
+  TEST_ASSERT_EQUAL_STRING(wholeText(q, c, 4).c_str(), st.file.c_str());
+  // A list at that age all the same: held.
+  TEST_ASSERT_TRUE(q.appendQuiet(1));
+  const uint32_t edited = t;
+  for (; t < edited + QueueSaver::kMaxStaleMs + 10000; t += 20) saver.loop(t, Hold::Screen);
+  TEST_ASSERT_EQUAL_INT(1, st.opens);
+  TEST_ASSERT_TRUE(saver.held() == Hold::Screen);
+  settle(saver, t);
+  TEST_ASSERT_EQUAL_INT(2, st.commits);
+  // A write under way when the audio's moment comes, the file not far
+  // behind: it waits the moment out, and goes on.
+  TEST_ASSERT_TRUE(q.appendQuiet(4));
+  t += 70000;
+  const uint32_t again = t;
+  saver.loop(t);
+  for (t += 20; !saver.writing(); t += 20) saver.loop(t);
+  TEST_ASSERT_EQUAL_UINT32(again + QueueSaver::kContentDelayMs + 20, t);
+  const size_t written = st.temp->size();
+  for (int i = 0; i < 350; ++i, t += 20) {  // 7 s: a join's settle and the next track's last seconds
+    saver.loop(t, Hold::Audio);
+    TEST_ASSERT_TRUE(saver.held() == Hold::Audio);
+  }
+  TEST_ASSERT_EQUAL_size_t(written, st.temp->size());
+  settle(saver, t);
+  TEST_ASSERT_EQUAL_INT(3, st.commits);
+  TEST_ASSERT_EQUAL_STRING(wholeText(q, c, saver.generation()).c_str(), st.file.c_str());
+}
+
+// What isn't the card's waits for nothing: the position and the resume
+// point are NVS's. And flushNow() (a power-off) takes no hold.
+void test_a_hold_holds_only_the_file() {
+  using Hold = QueueSaver::Hold;
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  MemStore st;
+  QueueSaver saver(st, q, c);
+  saver.setGeneration(3);
+  saver.loaded(3, false, 0);
+  fillLong(q);
+  settle(saver, 100);
+  TEST_ASSERT_EQUAL_INT(1, st.commits);
+  TEST_ASSERT_EQUAL_INT(5, st.pos);
+  // A move alone, a list moving all the while: its position a second later.
+  q.step(1, true);
+  uint32_t t = 70000;
+  for (; t < 71100; t += 20) saver.loop(t, Hold::Screen);
+  TEST_ASSERT_EQUAL_INT(6, st.pos);
+  TEST_ASSERT_EQUAL_UINT32(4, st.posGeneration);
+  TEST_ASSERT_TRUE(saver.held() == Hold::None);  // (no write of the file was due)
+  // A pause under a finger: its resume point at once.
+  saver.noteTransport(pausedAt(83000, 240000));
+  saver.loop(t, Hold::Screen);
+  TEST_ASSERT_EQUAL_INT(1, st.resumes);
+  TEST_ASSERT_TRUE(st.resume.valid);
+  TEST_ASSERT_EQUAL_INT(6, st.resume.entry);
+  // An edit, the list still moving: nothing of the file. A power-off then:
+  // all of it, at once.
+  TEST_ASSERT_TRUE(q.appendQuiet(3));
+  for (t += 20; t < 80000; t += 20) saver.loop(t, Hold::Screen);
+  TEST_ASSERT_EQUAL_INT(1, st.commits);
+  TEST_ASSERT_TRUE(saver.held() == Hold::Screen);
+  TEST_ASSERT_TRUE(saver.flushNow(t));
+  TEST_ASSERT_EQUAL_INT(2, st.commits);
+  TEST_ASSERT_EQUAL_STRING(wholeText(q, c, 5).c_str(), st.file.c_str());
+  TEST_ASSERT_EQUAL_UINT32(5, st.posGeneration);
+  TEST_ASSERT_EQUAL_INT(6, st.pos);
+  TEST_ASSERT_EQUAL_UINT32(5, st.resume.generation);
+  TEST_ASSERT_FALSE(saver.busy());
+}
+
 // A power-off in the middle of a piece-wise write: flushNow() finishes it,
 // and the file is the whole queue (not the lines written so far), with the
 // position for its generation.
@@ -5257,6 +5462,70 @@ void test_the_saver_keeps_up_with_appends_every_second() {
   TEST_ASSERT_EQUAL_size_t(0, Meter::live);
 }
 
+// The device's soak under the loop's rule for its card writes: ten minutes
+// of Auto DJ on 1-second tracks, so every pass is in a start's refill or
+// the gapless window (the audio's hold never ends), and a list moving two
+// seconds in every three. The file still is never more than kMaxStaleMs
+// and a write's time behind (a write taking three times as long: it has a
+// pass in three), each one whole, none dropped.
+void test_the_saver_keeps_up_under_the_loops_rule() {
+  using Hold = QueueSaver::Hold;
+  constexpr uint32_t kTracks = 20000, kStart = 3800, kMs = 600u * 1000u;
+  LibraryIndex idx;
+  TEST_ASSERT_TRUE(buildSynth(idx, kTracks));
+  TrackCatalog c(&idx);
+  QueueModel q;
+  std::vector<uint32_t> ids;
+  for (uint32_t i = 0; i < kStart; ++i) ids.push_back((i * 31u) % kTracks);
+  TEST_ASSERT_TRUE(q.assign(ids.data(), kStart, kStart - 2));
+  MemStore st;
+  Meter::reset();
+  QueueSaver saver(st, q, c, Meter::alloc, Meter::release);
+  saver.loaded(5, false, 0);
+  st.file = wholeText(q, c, 5);
+  uint32_t next = 1, lastCommit = 1000, longest = 0, heldPasses = 0, written = 0;
+  int commits = st.commits;
+  for (uint32_t t = 20; t <= kMs; t += 20) {
+    if (t % 1000 == 0) {
+      TEST_ASSERT_TRUE(q.step(1, false));
+      TEST_ASSERT_TRUE(q.appendQuiet((next++ * 7919u) % kTracks));
+    }
+    const bool list = t % 3000 < 2000;
+    const size_t before = st.temp ? st.temp->size() : 0;
+    const int opens = st.opens;
+    saver.loop(t, list ? Hold::Screen : Hold::Audio);
+    if (list) {
+      // A list moving: not a byte, no file opened, none replaced.
+      TEST_ASSERT_EQUAL_INT(opens, st.opens);
+      TEST_ASSERT_EQUAL_INT(commits, st.commits);
+      TEST_ASSERT_EQUAL_size_t(before, st.temp ? st.temp->size() : 0);
+      if (saver.held() == Hold::Screen) ++heldPasses;
+    }
+    if (st.commits != commits) {
+      commits = st.commits;
+      ++written;
+      expectWhole(st.file, c, st, "a write under the rule");
+      longest = std::max(longest, t - lastCommit);
+      lastCommit = t;
+    }
+  }
+  printf("[saver] ten minutes of appends every second under the loop's rule (a list moving 2 s in 3, the audio's "
+         "hold the rest): %u writes (%u from a snapshot), at most %u ms between two, %u passes held by the list\n",
+         (unsigned)written, (unsigned)saver.snapshotWrites(), (unsigned)longest, (unsigned)heldPasses);
+  // kMaxStaleMs, the list's 2 s, and a write of some 4,200 lines at a pass
+  // in three (131 passes of 20 ms, three times over).
+  TEST_ASSERT_TRUE(longest <= QueueSaver::kMaxStaleMs + 2000 + 9000);
+  TEST_ASSERT_TRUE(written >= kMs / 1000 / 45);
+  TEST_ASSERT_EQUAL_UINT32(written, saver.writes());
+  TEST_ASSERT_EQUAL_INT(0, st.discards);
+  TEST_ASSERT_TRUE(heldPasses > 0);
+  // The tracks get longer and the list rests: the queue as it is.
+  for (uint32_t t = kMs + 20; t < kMs + 15000; t += 20) saver.loop(t, Hold::None);
+  TEST_ASSERT_FALSE(saver.busy());
+  TEST_ASSERT_EQUAL_STRING(wholeText(q, c, saver.generation()).c_str(), st.file.c_str());
+  TEST_ASSERT_EQUAL_size_t(0, Meter::live);
+}
+
 // The same shuffled for ten minutes (version 2: each line's rank from the
 // snapshot), then a power-off in the middle of a snapshot's write: the
 // queue has moved on, so that write is dropped and the queue as it is now
@@ -6296,6 +6565,10 @@ int main(int, char**) {
   RUN_TEST(test_v2_long_path_and_ten_digit_rank);
   RUN_TEST(test_v2_empty_shuffled_queue);
   RUN_TEST(test_saver_writes_after_the_edits_settle);
+  RUN_TEST(test_the_saver_waits_for_a_list_or_a_finger);
+  RUN_TEST(test_an_edit_under_a_held_write_starts_it_again);
+  RUN_TEST(test_the_audio_holds_the_saver_until_the_file_is_too_far_behind);
+  RUN_TEST(test_a_hold_holds_only_the_file);
   RUN_TEST(test_flush_now_in_the_middle_of_a_write);
   RUN_TEST(test_flush_now_after_an_edit_during_the_write);
   RUN_TEST(test_flush_now_writes_an_edit_at_once);
@@ -6313,6 +6586,7 @@ int main(int, char**) {
   RUN_TEST(test_shuffle_alls_undo_writes_version_1_again);
   RUN_TEST(test_off_while_paused_pairs_the_resume_point_again);
   RUN_TEST(test_the_saver_keeps_up_with_appends_every_second);
+  RUN_TEST(test_the_saver_keeps_up_under_the_loops_rule);
   RUN_TEST(test_a_shuffled_soak_and_a_power_off_mid_snapshot);
   RUN_TEST(test_a_snapshot_write_and_no_memory_for_one);
   RUN_TEST(test_assign_is_exact_and_growth_is_bounded);

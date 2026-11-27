@@ -225,7 +225,8 @@ bool PlayHistory::statsMadeUp(uint8_t n) {
   return false;
 }
 
-void PlayHistory::loop(const Look& look, const playlog::WriteGate::In& gate, bool cardHeld) {
+void PlayHistory::loop(const Look& look, const playlog::WriteGate::In& gate, playlog::WriteGate::Wait wait,
+                       bool cardHeld) {
   if (!active_) return;
   stats_.owedLine();  // (a rotation's save's line: out of its save's frames)
   // S2's ask: a step the card worker finished, taken in (its files closed
@@ -249,8 +250,7 @@ void PlayHistory::loop(const Look& look, const playlog::WriteGate::In& gate, boo
   sp.joinWorking = autoDj_ && autoDj_->joinWorking();
   sp.updating = library_.update() && library_.update()->asked();
   stats_.pass(sp, gate.nowMs);
-  const playlog::WriteGate::Wait w = gate_.update(gate);  // (every pass: it follows the starts)
-  if (cardHeld || w != playlog::WriteGate::Wait::None) return;
+  if (cardHeld || wait != playlog::WriteGate::Wait::None) return;
   // (Nothing is asked of a card that is away: the scan and the plays wait
   // for the remount, remounted(), or the end's flush(). A journal Off, NVS
   // refusing the boot count, writes no slot: Hs still runs below.)

@@ -92,7 +92,10 @@ public:
     // Rank lane's Input wait reaches StatsLists only after this pass's turn).
     bool input = false;
   };
-  void loop(const Look& look, const playlog::WriteGate::In& gate, bool cardHeld);
+  // `gate`, `wait`: the loop's rule for its own card writes as this pass
+  // has it (one gate for all of them: main.cpp's loopWrites()), and what it
+  // says.
+  void loop(const Look& look, const playlog::WriteGate::In& gate, playlog::WriteGate::Wait wait, bool cardHeld);
 
   // Before an orderly power-off or restart (`why`: its log's words): the
   // open play ended (Stopped), the boot's scan finished, every play
@@ -218,7 +221,6 @@ private:
   playlog::Tracker* tracker_ = nullptr;
   playlog::Journal* journal_ = nullptr;
   playlog::Outbox* outbox_ = nullptr;
-  playlog::WriteGate gate_;
   int64_t tryT0_ = 0;  // when the try under way began (esp_timer's us: its line's ms)
   ListeningStats stats_;
   int64_t scanUs_ = 0;  // the boot's scan's pieces on the loop

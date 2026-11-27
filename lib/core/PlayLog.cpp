@@ -846,6 +846,7 @@ WriteGate::Wait WriteGate::update(const In& in) {
   if (in.playing && in.ringCapacityMs != 0 && in.ringMs * 2 < in.ringCapacityMs) return Wait::Ring;
   if (underrun_) return Wait::Underrun;
   if (in.listMoving) return Wait::List;
+  if (in.fingerDown) return Wait::Finger;
   return Wait::None;
 }
 
@@ -857,6 +858,7 @@ const char* WriteGate::waitName(Wait w) {
     case Wait::Ring: return "the ring";
     case Wait::Underrun: return "an underrun";
     case Wait::List: return "a list moving";
+    case Wait::Finger: return "a finger down";
   }
   return "?";
 }

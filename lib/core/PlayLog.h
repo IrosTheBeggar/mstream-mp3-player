@@ -42,7 +42,10 @@
 //   - WriteGate: when the loop may write a slot (or read the boot's scan):
 //     never in the gapless window (the decoder reading the next track
 //     ahead, until the join has settled), a start's refill, a seek, or a
-//     ring under half; nor while a list moves (the loop draws its frames);
+//     ring under half; nor while a list moves (the loop draws its frames)
+//     or a finger is on the glass. It is the loop's one rule for its own
+//     card writes: the queue's file and the Opus open cache wait for it
+//     too (main.cpp's loopWrites());
 //   - Folds: the listening stats' hooks (docs/LISTENING-STATS.md 5.5,
 //     5.6): the boot's scan's slots, its save before the trim, a
 //     rotation's save before plays.1.jnl leaves the log's names. None
@@ -635,7 +638,17 @@ private:
 // ---------------------------------------------------------------------------
 // When the loop may touch the log (a slot's write, a piece of the boot's
 // scan): the card's other reader is the decoder, and the write holds the
-// loop, which draws a moving list's frames.
+// loop, which draws a moving list's frames and answers the finger.
+//
+// The loop's one rule for its own card writes: one gate, asked once a pass
+// (main.cpp's loopWrites()), and its word given to each of them. The play
+// log and the listening stats' saves (app/PlayHistory) wait for it however
+// long. The queue's file (QueueSaver::Hold) waits for a list or a finger
+// however long, and for the audio's reasons until it is 30 s behind the
+// queue. The Opus open cache's save (Core2AudioBackend) waits however
+// long: it is a cache. (Until then the queue's file and that cache were
+// written when their own delays ran out: 2 s after an edit, 3 s after an
+// open, a list moving or not.)
 // ---------------------------------------------------------------------------
 class WriteGate {
 public:
@@ -653,6 +666,11 @@ public:
     // rail (ui::Ui::listMoving(): none while its page draws no frame; the
     // card worker waits for it too).
     bool listMoving = false;
+    // A finger is on the glass and acts (ui::Input::touching(): landed or
+    // moved in the last 15 s, a real one not swallowed as a wake, or the
+    // console's): about to tap, or to move a list that isn't moving yet. A
+    // write begun under it would hold the loop that answers it.
+    bool fingerDown = false;
   };
   enum class Wait : uint8_t {
     None,      // now
@@ -661,7 +679,11 @@ public:
     Ring,      // playing, the ring below half
     Underrun,  // one in the last kUnderrunMs
     List,      // a list moves, playing or not (no limit: it rests, or the finger lifts)
+    Finger,    // a finger on the glass, playing or not (it lifts, or rests still its 15 s)
   };
+  // The wait is the screen's (a list, a finger), not the audio's: it ends
+  // with what the listener's hand does, and no writer overrides it.
+  static bool forScreen(Wait w) { return w == Wait::List || w == Wait::Finger; }
   // ESTIMATED (ScanScheduler's TrackChange and Ring rules; the device
   // check measures the write).
   static constexpr uint32_t kSettleMs = 2000;

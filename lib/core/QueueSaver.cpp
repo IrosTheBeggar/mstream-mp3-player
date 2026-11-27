@@ -87,11 +87,32 @@ bool QueueSaver::busy() const {
   return (contentDirty_ || positionDirty_) && !failedSinceEdit_;
 }
 
-void QueueSaver::loop(uint32_t nowMs) {
+// Whether `hold` holds the card's part of this pass: a list or a finger
+// always; the audio's moments until the file is kMaxStaleMs behind the
+// queue (tracks shorter than those moments, one after another, never leave
+// them).
+bool QueueSaver::holds(Hold hold, uint32_t nowMs) const {
+  switch (hold) {
+    case Hold::None: return false;
+    case Hold::Screen: return true;
+    case Hold::Audio: return !(contentDirty_ && timeFor(nowMs, dirtySinceMs_, kMaxStaleMs));
+  }
+  return false;
+}
+
+void QueueSaver::loop(uint32_t nowMs, Hold hold) {
   noteChanges(nowMs);
   stepResume();
+  const bool held = holds(hold, nowMs);
+  held_ = Hold::None;
   if (writing_) {
-    stepWrite(nowMs, kLinesPerPass);
+    // (Held: the write stays open where it is, and goes on at the pass
+    // that lets it. An edit meanwhile drops it there, as it would now.)
+    if (held) {
+      held_ = hold;
+    } else {
+      stepWrite(nowMs, kLinesPerPass);
+    }
     return;
   }
   // 2 s after the last edit; or, edits that never settle, once the file
@@ -100,7 +121,11 @@ void QueueSaver::loop(uint32_t nowMs) {
   const bool quiet = timeFor(nowMs, contentChangedMs_, kContentDelayMs);
   const bool stale = timeFor(nowMs, dirtySinceMs_, kMaxStaleMs) && static_cast<int32_t>(nowMs - snapshotAtMs_) >= 0;
   if (contentDirty_ && (quiet || stale) && static_cast<int32_t>(nowMs - nextTryMs_) >= 0) {
-    if (startWrite(nowMs, !quiet)) stepWrite(nowMs, kLinesPerPass);
+    if (held) {
+      held_ = hold;
+    } else if (startWrite(nowMs, !quiet)) {
+      stepWrite(nowMs, kLinesPerPass);
+    }
     return;
   }
   // A position only means something for the queue the file holds.

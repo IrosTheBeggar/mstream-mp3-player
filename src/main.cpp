@@ -3572,16 +3572,56 @@ static void leaveFence() {
   }
 }
 
-// Every loop pass, after the player's update() (a join taken first): the
-// play log's look at the backend, then a piece of its boot's scan or one
-// play's slot when this pass's audio lets it (lib/core PlayLog's
-// WriteGate: never in the gapless window or a start's refill) and no list
-// moves (the write holds the loop that draws its frames). Never while the
+// The loop's one rule for its own card writes (lib/core PlayLog's
+// WriteGate), asked once a pass, after the player's update() (a join taken
+// first), and its word given to each of them: the play log's slot and the
+// listening stats' saves (stepPlays()), the queue's file (QueueStore), the
+// Opus open cache (the audio backend's loop()). Never in the gapless window
+// or a start's refill (the card's other reader is the decoder), nor while a
+// list moves or a finger is on the glass (a write holds the loop, which
+// draws the list's frames and answers the finger). Until this the play log
+// alone waited: the queue's file was written 2 s after an edit and the Opus
+// cache 3 s after an open, whatever the list did.
+struct LoopWrites {
+  playlog::WriteGate::In in;
+  playlog::WriteGate::Wait wait = playlog::WriteGate::Wait::None;
+};
+// (The one gate: it was the play log's own, in PlayHistory.)
+static playlog::WriteGate loopGate;
+static LoopWrites loopWrites(uint32_t now) {
+  LoopWrites w;
+  playlog::WriteGate::In& in = w.in;
+  in.nowMs = now;
+  in.playing = player.state() == PlayState::Playing;
+  in.ringMs = audio.bufferedMsNow();
+  in.ringCapacityMs = audio.ringCapacityMs();
+  in.underruns = audio.underrunsNow();
+  in.trackSeq = audio.trackSeq();
+  in.seeking = !audio.positionKnown();
+  in.decoderAtEnd = in.playing && audio.heardSourceEnded();
+  in.trackLeftMs = trackLeftMs();
+  // (As the last pass's Ui::loop() left it: this pass's comes after.)
+  in.listMoving = userInterface && userInterface->listMoving();
+  // (This pass's: the touch is read at its top.)
+  in.fingerDown = input.touching();
+  w.wait = loopGate.update(in);  // (every pass: it follows the starts)
+  return w;
+}
+// What that word holds of the queue's file: a list or a finger however
+// long, the audio's moments until the file is too far behind (QueueSaver).
+static QueueSaver::Hold queueHold(playlog::WriteGate::Wait w) {
+  if (w == playlog::WriteGate::Wait::None) return QueueSaver::Hold::None;
+  return playlog::WriteGate::forScreen(w) ? QueueSaver::Hold::Screen : QueueSaver::Hold::Audio;
+}
+
+// Every loop pass: the play log's look at the backend, then a piece of its
+// boot's scan or one play's slot when the loop's rule for its card writes
+// lets it (`writes`: loopWrites()). Never while the
 // card is held for the guard's restart, nor (PlayHistory's own look at the
 // guard) while it is out of the slot or refuses every write: the plays
 // wait for the remount, or the end's flush. `input`: this pass's (the
 // listening stats' visit asks take no turn in it: StatsLists).
-static void stepPlays(uint32_t now, bool input) {
+static void stepPlays(bool input, const LoopWrites& writes) {
   PlayHistory::Look look;
   look.input = input;
   look.state = player.state();
@@ -3590,19 +3630,7 @@ static void stepPlays(uint32_t now, bool input) {
   look.durationMs = audio.durationMs();
   look.restartAsked = restartPending();
   look.lit = userInterface && userInterface->coversAllowed();
-  playlog::WriteGate::In in;
-  in.nowMs = now;
-  in.playing = look.state == PlayState::Playing;
-  in.ringMs = audio.bufferedMsNow();
-  in.ringCapacityMs = audio.ringCapacityMs();
-  in.underruns = audio.underrunsNow();
-  in.trackSeq = audio.trackSeq();
-  in.seeking = !look.positionKnown;
-  in.decoderAtEnd = in.playing && audio.heardSourceEnded();
-  in.trackLeftMs = trackLeftMs();
-  // (As the last pass's Ui::loop() left it: this pass's comes after.)
-  in.listMoving = userInterface && userInterface->listMoving();
-  playHistory.loop(look, in, cardHeld);
+  playHistory.loop(look, writes.in, writes.wait, cardHeld);
 }
 
 // The stats pages' calls that read the card's hold (MainUiHost's, declared
@@ -4201,7 +4229,11 @@ void loop() {
   nvslater::loop(now);  // settings the taps changed: written once they rest
   stepCpuRestart(now);
   stepFormatRestart(now);
-  audio.loop(now);
+  // The loop's rule for its own card writes, for this pass: the Opus open
+  // cache's save (the audio's loop), the queue's file and the play log's
+  // slot below.
+  const LoopWrites writes = loopWrites(now);
+  audio.loop(now, writes.wait != playlog::WriteGate::Wait::None);
   powerLab.loop(now);
   stepCardGuard();
   // The waveform index: a remount seen before the card's step hands a read.
@@ -4210,8 +4242,8 @@ void loop() {
   }
   stepAutoDj(now);
   stepStatsMap(now, anyInput);
-  if (!cardHeld) queueStore.loop(now);
-  stepPlays(now, anyInput);
+  if (!cardHeld) queueStore.loop(now, queueHold(writes.wait));
+  stepPlays(anyInput, writes);
   // What a track's length is, once the backend knows it (read from the
   // file; or its estimate 20 s in, exact for a constant bitrate): the
   // Queue's "49 min"; once per entry (each change redoes the Queue's sum).

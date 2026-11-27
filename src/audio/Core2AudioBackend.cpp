@@ -529,7 +529,7 @@ uint32_t Core2AudioBackend::outputLatencyUs(Output output, char* how, size_t how
   return queue + speaker_.dmaLatencyUs();
 }
 
-void Core2AudioBackend::loop(uint32_t nowMs) {
+void Core2AudioBackend::loop(uint32_t nowMs, bool cardWritesHeld) {
   // Every pass: the Bluetooth media stream runs while the player plays on it,
   // and is suspended 3 s after that stops.
   bt_.update(nowMs, output_ == Output::Bluetooth && transportPlaying_);
@@ -572,8 +572,12 @@ void Core2AudioBackend::loop(uint32_t nowMs) {
   // after its last change (the decode task's put), so a run of opens (a
   // boot's resume, a seek) saves once, from here (the loop task, as the
   // queue is saved) and never on the decode task's start path; ten
-  // seconds after a write that failed, then at twice the wait.
-  if (nowMs - opusCacheCheckMs_ >= 1000) {
+  // seconds after a write that failed, then at twice the wait. Not in a
+  // pass the loop's rule for its own card writes holds (`cardWritesHeld`:
+  // the whole file is written and swapped in, which holds the loop that
+  // draws a moving list's frames): looked at again at the next pass that
+  // lets it.
+  if (!cardWritesHeld && nowMs - opusCacheCheckMs_ >= 1000) {
     opusCacheCheckMs_ = nowMs;
     bool due = false;
     {
