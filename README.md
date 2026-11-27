@@ -993,6 +993,8 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       capped at 2,000 px/s); how hard a list may use the SPI
                       bus, from the audio buffer's fill
   VScrollMap          The LCD's hardware vertical scroll: which lines to draw
+  RowSlots            A list's six row sprites: which a row takes, which rows
+                      keep theirs, which is rendered ahead of a move
   RefillPacer         The decoder's gentle refill after a track start (on)
   BtControl           Bluetooth decisions: media stream (StreamControl), volume
                       (AbsVolumePolicy, GainRamp), reconnect (ReconnectPlanner)
