@@ -939,7 +939,8 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       letter's two-letter starts
   ThumbCache, ThumbScaler, JpegInfo
                       Album covers as thumbnails: the PSRAM LRU and what's
-                      asked, the card's .565 files; the box-filter scaler;
+                      asked (only what a list at rest still shows), the
+                      card's .565 files; the box-filter scaler;
                       a JPEG's size and whether it is progressive
   TouchCalibration    The touch correction: a monotonic piecewise-linear table
                       per axis, its fit to taps, and its bytes for NVS
@@ -994,7 +995,8 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       bus, from the audio buffer's fill
   VScrollMap          The LCD's hardware vertical scroll: which lines to draw
   RowSlots            A list's six row sprites: which a row takes, which rows
-                      keep theirs, which is rendered ahead of a move
+                      keep theirs, which is rendered ahead of a move, and
+                      which a list caught by a finger gets back
   RefillPacer         The decoder's gentle refill after a track start (on)
   BtControl           Bluetooth decisions: media stream (StreamControl), volume
                       (AbsVolumePolicy, GainRamp), reconnect (ReconnectPlanner)
