@@ -10,6 +10,7 @@
 #include "KineticScroll.h"
 #include "ListLayout.h"
 #include "NavModel.h"
+#include "RowSlots.h"
 #include "ScrubPacer.h"
 #include "UiStrings.h"
 #include "ui/EmptyState.h"
@@ -31,7 +32,10 @@ class PanelScan;
 // on the Ui's frame clock, 60 a second, where the scan can't be read). Only
 // the rows on screen exist, as six PSRAM row sprites (320 x 42, 27 KB
 // each, in the block reserved at boot in the PSRAM's fast half:
-// ui/HotMem); a move pushes only the newly exposed lines.
+// ui/HotMem); a move pushes only the newly exposed lines. Which sprite a
+// row takes, which rows keep theirs and which is rendered ahead of a move or
+// beside a resting list are lib/core's rules (RowSlots, host-tested): the
+// list hands in its table and carries out what comes back.
 //
 // A list is a Source: a row count and a row renderer (drawRow() paints row
 // i into a 320 x 42 sprite; the standard pieces below make the 1- and
@@ -110,7 +114,7 @@ class ListView : private ListScroller::Painter {
 public:
   static constexpr int kTop = 72;
   static constexpr int kHeight = 168;
-  static constexpr int kSlots = 6;
+  static constexpr int kSlots = rowslots::kSlots;
   // Moves of up to this many lines are one bus hold of new lines (2 rows,
   // the scroll lab's setting); more is a full redraw in place.
   static constexpr int kMaxStep = 2 * 42;
@@ -560,6 +564,10 @@ private:
   bool stageStep();
   void setEdge();
   void dropSlots();
+  // The row sprites' table and its kept range, for lib/core's rules (RowSlots).
+  rowslots::Held held() const;
+  rowslots::Keep keep() const { return rowslots::Keep{keepFirst_, keepLast_}; }
+  void setKeep(rowslots::Keep k);
   Slot* slotFor(uint32_t item);
   Slot* renderedSlot(uint32_t item);
   void renderItem(M5Canvas& c, uint32_t item);

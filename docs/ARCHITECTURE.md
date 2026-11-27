@@ -22,7 +22,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  LibraryIndex  LibrarySynth  TextFold  TouchGesture           |
               |  LibraryBuilder  LibraryUpdate  CardJobs  ScanScheduler       |
               |  KineticScroll  ScrollGovernor  VScrollMap  RefillPacer       |
-              |  ScanSync  ScrubPacer  RadioLinkNotes                         |
+              |  ScanSync  ScrubPacer  RowSlots  RadioLinkNotes               |
               |  ByteStream  QueueModel  QueueText  TrackCatalog              |
               |  TouchCalibration  TouchCheck  TouchRecognizer  ButtonGesture |
               |  ButtonPolicy  InputEvent                                     |
@@ -4017,7 +4017,26 @@ Queue, Dance and Output (with its Pair and About pages).
   band and the row below it** are rendered into its two spare slots
   (`renderNeighbours()`, only while no cover is asked for or being made):
   a swipe's first frame, which rendered a row or two itself (30-57 ms with
-  an MP3 playing), only pushes. Rows kept outside the band are forgotten
+  an MP3 playing), only pushes. **Which sprite a row takes, which rows keep
+  theirs and which is rendered next** are `lib/core/RowSlots`'s since
+  2026-11-27, apart from the sprites and the clock (the first step of
+  moving the list's decisions where a host test can hold them, nothing of
+  what it does changed): `ListView` hands in its table, an item a sprite,
+  and carries out what comes back. test_row_slots has each rule at its
+  edges and the list's use of them frame by frame over the real scroll and
+  scroll map: a fling at the cap renders every row between two frames and
+  none in one, and a turn's first frame renders the top row itself, its
+  sprite having gone to the second row ahead (the baseline for the turn's
+  fix). The code as it stood was run against the new for 1.2 million
+  random steps and agreed at every one, and the two builds ran the same
+  scripted session on the owner's Core2 (the Artists list of its
+  19,671-track card, nothing playing): a row rendered in 2,916-2,928 us on
+  main and 2,922-2,931 on this, the band in place in 35.68-35.70 ms and
+  35.77-35.81, a fling at the cap at 67.9-70.2 frames a second and
+  68.5-69.4, the rail's scrub 49 bands in 3.18 s on both (a band
+  51.1-51.3 ms), no frame over 35 ms on either. (How many frames and rows
+  a scripted fling makes isn't repeatable between two runs of one build,
+  so those counts say nothing here.) Rows kept outside the band are forgotten
   when a cover arrives or the playing track changes (they would hold the
   placeholder, or the old mark). `ui` counts the rows rendered ahead.
   **A row's text goes straight into its sprite** and **the sprites lie in
