@@ -44,6 +44,44 @@
 // early, so the strip's first rows show a refresh early (a few lines at
 // the edge, for 14 ms), never the tear.
 //
+// A picture put in place (nothing moves: a list row drawn again where it
+// shows, Now Playing's seek bar, a cover) has the same enemy and a simpler
+// rule. Its rows are written top to bottom in one bus hold, so there is a
+// line being written, and the scan must never be on it: above it the rows
+// are new, below it old, and a scan that crosses it shows both in one
+// refresh (a tear; when a higher task cuts into the hold, for as long as
+// that task runs). rows() gives the wait until a hold may start so they
+// never meet, and how long it may then start for:
+//
+//   - a wide picture's line takes longer on the bus than a row does to
+//     scan (a 320 px line some 130-140 us, a row 57): the scan must have
+//     passed the picture's first row (it then stays ahead of the writing),
+//     and the writing must end before the scan, a refresh on, catches it
+//     up from behind;
+//   - a narrow one's is quicker (a 40 px cover: 16-26 us a line): the
+//     writing runs ahead of a scan that hasn't reached the picture yet,
+//     and must not catch one up that is inside it: the scan clear of the
+//     part of the picture the writing would overtake it in.
+//
+// How long the hold takes is only known between two figures (the wire's
+// own speed, and that with what the pushing costs besides), and the two
+// limits lean on opposite ones: the writing at its quickest overtakes the
+// most, at its slowest is caught up the soonest. rows() takes both, so a
+// hold begun in its window is clear of the scan whatever it takes between
+// them (a picture of a width where the two straddle the scan's own pace
+// gets both limits).
+//
+// For the pictures this UI puts in place the window is most of a refresh:
+// two thirds of it for a list row (so the wait is nothing most times, and
+// 4.6 ms at the worst), more for a cover; under six tenths and 5.8 ms for
+// the tallest of them, Now Playing's transport strip (56 rows). A picture
+// too tall for its hold to stay clear (over 145 rows at full width) has no
+// such start: it is written at once, as before.
+//
+// met() says of a hold that has been whether the scan did come on its
+// written line (from where the scan was when it began and how long it
+// really took): what a count of pictures shown half written goes by.
+//
 // Portable: the caller reads the scan and the clock. Host-tested
 // (test_scan_sync).
 class ScanSync {
@@ -104,6 +142,28 @@ public:
   // list that stands still for two refreshes, then jumps twice as far)
   // when it gives a whole refresh here: no window is then ever waited out.
   Window plan(int scanLine, int d, uint32_t holdUs, uint32_t lateUs = 0) const;
+
+  // ---- a picture put in place ----
+  // From the reading of the scan, in microseconds.
+  struct Rows {
+    int32_t waitUs = 0;  // the hold may start this long from now (0: now)
+    int32_t openUs = 0;  // ... and for this long from then (0: no start is clean)
+    bool clean = false;  // a hold begun in that never has the scan on the line it writes
+  };
+  // The panel's refresh is known (the band needn't be: rows() and met()
+  // ask nothing of it).
+  bool panelKnown() const { return panel_.frameUs > 0 && panel_.lines > 0; }
+  // For screen rows [row, row + lines) written top to bottom in a hold
+  // that takes no less than `quickestUs` and no more than `slowestUs`,
+  // with the scan read at `scanLine` now. Needs panelKnown(), lines > 0
+  // and quickestUs <= slowestUs. Not clean (the picture too tall for its
+  // hold): waitUs 0.
+  Rows rows(int scanLine, int row, int lines, uint32_t quickestUs, uint32_t slowestUs) const;
+  // Whether the scan was on the line being written at some moment of a
+  // hold that took `tookUs` over those rows (written at an even pace),
+  // the scan at `scanLine` when the writing began. Needs panelKnown() and
+  // lines > 0.
+  bool met(int scanLine, int row, int lines, uint32_t tookUs) const;
 
 private:
   Config config_;

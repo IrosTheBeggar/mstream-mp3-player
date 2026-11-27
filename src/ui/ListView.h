@@ -404,7 +404,12 @@ public:
   // where it will be when the frame shows; a frame the loop comes too
   // late for is drawn at once (a tear, the pace kept). Without it, or
   // when it can't be read: on the Ui's frame clock, as before. A scrub's
-  // frames (the rail up) and full redraws never wait for it.
+  // frames (the rail up) and full redraws never wait for it. A row drawn
+  // again where it shows (a press, a cover that landed, a recount's row,
+  // pushOnRow()'s piece) goes by it too, as one picture (PanelScan's
+  // Whole): begun where the scan won't show it half written, in one bus
+  // hold above the decoder; under a list that moves, held so but begun at
+  // once (the next frame's own window comes first).
   void setScan(PanelScan* scan);
   // Console uiv0 / uiv1: the scan ignored / followed (to compare by eye).
   void setScanSync(bool on) { scanOn_ = on; }

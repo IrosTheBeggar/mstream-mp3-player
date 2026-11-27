@@ -12,6 +12,7 @@
 #include "app/Psram.h"
 #include "ui/HotMem.h"
 #include "ui/ListScroller.h"
+#include "ui/PanelScan.h"
 #include "ui/Theme.h"
 
 namespace ui {
@@ -20,7 +21,10 @@ namespace gfx {
 namespace {
 
 M5Canvas* strip_ = nullptr;  // PSRAM
-int coverY0_ = 0, coverY1_ = 0;
+// The panel's scan for the Whole pushes, and the cover's rows (screen rows:
+// 16 bits each, in the two words they had, so the pointer costs no .bss).
+PanelScan* scan_ = nullptr;
+int16_t coverY0_ = 0, coverY1_ = 0;
 SpiHoldStats holds_;
 bool dark_ = false;
 
@@ -78,8 +82,8 @@ void setDark(bool on) { dark_ = on; }
 bool dark() { return dark_; }
 
 void setCover(int y0, int y1) {
-  coverY0_ = y0;
-  coverY1_ = y1;
+  coverY0_ = static_cast<int16_t>(y0);
+  coverY1_ = static_cast<int16_t>(y1);
 }
 
 bool covered(int y) { return y >= coverY0_ && y < coverY1_; }
@@ -109,6 +113,23 @@ void pushRows(M5Canvas& s, int x, int y, int w, int sy0, int sy1, bool over) {
 }
 
 void push(M5Canvas& s, int x, int y, int w, int h, bool over) { pushRows(s, x, y, w, 0, h, over); }
+
+void setScan(PanelScan* scan) { scan_ = scan; }
+
+void pushRectWhole(M5Canvas& s, int sx, int sy, int w, int h, int x, int y, bool over) {
+  if (w <= 0 || h <= 0 || dark_) return;
+  // (The rows it takes on the glass, whatever the sprite's own.)
+  const int y0 = std::max(y, 0), y1 = std::min(y + h, kH);
+  if (y0 >= y1) return;
+  Whole whole(scan_, y0, y1 - y0, w);
+  pushRect(s, sx, sy, w, h, x, y, over);
+}
+
+void pushRowsWhole(M5Canvas& s, int x, int y, int w, int sy0, int sy1, bool over) {
+  pushRectWhole(s, 0, sy0, w, sy1 - sy0, x, y + sy0, over);
+}
+
+void pushWhole(M5Canvas& s, int x, int y, int w, int h, bool over) { pushRowsWhole(s, x, y, w, 0, h, over); }
 
 SpiHoldStats& holds() { return holds_; }
 

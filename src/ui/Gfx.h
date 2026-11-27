@@ -13,7 +13,9 @@
 // sprite first (anti-aliased text needs its background; a sprite never
 // flickers), then pushed in small pieces, each under its own LcdLock: the
 // LCD shares its SPI bus with the SD card that feeds the decoder, so no
-// single hold is long (at most kBand lines, ~5 ms).
+// single hold is long (at most kBand lines, ~5 ms; a small picture that
+// changes in place is the one exception, pushWhole() below: one hold for
+// all of it, 8 ms at the most, as a list's move has).
 //
 // Two things every push and fill here takes care of, so the pages don't:
 //
@@ -29,6 +31,9 @@
 //
 // Loop task only (the one task that draws).
 namespace ui {
+
+class PanelScan;
+
 namespace gfx {
 
 constexpr int kBand = 40;     // lines per bus hold
@@ -69,6 +74,21 @@ void pushRows(M5Canvas& sprite, int x, int y, int w, int sy0, int sy1, bool over
 // screen (x, y): a piece of a panel kept in a sprite (a pressed button, a
 // grid cell, the dancer's box), mapped and clipped like the rest.
 void pushRect(M5Canvas& sprite, int sx, int sy, int w, int h, int x, int y, bool over = false);
+
+// The same three as one picture to the eye (ui/PanelScan's Whole): begun
+// where the panel's scan won't see the picture half written (a wait of
+// nothing most times, 6 ms at the worst), in one bus hold, the audio
+// decoder kept off the loop for it. For a small picture that changes in
+// place: Now Playing's seek bar, its cover, a pressed button. Not for a
+// page or a sheet being drawn whole: nothing of a draw that takes 40 ms is
+// whole to the eye, and each piece would wait for its place in the scan:
+// push() those.
+void pushWhole(M5Canvas& sprite, int x, int y, int w, int h, bool over = false);
+void pushRowsWhole(M5Canvas& sprite, int x, int y, int w, int sy0, int sy1, bool over = false);
+void pushRectWhole(M5Canvas& sprite, int sx, int sy, int w, int h, int x, int y, bool over = false);
+// The panel's scan they go by (the Ui's, once it has timed the panel);
+// nullptr: none, and they push as the plain ones do.
+void setScan(PanelScan* scan);
 
 // Every hold the UI's drawing took (for the 'ui' console report).
 SpiHoldStats& holds();
