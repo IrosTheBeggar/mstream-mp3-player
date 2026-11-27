@@ -12,8 +12,8 @@
 // decisions about its six sprites (ui/ListView: only the rows on screen
 // exist, and one or two past the edge), apart from the sprites and the clock,
 // so a host test can hold them (test_row_slots: each rule at its edges, and a
-// fling, a drag and a turn frame by frame, counting the rows a frame has to
-// render itself).
+// fling, a swipe from rest, a catch and a turn frame by frame, counting the
+// rows a frame has to render itself).
 //
 // The list keeps the table (an item per sprite) and the kept range itself and
 // hands them in; what comes back is a decision it carries out: the sprite to
@@ -155,6 +155,26 @@ constexpr Next neighbour(const Held& h, int32_t drawn, int height, int32_t items
   if (last + 1 < items && !h.holds(last + 1) && room) return Next{last + 1, keep};
   if (first - 1 >= 0 && first - 1 < items && !h.holds(first - 1) && room) return Next{first - 1, keep};
   return Next{-1, keep};
+}
+
+// A list a finger took hold of while it moved, standing still under it: the
+// first item on screen that no sprite holds. A fast fling's second row ahead
+// took the sprite of the row leaving at the other edge (ahead()), and a turn
+// back brings that row's lines on in its first frame: so it is rendered now,
+// while nothing is owed. The rows on screen and one either side are kept (the
+// row ahead too: a flick on the same way wants it at once), so it takes the
+// sprite of the furthest row ahead; with none spare beyond them, the rows on
+// screen alone are kept. None: every row on screen has its sprite.
+constexpr Next unheld(const Held& h, int32_t drawn, int height, int32_t items) {
+  const int32_t first = std::max<int32_t>(0, drawn / kPitch);
+  const int32_t last = std::min<int32_t>(items - 1, (drawn + height - 1) / kPitch);
+  for (int32_t i = first; i <= last; ++i) {
+    if (h.holds(i)) continue;
+    const Keep wide{static_cast<uint32_t>(std::max<int32_t>(0, first - 1)),
+                    static_cast<uint32_t>(std::min<int32_t>(items - 1, last + 1))};
+    return Next{i, spare(h, wide) ? wide : Keep{static_cast<uint32_t>(first), static_cast<uint32_t>(last)}};
+  }
+  return Next{};
 }
 
 // Whether a row can be rendered before the next frame, `rowUs` being what one

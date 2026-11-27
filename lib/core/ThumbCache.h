@@ -15,7 +15,9 @@
 //     one takes the least recently used slot of its size.
 //   - want(): a row (or Now Playing) drew a placeholder and asks. Requests
 //     are served newest first, so the rows on screen when a list stops come
-//     before the ones it scrolled past; only the last kWanted are kept.
+//     before the ones it scrolled past; only the last kWanted are kept, and
+//     when a list stops the ones it scrolled past go (keepWanted()): each
+//     was a card read, for some a decode, of a cover nobody was looking at.
 //   - A cover that can't be made (progressive, damaged, unreadable) is
 //     remembered as failed and not asked for again (until clear()).
 //
@@ -64,6 +66,9 @@ public:
   bool next(uint32_t* id, uint8_t* sizes);
   uint32_t making() const { return making_; }
   uint32_t wanted() const { return wantedN_; }
+  // Only the requests `keep` says yes to stay, in their order (the one
+  // being made isn't a request any more: it goes on). Returns how many went.
+  uint32_t keepWanted(bool (*keep)(uint32_t id, void* ctx), void* ctx);
   // Stores size `s` of `id` (copied in), in the least recently used slot.
   bool put(uint32_t id, Size s, const uint16_t* pixels);
   void markFailed(uint32_t id);

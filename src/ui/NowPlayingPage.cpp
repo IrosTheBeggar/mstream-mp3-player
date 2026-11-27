@@ -219,6 +219,8 @@ void NowPlayingPage::repaint() {
   update(0, false, false);
 }
 
+bool NowPlayingPage::showsCover(uint32_t album) const { return album == playingAlbum(); }
+
 void NowPlayingPage::thumbReady(uint32_t album) {
   if (album == playingAlbum() && !drawn_.coverShown) drawCover();
 }

@@ -422,6 +422,12 @@ const uint16_t* Thumbs::get(uint32_t album, Size s) {
   return px;
 }
 
+void Thumbs::dropUnshown(bool (*shown)(uint32_t album, void* ctx), void* ctx) {
+  if (!ready_ || lent_) return;
+  const uint32_t gone = cache_.keepWanted(shown, ctx);
+  dropped_ = static_cast<uint16_t>(gone > 0xFFFFu - dropped_ ? 0xFFFFu : dropped_ + gone);
+}
+
 void Thumbs::libraryChanged() {
   ++generation_;
   cache_.clear();
@@ -575,10 +581,11 @@ void Thumbs::printState() const {
   }
   const ThumbCache::Stats& s = cache_.stats();
   Serial.printf("[thumb] cache %u KB PSRAM (%lu small, %lu large slots): %lu hits, %lu misses, %lu stored, %lu "
-                "evicted; %lu wanted\n",
+                "evicted; %lu wanted, %u dropped (their rows had gone when the list stopped)\n",
                 static_cast<unsigned>(cache_.bytes() / 1024), (unsigned long)cache_.slots(Size::Small),
                 (unsigned long)cache_.slots(Size::Large), (unsigned long)s.hits, (unsigned long)s.misses,
-                (unsigned long)s.stored, (unsigned long)s.evicted, (unsigned long)cache_.wanted());
+                (unsigned long)s.stored, (unsigned long)s.evicted, (unsigned long)cache_.wanted(),
+                static_cast<unsigned>(dropped_));
   Serial.printf("[thumb] made: %lu decoded (mean %lu ms, max %lu), %lu from the card, %lu transfer thumbnails, %lu "
                 "failed (%lu progressive); internal RAM during jobs %s%lu B at the lowest (the card worker: gs)\n",
                 (unsigned long)decoded_, (unsigned long)(decoded_ ? decodeMsSum_ / decoded_ : 0),

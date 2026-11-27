@@ -389,6 +389,19 @@ public:
   // The data row a finger presses (-1: none): a piece pushed onto it
   // would show the row's resting look.
   int32_t pressedRow() const;
+  // The data rows the row sprites hold now, on screen or kept beside the
+  // band (rendered ahead, a resting list's neighbours): up to kSlots of
+  // them into `rows`. Returns how many.
+  int heldRows(uint32_t rows[kSlots]) const;
+  // A small picture on a data row changed (its cover arrived): `paint`
+  // draws it into the row's sprite if one holds the row, and what shows of
+  // its rectangle (w x h at x, y of the row) is pushed alone, as
+  // pushOnRow(). A row held off screen is painted and not pushed: it comes
+  // on with the picture. False: no sprite holds the row (it is rendered
+  // whole, with the picture, when it next comes on). (MEASURED on the
+  // Albums list: the loop's covers step took 9.3 ms at most with the row
+  // rendered and pushed whole for a cover, 1.7 ms so.)
+  bool patchRow(uint32_t row, int x, int y, int w, int h, void (*paint)(M5Canvas& sprite, void* ctx), void* ctx);
   // The empty state changed (its buttons, a press): drawn again.
   void redrawEmpty() { if (src_ && layout_.rows() == 0) drawEmpty(); }
 
@@ -455,7 +468,9 @@ public:
   // left before the next frame, by the Ui's frame clock (`untilDueMs`) or,
   // on the panel's scan, a refresh after the last hold began. From a fast
   // step the row after it too (in the slot of the row leaving at the
-  // other edge, when none is spare). True if it rendered one.
+  // other edge, when none is spare). And while a finger holds still a list
+  // it caught moving: the row on screen that so lost its sprite, before a
+  // turn back needs it. True if it rendered one.
   bool renderAhead(uint32_t untilDueMs);
   // While the list rests: the row just above the band and the row just
   // below it rendered into the spare slots, one a call, so the first
@@ -467,8 +482,10 @@ public:
   // and the newest asked for is made first.
   bool renderNeighbours();
   // The rows kept that aren't on screen are rendered again when next
-  // needed: a cover arrived, and a row rendered before it holds the
-  // placeholder (only the rows on screen are told of a cover).
+  // needed: the playing track changed, and a row rendered before holds
+  // the old mark (only the rows on screen are compared). (A cover that
+  // arrives is painted into the rows that hold its album instead:
+  // patchRow().)
   void forgetHidden();
   // A glass event of a touch that landed in the band.
   void onEvent(const InputEvent& e);
@@ -522,6 +539,11 @@ public:
   // The 40 x 40 thumbnail: `pixels` (big-endian RGB565, ui/Thumbs), or
   // the placeholder (nullptr: none yet, or no cover).
   static int thumb(Row& r, const uint16_t* pixels = nullptr);
+  // Where it is on a row with no checkbox, and the same pixels painted
+  // there alone: patchRow()'s `paint` for a cover that arrived (`pixels`
+  // as thumb()'s, never nullptr).
+  static constexpr int kThumbX = 6, kThumbY = 1, kThumbPx = 40;
+  static void paintThumb(M5Canvas& sprite, void* pixels);
   // A 1-bit icon in a 40 px column (a folder, a file).
   static int icon(Row& r, const icons::Icon& icon, uint16_t colour);
   // A small outlined badge at the right ("MP3"); returns the new right edge.
@@ -649,6 +671,10 @@ private:
   bool dragged_ = false;  // this touch moved the list, or took hold of it while it moved
   bool stageBand_ = false;  // the jump owed is a recount's: drawn as a band a row a pass (listlayout::Way::Band)
   bool bodyUp_ = false;     // render(): the source drew its body, push() fills nothing under it
+  // This touch caught the list moving and hasn't moved it yet (renderAhead():
+  // the rows on screen get their sprites back). In the byte before
+  // keepFirst_: ListView stays 432 B.
+  bool grabbed_ = false;
   uint32_t keepFirst_ = 0, keepLast_ = 0;
   uint32_t frames_ = 0;
   FrameCost cost_;

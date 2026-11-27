@@ -817,6 +817,11 @@ private:
     bool on = false;
     bool list = false;  // a list moved (else a page's own animation: a scrub)
     bool rail = false;  // a finger was on the list's A-Z rail
+    // The rows a list's frames rendered themselves (ListView::FrameCost):
+    // a move's rows are rendered between frames while there is time, so the
+    // frame that brings them on only pushes; these weren't (255: or more).
+    // In the padding here: ui::Ui keeps its size.
+    uint8_t rowsOwn = 0;
     uint32_t startMs = 0;
     uint32_t frames = 0;    // band frames (every frame of a scroll)
     uint64_t sumUs = 0;

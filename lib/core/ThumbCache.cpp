@@ -111,6 +111,16 @@ bool ThumbCache::next(uint32_t* id, uint8_t* sizes) {
   return true;
 }
 
+uint32_t ThumbCache::keepWanted(bool (*keep)(uint32_t id, void* ctx), void* ctx) {
+  uint32_t n = 0;
+  for (uint32_t i = 0; i < wantedN_; ++i) {
+    if (keep(wanted_[i].id, ctx)) wanted_[n++] = wanted_[i];
+  }
+  const uint32_t gone = wantedN_ - n;
+  wantedN_ = n;
+  return gone;
+}
+
 bool ThumbCache::put(uint32_t id, Size s, const uint16_t* pixels) {
   Pool& p = pool(s);
   if (p.n == 0 || !pixels || id == kNone) return false;
