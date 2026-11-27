@@ -1569,6 +1569,60 @@ void test_the_write_gate_waits_for_a_moving_list() {
   TEST_ASSERT_EQUAL_STRING("a list moving", pl::WriteGate::waitName(W::List));
 }
 
+// A finger on the glass holds the write too, before any list moves: it is
+// about to tap, or to drag a list that still rests, and a write begun under
+// it holds the loop that answers it. Playing or not, for as long as it
+// counts (the UI's word: 15 s still at most), and not a pass longer. The
+// audio's reasons come first, a moving list's before the finger's own.
+void test_the_write_gate_waits_for_a_finger_on_the_glass() {
+  using W = pl::WriteGate::Wait;
+  pl::WriteGate g;
+  pl::WriteGate::In in;
+  in.nowMs = 10000;
+  in.playing = true;
+  in.ringMs = 1400;
+  in.ringCapacityMs = 1490;
+  in.trackLeftMs = 120000;
+  TEST_ASSERT_TRUE(g.update(in) == W::None);
+  in.fingerDown = true;
+  TEST_ASSERT_TRUE(g.update(in) == W::Finger);
+  in.nowMs += 14000;
+  TEST_ASSERT_TRUE(g.update(in) == W::Finger);
+  in.fingerDown = false;
+  TEST_ASSERT_TRUE(g.update(in) == W::None);  // the pass it lifts
+  // Paused or stopped too.
+  in.playing = false;
+  in.fingerDown = true;
+  TEST_ASSERT_TRUE(g.update(in) == W::Finger);
+  // It drags the list: a list moving, and the finger's own word when the
+  // list has come to rest under it.
+  in.listMoving = true;
+  TEST_ASSERT_TRUE(g.update(in) == W::List);
+  in.listMoving = false;
+  TEST_ASSERT_TRUE(g.update(in) == W::Finger);
+  in.fingerDown = false;
+  TEST_ASSERT_TRUE(g.update(in) == W::None);
+  // The audio's word first, counted from its own moment.
+  in.playing = true;
+  in.fingerDown = true;
+  in.trackSeq = 1;
+  TEST_ASSERT_TRUE(g.update(in) == W::Start);
+  in.nowMs += pl::WriteGate::kSettleMs;
+  TEST_ASSERT_TRUE(g.update(in) == W::Finger);
+  in.fingerDown = false;
+  TEST_ASSERT_TRUE(g.update(in) == W::None);
+  // Which waits are the screen's (no writer overrides them) and which the
+  // audio's.
+  TEST_ASSERT_TRUE(pl::WriteGate::forScreen(W::List));
+  TEST_ASSERT_TRUE(pl::WriteGate::forScreen(W::Finger));
+  TEST_ASSERT_FALSE(pl::WriteGate::forScreen(W::None));
+  TEST_ASSERT_FALSE(pl::WriteGate::forScreen(W::Start));
+  TEST_ASSERT_FALSE(pl::WriteGate::forScreen(W::TrackEnd));
+  TEST_ASSERT_FALSE(pl::WriteGate::forScreen(W::Ring));
+  TEST_ASSERT_FALSE(pl::WriteGate::forScreen(W::Underrun));
+  TEST_ASSERT_EQUAL_STRING("a finger down", pl::WriteGate::waitName(W::Finger));
+}
+
 // ---------------------------------------------------------------------------
 // What the log asks of the card, on the host FatFs model.
 // ---------------------------------------------------------------------------
@@ -3697,6 +3751,7 @@ int main(int, char**) {
   RUN_TEST(test_short_tracks_wait_for_the_gate);
   RUN_TEST(test_the_write_gate);
   RUN_TEST(test_the_write_gate_waits_for_a_moving_list);
+  RUN_TEST(test_the_write_gate_waits_for_a_finger_on_the_glass);
   RUN_TEST(test_what_the_card_is_asked);
   RUN_TEST(test_a_tail_on_the_fatfs_card);
   RUN_TEST(test_a_remount_and_the_boots_scan);

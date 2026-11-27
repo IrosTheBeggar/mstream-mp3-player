@@ -75,8 +75,10 @@ public:
   // A change of mode (the menu, the console): queued (app/NvsLater).
   void saveRepeat(PlaybackController::Repeat r);
   // Saves what changed; call every loop pass (nothing while the queue is
-  // carried across a build: remapBegin()).
-  void loop(uint32_t nowMs);
+  // carried across a build: remapBegin()). `hold`: what holds the file's
+  // writes this pass (the loop's one rule for its own card writes:
+  // QueueSaver::Hold; main.cpp's loopWrites()).
+  void loop(uint32_t nowMs, QueueSaver::Hold hold = QueueSaver::Hold::None);
   // Everything now, synchronously (before a power-off: ENERGY.md item 4):
   // a write under way finished (or written again whole if the queue
   // changed since it began), an edit not yet written, the position, the

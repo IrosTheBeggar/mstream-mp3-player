@@ -71,6 +71,20 @@ struct QueueResume {
 //   reads 64 frames more, so at most one more write per pause, and the
 //   saved sample is the one the in-RAM resume would continue from.
 //
+// - The card's part of loop() (a write begun, its next lines, its commit)
+//   waits for the loop's one rule for its own card writes (lib/core
+//   PlayLog's WriteGate, as the play log's slots do: Hold). A write holds
+//   the loop that draws a moving list's frames and answers the finger, so
+//   it waits for a list to rest and a finger to lift, however long; a
+//   write under way stops between two passes and goes on after. And it
+//   waits for the audio's moments (a start's refill, the gapless window, a
+//   ring under half, an underrun), but only until the file is kMaxStaleMs
+//   behind the queue: a run of tracks shorter than those moments never
+//   leaves them, and the file must not wait for its end. (Until then the
+//   file was written 2 s after an edit whatever the list did: add an album,
+//   scroll on, and the write landed in the scroll.) The position and the
+//   resume point are NVS's, not the card's: they wait for nothing.
+//
 // flushNow() does all of it at once, for a power-off (ENERGY.md item 4): a
 // write under way is finished (or, if the queue changed since it began, a
 // snapshot's too, dropped and the queue written again whole), an edit not
@@ -123,6 +137,14 @@ public:
   // saved again (a paused output reads a few ms more as its fade ends),
   // unless its anchor changed.
   static constexpr uint32_t kResumeSlackMs = 250;
+
+  // What holds the card's part of a pass (the class comment): the loop's
+  // rule for its own card writes, as loop()'s caller reads it this pass.
+  enum class Hold : uint8_t {
+    None,    // nothing: the card may be written
+    Audio,   // a start's refill, the gapless window, the ring, an underrun: until the file is kMaxStaleMs behind
+    Screen,  // a list moves or a finger is on the glass: however long
+  };
 
   // What the player says each pass (PlaybackController::resumePoint()):
   // where the current entry would pick up after a boot; `have` false while
@@ -182,8 +204,11 @@ public:
   void noteTransport(const Transport& t) { transport_ = t; }
   const QueueResume& resume() const { return resume_; }
 
-  // Every loop pass.
-  void loop(uint32_t nowMs);
+  // Every loop pass. `hold`: what holds its card writes this pass.
+  void loop(uint32_t nowMs, Hold hold = Hold::None);
+  // The last loop()'s hold, if it held a write that was due or under way
+  // (None: nothing was, or nothing held it), for the status.
+  Hold held() const { return held_; }
   // Everything now (see above). True: what is saved is the queue as it is.
   bool flushNow(uint32_t nowMs);
   // A write under way dropped (the library is about to be rebuilt: its
@@ -228,6 +253,7 @@ private:
   };
 
   void noteChanges(uint32_t nowMs);
+  bool holds(Hold hold, uint32_t nowMs) const;
   // `snapshot`: the file kMaxStaleMs behind and the edits not settled: a
   // snapshot's write when the queue needs more than a pass (false, nothing
   // begun: no memory for one).
@@ -260,6 +286,7 @@ private:
   bool contentDirty_ = false;
   bool positionDirty_ = false;
   bool failedSinceEdit_ = false;
+  Hold held_ = Hold::None;      // held() (in the padding here: the saver is the firmware's QueueStore's)
   uint32_t contentChangedMs_ = 0;
   uint32_t dirtySinceMs_ = 0;   // the queue first differed from the file (or the write under way's snapshot)
   uint32_t positionChangedMs_ = 0;
