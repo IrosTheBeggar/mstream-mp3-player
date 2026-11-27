@@ -429,7 +429,8 @@ The rules that keep it deadlock- and glitch-free:
    the console's bytes, the Bluetooth events and the session, PlayGate,
    the sleep timer, `player.update()` (a natural end, a failure, a heard
    gapless join), the idle power-off, the power settings and a CPU
-   speed's restart, `audio.loop()`, the power lab.
+   speed's restart, **the loop's rule for its own card writes**
+   (`loopWrites()`: below), `audio.loop()`, the power lab.
 2. **`stepCardGuard()`:** what the SD wrapper's guard found at FatFs's
    remounts (a card pulled and put back, or another put in: METADATA.md
    3.8); the same card: the play log's `remounted()` first. Then
@@ -461,7 +462,7 @@ The rules that keep it deadlock- and glitch-free:
    position and the resume point (Library and queue, below). Then
    **`stepPlays()`**: the play log's look at the backend's position for
    the play under way (`app/PlayHistory`, Storage below), and, when the
-   pass's audio and list let it (lib/core `PlayLog`'s `WriteGate`) and the
+   loop's rule for its card writes lets it and the
    card isn't held, out of the slot or refusing writes (METADATA.md 3.10),
    a piece of the boot's scan of the log or one play's slot (`Outbox`: a
    play the card failed waits first in line for its next try, 5 s on or at
@@ -536,6 +537,54 @@ The rules that keep it deadlock- and glitch-free:
   fails. So Auto DJ never puts a library update off to the next boot
   (logged: `[dj] the library update's memory check: the join given back
   ...`).
+
+**One rule for the loop's own card writes** (2026-11-27). The loop task
+writes to the card itself in three places: a play's slot and the listening
+stats' saves (`app/PlayHistory`), the queue's file (`app/QueueStore`), and
+the Opus open cache (`Core2AudioBackend::saveOpusCache()`). A write holds
+the loop for as long as the card takes, and the loop draws a moving list's
+frames and answers the finger; the card's other reader is the decoder. So
+one gate (lib/core `PlayLog`'s `WriteGate`, which was the play log's own)
+is asked once a pass (main.cpp's `loopWrites()`, after the player's update
+so a join is taken first) and its word handed to all three:
+
+| Its word | Until | The play log, the stats | The queue's file | The Opus cache |
+|---|---|---|---|---|
+| a start | 2 s after a start or a join; a seek's start taken up | waits | waits, until the file is 30 s behind | waits |
+| the gapless window | the heard track's last 5 s, the decoder at its end | waits | the same | waits |
+| the ring | playing, the ring under half | waits | the same | waits |
+| an underrun | 5 s after one | waits | the same | waits |
+| a list moving | it rests, or the finger leaves the A-Z rail (`Ui::listMoving()`) | waits | waits, however long | waits |
+| a finger down | it lifts, or has rested still 15 s (`Input::touching()`) | waits | waits, however long | waits |
+
+The queue's file alone has a limit on the audio's reasons
+(`QueueSaver::Hold::Audio`): a run of tracks shorter than those moments
+(7 s) never leaves them, and the file must not wait for its end (the soak
+that gave it its 30 s rule, Library and queue below; host-tested with every
+pass held: a write at most every 37.4 s). A list or a finger holds it
+however long: a hand comes off the glass. A write under way stops between
+two passes, its temporary file open, and goes on at the pass that lets
+it. The position and the resume point are NVS's and wait for nothing
+(1-2 ms each); `flushNow()` (a power-off, the library update's fence, the
+guard's restart) takes no hold.
+
+Until then only the play log waited. `queue.txt` was written 2 s after an
+edit and the Opus cache 3 s after an open, whatever the list did: add an
+album, scroll on, and the write landed in the scroll. MEASURED on the
+owner's Core2 (its 39-track queue, an album of 4 added from the console,
+then two flings of the Artists list, nothing playing; a timer round
+`queueStore.loop()` in both builds, not kept): the save is two passes, 4-9
+ms (the temporary file opened, its lines) and 24-41 ms (the rest, its close
+and the rename). On main they came 2.0 s after the add, in the fling, whose
+frames were 31.0 ms apart at most (2 of 289 late); with the rule they came
+53 ms after the list rested, 6.5 s after the add, and the fling's frames
+were 15.4 ms apart at most, none of 286 late. Under a finger held 5 s on
+the Library's header: on main 2.0 s after the add, the finger down; with
+the rule at its lift. `q` says what holds a write (`file generation N (to
+write: held while a list moves or a finger is down)`). Not checked on the
+device: the audio's reasons for the queue's file (the gate is the one the
+play log's device rounds ran: METADATA.md, LISTENING-STATS.md) and the
+Opus cache's save (no Opus track was played).
 
 ### The loop task's stack
 
@@ -1591,8 +1640,10 @@ and how it ends (completed, skipped, stopped: `setPlays()`); the
 waits; the loop writes it when `WriteGate` lets it (not from 5 s before
 the heard track's end to 2 s after the next one's start, not during a
 seek or a start's refill, not with the ring under half, not within 5 s of
-an underrun, not while a list moves or a finger is on its A-Z rail, the
-write being on the loop that draws the list's frames): the file's size and
+an underrun, not while a list moves or a finger is on its A-Z rail or
+anywhere on the glass, the write being on the loop that draws the list's
+frames and answers the finger; the loop's one rule for its own card
+writes, "The loop's pass" above): the file's size and
 FAT time (`f_stat`), its start from the
 board's clock (`boardclock::at()`; 0 while unset), the seq in NVS
 ("plays"/"seq") first, then one append and its `f_sync`, rotating into
@@ -2788,7 +2839,11 @@ strings.
   before the queue). The file is rewritten 2 s after the
   last edit, 32 lines a loop pass (a 10,000-track queue is ~700 KB and never
   holds the loop), into `queue.tmp`, then renamed over `queue.txt`; an
-  edit while a write is under way drops that write. On a nearly full card
+  edit while a write is under way drops that write. Its passes wait for
+  the loop's rule for its own card writes ("The loop's pass", above;
+  `QueueSaver::Hold`): no pass of it while a list moves or a finger is on
+  the glass, and none in the audio's moments until the file is 30 s
+  behind. On a nearly full card
   `queue.tmp` takes the clusters the last save freed at once (the hole
   hint, METADATA.md 3.2.4). Before it, with one free cluster, two saves in
   a row read the whole FAT between them (on the host model, and on the
@@ -5082,6 +5137,14 @@ Queue, Dance and Output (with its Pair and About pages).
   finger: `uit160,260` clicks B, `uis160,200,160,264,80` is a swipe that
   ends there and presses nothing, and `uis160,265,160,100,120` is a swipe
   up from the strip that flings the list (`uid...` the same as a drag).
+  The scripted finger acts as a hand does: a drag that hasn't left the
+  tap's 12 px within half a second is a long press on what it landed on (a
+  row's sheet comes up, and the next touch lands on the sheet: on
+  2026-11-27 a 6 s drag of 160 px did that on the owner's Core2, and the
+  touch after it lifted on the sheet's Play). So on a list a session
+  flings (`uis`), holds a finger only where nothing acts (the Library's
+  own selected segment), reads `ui`'s overlays before each touch, and
+  starts with `z`.
   Every list motion logs `[ui] scroll: <ms>, <frames> (<fps>), draw mean/max
   (n over 35 ms), ring min, underruns +n, governor` when it settles, and
   under it its moves against the panel's scan: `[ui] scroll moves: N in

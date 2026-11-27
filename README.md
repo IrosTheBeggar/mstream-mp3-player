@@ -884,7 +884,8 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       the built-in ones
   QueueSaver          When the queue, its position and the resume point
                       (the second a paused track picks up at, and its
-                      anchor) are saved
+                      anchor) are saved: the file never while a list moves
+                      or a finger is on the glass
   TrackProgress, TrackSeek
                       A track's length (headers, read rate, a truncated
                       file's share); starting part of the way in: an MP3's
