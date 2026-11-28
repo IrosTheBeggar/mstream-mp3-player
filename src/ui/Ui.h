@@ -156,11 +156,11 @@ public:
   // the glance, not the page).
   bool setGlance(bool on);
   bool glancing() const { return glancing_; }
-  // The Pair screen's search runs (its 2 minutes at most; OutputPage):
+  // The Pair screen's search runs (its 2 minutes at most; PairPage):
   // main.cpp holds a lit screen lit for it (ScreenControl::Hold), so the
   // listener's taps on the list act instead of only waking a dim screen,
   // and the screen doesn't go off and stop the search.
-  bool pairSearching() const { return started_ && !suspended_ && outputPage_.pairSearching(); }
+  bool pairSearching() const { return started_ && !suspended_ && pairPage_.searching(); }
 
   // ---- events from the rest of the firmware ----
   void libraryChanged();       // the index was rebuilt (g0): the Library's ids are stale
@@ -615,6 +615,8 @@ private:
   // hub: statsview::shelfArg(); its push's ms).
   void statsPrint();
   void statsCommand(const char* a);
+  // The console's uiO<p|j|l|a|d>: a page of the Output tab pushed over its root.
+  void outputCommand(char which);
   // uiSx<n> (9.3, look only: S12): made-up view n on (1-9) or off (0).
   // Refused for the synthetic library (uil0 first) and, for a view that
   // writes a snapshot (1, 3, 4), with the Dance tab up (its block can't be
@@ -704,7 +706,13 @@ private:
   LibraryPage libraryPage_;
   QueuePage queuePage_;
   DancePage dancePage_;
+  // The Output tab's six pages: its root, and what its rows open.
   OutputPage outputPage_;
+  PairPage pairPage_;
+  AutoDjPage autoDjPage_;
+  LanguagePage languagePage_;
+  AboutPage aboutPage_;
+  DeviceInfoPage deviceInfoPage_;
   NowPlayingPage glance_;  // the glance's (Mode::Glance): never page_, never given an event
   Page* page_ = nullptr;
 

@@ -2,11 +2,12 @@
 // Copyright (C) 2026 IrosTheBeggar
 
 // The Output tab (the tab bar spec §6.6, mockups 19-21 and 23, with the
-// review's grafts; the page's shape is in Pages.h): where the music plays,
+// review's grafts; the pages' shapes are in Pages.h): where the music plays,
 // each output's volume, the Pair screen, the settings, the language, About
-// and its Device info. One page object for the tab's six kinds of page
-// (Output, Pair, Language, About, Device info, Auto DJ), each a list on
-// the hardware scroll.
+// and its Device info. Six pages, each a list on the hardware scroll, one
+// object each: what they share (OutputTabPage, and ui/OutputParts.h's
+// pieces) and the tab's root are here; Pair, Auto DJ, Language, and About
+// with its Device info have a file each.
 //
 // What the Bluetooth card shows and offers is OutputModel's (host-tested);
 // what its buttons do goes through the UiHost to BtSink. The rules it keeps:
@@ -17,7 +18,6 @@
 #include <cstdio>
 #include <cstring>
 
-#include "DeviceInfo.h"
 #include "IdlePolicy.h"
 #include "LibraryIndex.h"
 #include "PowerChoices.h"
@@ -27,6 +27,7 @@
 #include "ui/Fonts.h"
 #include "ui/Gfx.h"
 #include "ui/Icons.h"
+#include "ui/OutputParts.h"
 #include "ui/Pages.h"
 #include "ui/Theme.h"
 #include "ui/Ui.h"
@@ -34,48 +35,20 @@
 namespace ui {
 
 using uistr::S;
+using namespace outputparts;
 
 namespace {
 
-constexpr uint32_t kSpinMs = 125;   // the spinner: 8 steps a second
-constexpr uint32_t kScanPollMs = 250;
-constexpr uint32_t kAboutMs = 3000;
 // The speaker card's volume chip: its hit area around the chip (UiText's,
 // host-tested against a panel that reads right).
 constexpr int kSpeakerChipHitX = uitext::kSpeakerChipHitX;
 constexpr int kSpeakerChipHitEnd = uitext::kSpeakerChipHitEnd;
-
-void radio(M5Canvas& c, int cx, int cy, bool on, uint16_t acc, uint16_t bg) {
-  c.fillCircle(cx, cy, 10, bg);
-  c.drawCircle(cx, cy, 10, on ? acc : col::FAINT);
-  c.drawCircle(cx, cy, 9, on ? acc : col::FAINT);
-  if (on) c.fillCircle(cx, cy, 5, acc);
-}
-
-// A ring of 8 dots, one bright (the step): something is under way.
-void spinner(M5Canvas& c, int cx, int cy, uint8_t step, uint16_t colour) {
-  static const int8_t kDx[8] = {0, 6, 8, 6, 0, -6, -8, -6};
-  static const int8_t kDy[8] = {-8, -6, 0, 6, 8, 6, 0, -6};
-  for (int i = 0; i < 8; ++i) {
-    const int age = (step - i + 8) % 8;
-    const uint16_t ink = age == 0 ? colour : age < 3 ? col::SOFT : col::FAINT;
-    c.fillCircle(cx + kDx[i], cy + kDy[i], age == 0 ? 2 : 1, ink);
-  }
-}
 
 // A pairing under way (as the idle power-off's blocker): a restart for the
 // CPU speed would drop it.
 bool pairingUnderWay(const AppState& s) {
   return s.btLink.phase == BtLink::Phase::PairScan || s.btLink.phase == BtLink::Phase::Pairing ||
          s.btSession.pairingUnderWay();
-}
-
-// Four signal bars, `lit` of them in the ink.
-void bars(M5Canvas& c, int x, int bottom, int lit, uint16_t ink) {
-  for (int i = 0; i < 4; ++i) {
-    const int h = 4 + i * 3;
-    c.fillRect(x + i * 5, bottom - h, 3, h, i < lit ? ink : col::DIV);
-  }
 }
 
 uint16_t toneColour(BtTone t) {
@@ -103,12 +76,6 @@ void card(M5Canvas& c, int part, int right, uint16_t bg, bool outline, uint16_t 
   }
 }
 
-NavModel::PageRef page(PageKind kind) {
-  NavModel::PageRef p;
-  p.kind = static_cast<uint8_t>(kind);
-  return p;
-}
-
 // A setting's value (and the Library row's Rescan) in its pill at the row's
 // right, centred: Body, or Small when it doesn't fit (Russian's "Средняя").
 void valuePill(ListView::Row& r, int pillX, int pillW, const char* value, uint16_t ink, uint16_t pill) {
@@ -120,94 +87,140 @@ void valuePill(ListView::Row& r, int pillX, int pillW, const char* value, uint16
 
 }  // namespace
 
+// ---- what the tab's pages draw alike (ui/OutputParts.h) ----
+
+namespace outputparts {
+
+void radio(M5Canvas& c, int cx, int cy, bool on, uint16_t acc, uint16_t bg) {
+  c.fillCircle(cx, cy, 10, bg);
+  c.drawCircle(cx, cy, 10, on ? acc : col::FAINT);
+  c.drawCircle(cx, cy, 9, on ? acc : col::FAINT);
+  if (on) c.fillCircle(cx, cy, 5, acc);
+}
+
+void spinner(M5Canvas& c, int cx, int cy, uint8_t step, uint16_t colour) {
+  static const int8_t kDx[8] = {0, 6, 8, 6, 0, -6, -8, -6};
+  static const int8_t kDy[8] = {-8, -6, 0, 6, 8, 6, 0, -6};
+  for (int i = 0; i < 8; ++i) {
+    const int age = (step - i + 8) % 8;
+    const uint16_t ink = age == 0 ? colour : age < 3 ? col::SOFT : col::FAINT;
+    c.fillCircle(cx + kDx[i], cy + kDy[i], age == 0 ? 2 : 1, ink);
+  }
+}
+
+bool spinPatch(ListView& list, uint32_t row, int cx, int cy, uint8_t step, uint16_t colour, uint16_t bg) {
+  if (list.pressedRow() == static_cast<int32_t>(row)) return false;  // its press look: the row whole
+  constexpr int kR = 11;  // the ring (8 px) and its bright dot (2 px), with a margin
+  M5Canvas& c = gfx::strip();
+  c.fillRect(0, 0, 2 * kR, 2 * kR, bg);
+  spinner(c, kR, kR, step, colour);
+  return list.pushOnRow(row, c, 0, 0, 2 * kR, 2 * kR, cx - kR, cy - kR);
+}
+
+void bars(M5Canvas& c, int x, int bottom, int lit, uint16_t ink) {
+  for (int i = 0; i < 4; ++i) {
+    const int h = 4 + i * 3;
+    c.fillRect(x + i * 5, bottom - h, 3, h, i < lit ? ink : col::DIV);
+  }
+}
+
+NavModel::PageRef page(PageKind kind) {
+  NavModel::PageRef p;
+  p.kind = static_cast<uint8_t>(kind);
+  return p;
+}
+
+}  // namespace outputparts
+
+// ---- a page of the tab ----
+
+void OutputTabPage::show(NavModel::PageRef& ref, int32_t scrollPx) {
+  touchInList_ = false;
+  headerPressed_ = 0;
+  repaintHeader();
+  ui_.list().attach(this, &ref, scrollPx);
+}
+
+bool OutputTabPage::shown() const { return ui_.list().source() == this; }
+
+void OutputTabPage::leave() { ui_.list().detach(); }
+
+void OutputTabPage::repaint() {
+  repaintHeader();
+  ui_.repaintList();
+}
+
+// Its tab tapped again: the tab's other pages go back to its root (the Ui
+// pops them); at the root, to the top.
+void OutputTabPage::home() { ui_.list().scrollTo(0); }
+
+void OutputTabPage::repaintHeader() { ui_.drawHeader(header()); }
+
+uint16_t OutputTabPage::accent() { return accent::Output; }
+
+bool OutputTabPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
+  return ui_.list().update(nowMs, frameDue, wholeRows);
+}
+
+bool OutputTabPage::animating() const { return ui_.list().animating(); }
+
+void OutputTabPage::onEvent(const InputEvent& e) {
+  using T = InputEvent::Type;
+  if (e.type == T::Down) {
+    touchInList_ = e.y >= ListView::kTop;
+    if (!touchInList_) {
+      headerPressed_ = header().hit(e);
+    }
+  } else if (e.type == T::DragStart && e.fromStrip) {
+    touchInList_ = true;  // a swipe up from the strip: it scrolls the list
+  }
+  if (touchInList_) {
+    ui_.list().onEvent(e);
+    return;
+  }
+  if (e.type == T::Tap) {
+    const int hit = headerPressed_;
+    headerPressed_ = 0;
+    if (hit == 1 && kind() != PageKind::Output) {
+      ui_.tick();
+      ui_.back();
+    }
+  } else if (e.type == T::DragStart || e.type == T::Release || e.type == T::Cancel) {
+    headerPressed_ = 0;
+  }
+}
+
+void OutputTabPage::describe(char* buf, size_t size) const {
+  const AppState& s = ui_.state();
+  const BtCardView v = btCardView(s.btLink, s.btSession, s.btLost);
+  snprintf(buf, size, "Output (%s): %s, the card %s (link %s), volume %u%% (speaker %u%%, bluetooth %u%%)%s",
+           pageKindName(static_cast<uint8_t>(kind())), s.onBluetooth ? "bluetooth" : "speaker", btCardName(v.card),
+           btPhaseName(s.btLink.phase), static_cast<unsigned>(s.volume), static_cast<unsigned>(s.speakerVolume),
+           static_cast<unsigned>(s.btVolume), describeMore());
+}
+
+bool OutputTabPage::emptyState(EmptyState& e) {
+  (void)e;
+  return false;  // never empty
+}
+
+// ---- the tab's root ----
+
 const char* OutputPage::btName() const {
   const AppState& s = ui_.state();
   return s.btName[0] ? s.btName : "";
 }
 
-// ---- the page ----
-
 void OutputPage::enter(NavModel::PageRef& ref) {
-  kind_ = static_cast<PageKind>(ref.kind);
-  ref_ = &ref;
-  firstBoot_ = kind_ == PageKind::Language && ref.id == kFirstBootPicker;
-  touchInList_ = false;
-  headerPressed_ = 0;
   forget_.reset();
-  picked_ = -1;
-  searchEnded_ = false;
   ask_ = Ask::None;
   drawnBt_ = btSig();
   drawnSpeaker_ = speakerSig();
   drawnHaptics_ = ui_.input().hapticsOn();
   drawnCalibrated_ = ui_.input().calibrated();
   drawnScreen_ = screenSig(ui_.state());
-  drawnAutoDj_ = autoDjSig(ui_.state().autoDj);
-  if (kind_ == PageKind::Pair) {
-    scan_.clear();
-    scanVersion_ = 0;
-    nextScanMs_ = 0;
-    ui_.host().btPairScan(true);
-    search_.start(millis());
-    Serial.println("[ui] output: pair screen (scanning)");
-  }
-  if (kind_ == PageKind::About) {
-    ui_.host().about(about_);
-    nextAboutMs_ = millis() + kAboutMs;
-  }
-  if (kind_ == PageKind::DeviceInfo) {
-    ui_.host().deviceInfo(info_);
-    nextAboutMs_ = millis() + kAboutMs;
-  }
-  repaintHeader();
-  // The languages open at the one in use (with the one before it above).
-  const int lang = static_cast<int>(uistr::lang());
-  ui_.list().attach(this, &ref, kind_ == PageKind::Language && lang > 0 ? (lang - 1) * ListLayout::kPitch : 0);
-}
-
-void OutputPage::leave() {
-  if (kind_ == PageKind::Pair) ui_.host().btPairScan(false);
-  search_.stop();
-  ui_.list().detach();
-}
-
-void OutputPage::repaint() {
-  repaintHeader();
-  ui_.repaintList();
-}
-
-// Its tab tapped again: Pair and About go back to the Output list (the Ui
-// pops them); at the root, to the top.
-void OutputPage::home() { ui_.list().scrollTo(0); }
-
-// The screen went off: the Pair screen's scan (an inquiry, back to back)
-// stops, as after its 2 minutes; the row offers "Search again" on the wake.
-// A pairing under way keeps the screen lit, so it isn't one, and the
-// search itself holds a lit screen lit (pairSearching(): main.cpp's
-// ScreenControl::Hold): what turns a held screen off still does (the PWR
-// key, the sleep timer's pause, the console's Ps0). Before, it dimmed and
-// went off as ever: the dim screen swallowed the listener's taps as wakes,
-// and the screen going off stopped the search (2026-10-04: three tries to
-// pair).
-void OutputPage::screenOff() {
-  if (kind_ != PageKind::Pair || !search_.searching()) return;
-  if (ui_.state().btLink.phase == BtLink::Phase::Pairing) return;
-  search_.stop();
-  searchEnded_ = true;  // (the wake pushes the row as it was: "Searching", its spinner stopped)
-  ui_.host().btPairScanPause();  // (the page stays: nothing else is tried until it closes)
-  Serial.println("[ui] output: pair screen: the search stopped (the screen went off; tap Search again)");
-}
-
-// The Pair screen's 2 minutes, checked every pass: a dialog over the page
-// (the headphones lost, "Couldn't reach") stops its update(), not the
-// inquiry, which costs power while it runs. Stopped, and the status row
-// offers to search again (drawn by update() once the page shows). The
-// list stays, and nothing else is tried until the page closes.
-void OutputPage::tick(uint32_t nowMs) {
-  if (kind_ != PageKind::Pair || !search_.due(nowMs)) return;
-  ui_.host().btPairScanPause();
-  searchEnded_ = true;
-  Serial.println("[ui] output: pair screen: the search stopped after 2 min (tap Search again)");
+  drawnAutoDj_ = AutoDjPage::autoDjSig(ui_.state().autoDj);
+  show(ref);
 }
 
 Header OutputPage::header() const {
@@ -216,45 +229,10 @@ Header OutputPage::header() const {
   // (a title of 243 px, as Spanish's "Información del dispositivo" was,
   // leaves "este Core2" 31 px).
   h.subWhole = true;
-  switch (kind_) {
-    case PageKind::Pair:
-      h.back = true;
-      h.title = tr(S::pair_title);
-      trnf(headerSub_, sizeof(headerSub_), S::pair_found, scan_.count(), scan_.count());
-      h.sub = scan_.count() ? headerSub_ : "";
-      break;
-    case PageKind::About:
-      h.back = true;
-      h.title = tr(S::about_title);
-      h.sub = tr(S::about_subtitle);
-      break;
-    case PageKind::DeviceInfo:
-      h.back = true;
-      h.title = tr(S::about_device_info);
-      h.sub = tr(S::device_info_subtitle);
-      break;
-    case PageKind::AutoDj:
-      h.back = true;
-      h.title = tr(S::output_autodj);
-      h.sub = tr(S::autodj_subtitle);
-      break;
-    case PageKind::Language:
-      // The first boot's: nothing behind it, and where it is found later.
-      h.back = !firstBoot_;
-      h.title = tr(S::language_title);
-      h.sub = tr(firstBoot_ ? S::language_first_boot_sub : S::language_subtitle);
-      break;
-    default:
-      h.title = tr(S::output_title);
-      h.sub = tr(S::output_subtitle);
-      break;
-  }
+  h.title = tr(S::output_title);
+  h.sub = tr(S::output_subtitle);
   return h;
 }
-
-void OutputPage::repaintHeader() { ui_.drawHeader(header()); }
-
-uint16_t OutputPage::accent() { return accent::Output; }
 
 uint32_t OutputPage::btSig() const {
   const AppState& s = ui_.state();
@@ -279,217 +257,71 @@ uint32_t OutputPage::speakerSig() const {
 bool OutputPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   ListView& list = ui_.list();
   const bool still = !list.animating();
-  if (kind_ == PageKind::Output) {
-    // A card changed: its rows again (in place: nothing moves).
-    if (forget_.expired(nowMs)) forget_.reset();  // its "Tap again" goes
-    const uint32_t bt = btSig();
-    if (bt != drawnBt_ && still) {
-      drawnBt_ = bt;
+  // A card changed: its rows again (in place: nothing moves).
+  if (forget_.expired(nowMs)) forget_.reset();  // its "Tap again" goes
+  const uint32_t bt = btSig();
+  if (bt != drawnBt_ && still) {
+    drawnBt_ = bt;
+    list.refreshRow(BtTop);
+    list.refreshRow(BtButtons);
+  }
+  const uint32_t sp = speakerSig();
+  if (sp != drawnSpeaker_ && still) {
+    drawnSpeaker_ = sp;
+    list.refreshRow(SpeakerRow);
+  }
+  if (ui_.input().hapticsOn() != drawnHaptics_ && still) {
+    drawnHaptics_ = ui_.input().hapticsOn();
+    list.refreshRow(Haptics);
+  }
+  // (Removed here, or from the console: ad.)
+  if (ui_.input().calibrated() != drawnCalibrated_ && still) {
+    drawnCalibrated_ = ui_.input().calibrated();
+    list.refreshRow(Calibrate);
+  }
+  const uint32_t lib = librarySig(ui_.state());
+  if (lib != drawnLibrary_ && still) {
+    drawnLibrary_ = lib;
+    list.refreshRow(LibraryRow);
+  }
+  const uint32_t dj = AutoDjPage::autoDjSig(ui_.state().autoDj);
+  if (dj != drawnAutoDj_ && still) {
+    drawnAutoDj_ = dj;
+    list.refreshRow(AutoDjRow);
+  }
+  const uint32_t sc = screenSig(ui_.state());
+  if (sc != drawnScreen_ && still) {
+    // Only the rows whose value changed (screenSig()'s fields): a tap on
+    // one cycles it, and the group's four other rows on screen drew again
+    // with it (49 ms a tap, MEASURED).
+    const uint32_t changed = sc ^ drawnScreen_;
+    drawnScreen_ = sc;
+    if (changed & 0x0000F0u) list.refreshRow(ScreenOff);
+    if (changed & 0x00000Fu) list.refreshRow(Brightness);
+    if (changed & 0x0C0000u) list.refreshRow(ScreenTouch);
+    if (changed & 0x000F00u) list.refreshRow(IdleOff);
+    if (changed & 0x038000u) list.refreshRow(CpuSpeed);
+    if (changed & 0x007000u) list.refreshRow(BtPower);
+  }
+  // The spinner, while something is under way.
+  const AppState& s = ui_.state();
+  const BtCardView v = btCardView(s.btLink, s.btSession, s.btLost);
+  if (v.spinner && still && static_cast<int32_t>(nowMs - nextSpinMs_) >= 0) {
+    nextSpinMs_ = nowMs + kSpinMs;
+    spin_ = static_cast<uint8_t>((spin_ + 1) % 8);
+    // (drawBtTop() draws it at (290, 21) on the card's own colour.)
+    if (!spinPatch(list, BtTop, 290, 21, spin_, toneColour(v.tone), s.onBluetooth ? col::ROW_SEL : col::CARD)) {
       list.refreshRow(BtTop);
-      list.refreshRow(BtButtons);
-    }
-    const uint32_t sp = speakerSig();
-    if (sp != drawnSpeaker_ && still) {
-      drawnSpeaker_ = sp;
-      list.refreshRow(SpeakerRow);
-    }
-    if (ui_.input().hapticsOn() != drawnHaptics_ && still) {
-      drawnHaptics_ = ui_.input().hapticsOn();
-      list.refreshRow(Haptics);
-    }
-    // (Removed here, or from the console: ad.)
-    if (ui_.input().calibrated() != drawnCalibrated_ && still) {
-      drawnCalibrated_ = ui_.input().calibrated();
-      list.refreshRow(Calibrate);
-    }
-    const uint32_t lib = librarySig(ui_.state());
-    if (lib != drawnLibrary_ && still) {
-      drawnLibrary_ = lib;
-      list.refreshRow(LibraryRow);
-    }
-    const uint32_t dj = autoDjSig(ui_.state().autoDj);
-    if (dj != drawnAutoDj_ && still) {
-      drawnAutoDj_ = dj;
-      list.refreshRow(AutoDjRow);
-    }
-    const uint32_t sc = screenSig(ui_.state());
-    if (sc != drawnScreen_ && still) {
-      // Only the rows whose value changed (screenSig()'s fields): a tap on
-      // one cycles it, and the group's four other rows on screen drew again
-      // with it (49 ms a tap, MEASURED).
-      const uint32_t changed = sc ^ drawnScreen_;
-      drawnScreen_ = sc;
-      if (changed & 0x0000F0u) list.refreshRow(ScreenOff);
-      if (changed & 0x00000Fu) list.refreshRow(Brightness);
-      if (changed & 0x0C0000u) list.refreshRow(ScreenTouch);
-      if (changed & 0x000F00u) list.refreshRow(IdleOff);
-      if (changed & 0x038000u) list.refreshRow(CpuSpeed);
-      if (changed & 0x007000u) list.refreshRow(BtPower);
-    }
-    // The spinner, while something is under way.
-    const AppState& s = ui_.state();
-    const BtCardView v = btCardView(s.btLink, s.btSession, s.btLost);
-    if (v.spinner && still && static_cast<int32_t>(nowMs - nextSpinMs_) >= 0) {
-      nextSpinMs_ = nowMs + kSpinMs;
-      spin_ = static_cast<uint8_t>((spin_ + 1) % 8);
-      // (drawBtTop() draws it at (290, 21) on the card's own colour.)
-      if (!spinPatch(BtTop, 290, 21, toneColour(v.tone), s.onBluetooth ? col::ROW_SEL : col::CARD)) {
-        list.refreshRow(BtTop);
-      }
-    }
-  } else if (kind_ == PageKind::Pair) {
-    if (searchEnded_) {
-      searchEnded_ = false;
-      list.refreshRow(0);  // "Search again" (tick() or screenOff() stopped it)
-    }
-    if (static_cast<int32_t>(nowMs - nextScanMs_) >= 0) {
-      nextScanMs_ = nowMs + kScanPollMs;
-      // Devices came (or their signal changed): the list again, once it's
-      // still (a later poll catches up).
-      if (still) {
-        const uint32_t v = ui_.host().btScan(scan_);
-        if (v != scanVersion_) {
-          scanVersion_ = v;
-          list.reload();
-          repaintHeader();
-        }
-      }
-    }
-    if (still && search_.searching() && static_cast<int32_t>(nowMs - nextSpinMs_) >= 0) {
-      nextSpinMs_ = nowMs + kSpinMs;
-      spin_ = static_cast<uint8_t>((spin_ + 1) % 8);
-      if (!spinPatch(0, 24, 21, col::CYAN, col::BG)) list.refreshRow(0);  // (its row draws it at (24, 21))
-    }
-  } else if (kind_ == PageKind::AutoDj) {
-    // A setting, the index's state, a hold: the rows in place (a tap's
-    // change shows here, from the next pass's snapshot).
-    const uint32_t dj = autoDjSig(ui_.state().autoDj);
-    if (dj != drawnAutoDj_ && still) {
-      drawnAutoDj_ = dj;
-      for (uint32_t i = 0; i < autodjview::kPageRows; ++i) list.refreshRow(i);
-    }
-  } else if (kind_ == PageKind::About) {
-    if (static_cast<int32_t>(nowMs - nextAboutMs_) >= 0 && still) {
-      nextAboutMs_ = nowMs + kAboutMs;
-      ui_.host().about(about_);
-      list.refreshRow(Battery);
-      list.refreshRow(Memory);
-    }
-  } else if (kind_ == PageKind::DeviceInfo) {
-    // The rows that can change (the battery, memory, the uptime...), in
-    // place; refreshRow() draws only the ones on screen.
-    if (static_cast<int32_t>(nowMs - nextAboutMs_) >= 0 && still) {
-      nextAboutMs_ = nowMs + kAboutMs;
-      ui_.host().deviceInfo(info_);
-      for (int i = 0; i < deviceinfo::kItems; ++i) {
-        if (deviceinfo::changes(static_cast<deviceinfo::Item>(i))) list.refreshRow(static_cast<uint32_t>(i));
-      }
     }
   }
   return list.update(nowMs, frameDue, wholeRows);
 }
 
-bool OutputPage::animating() const { return ui_.list().animating(); }
-
-void OutputPage::onEvent(const InputEvent& e) {
-  using T = InputEvent::Type;
-  if (e.type == T::Down) {
-    touchInList_ = e.y >= ListView::kTop;
-    if (!touchInList_) {
-      headerPressed_ = header().hit(e);
-    }
-  } else if (e.type == T::DragStart && e.fromStrip) {
-    touchInList_ = true;  // a swipe up from the strip: it scrolls the list
-  }
-  if (touchInList_) {
-    ui_.list().onEvent(e);
-    return;
-  }
-  if (e.type == T::Tap) {
-    const int hit = headerPressed_;
-    headerPressed_ = 0;
-    if (hit == 1 && kind_ != PageKind::Output) {
-      ui_.tick();
-      ui_.back();
-    }
-  } else if (e.type == T::DragStart || e.type == T::Release || e.type == T::Cancel) {
-    headerPressed_ = 0;
-  }
-}
-
-void OutputPage::describe(char* buf, size_t size) const {
-  const AppState& s = ui_.state();
-  if (kind_ == PageKind::AutoDj) {
-    const autodjview::State& d = s.autoDj;
-    char moods[64];
-    if (!d.moodData) {
-      snprintf(moods, sizeof(moods), "no mood data (Smart filters dim, 0x%03X kept)", static_cast<unsigned>(d.moods));
-    } else if (!d.moodOn) {
-      snprintf(moods, sizeof(moods), "no mood filter (0x%03X)", static_cast<unsigned>(d.moods));
-    } else {
-      snprintf(moods, sizeof(moods), "mood filter 0x%03X, %lu of %lu tracks fit", static_cast<unsigned>(d.moods),
-               static_cast<unsigned long>(d.fit), static_cast<unsigned long>(d.fitOf));
-    }
-    snprintf(buf, size, "Output (AutoDj): Auto DJ %s, %s, %u %% (shown %u %%), BPM %s, key %s, %s; the index %s%s",
-             tr(autodjview::rowText(autodjview::rowState(d))),
-             d.mode == autodj::Mode::Locked ? "Stay on seed" : "Follow the vibe", static_cast<unsigned>(d.floorPct),
-             static_cast<unsigned>(d.floorShown), d.matchTempo ? "on" : "off", d.matchKey ? "on" : "off", moods,
-             autodjview::indexName(d.index), d.usable ? " (usable)" : " (not usable: the settings dim)");
-    return;
-  }
-  const BtCardView v = btCardView(s.btLink, s.btSession, s.btLost);
-  snprintf(buf, size, "Output (%s): %s, the card %s (link %s), volume %u%% (speaker %u%%, bluetooth %u%%)%s",
-           pageKindName(static_cast<uint8_t>(kind_)), s.onBluetooth ? "bluetooth" : "speaker", btCardName(v.card),
-           btPhaseName(s.btLink.phase), static_cast<unsigned>(s.volume), static_cast<unsigned>(s.speakerVolume),
-           static_cast<unsigned>(s.btVolume), kind_ == PageKind::Pair ? (!search_.searching() ? ", search stopped" : scan_.count() ? ", devices found" : ", scanning") : "");
-}
-
 // ---- the list ----
 
-uint32_t OutputPage::rows() {
-  switch (kind_) {
-    case PageKind::Pair: return 1 + static_cast<uint32_t>(scan_.count());
-    case PageKind::About: return kAboutRows;
-    case PageKind::DeviceInfo: return deviceinfo::kItems;
-    case PageKind::Language: return uistr::kLangs;
-    case PageKind::AutoDj: return autodjview::kPageRows;
-    default: return kRootRows;
-  }
-}
-
-bool OutputPage::emptyState(EmptyState& e) {
-  (void)e;
-  return false;  // never empty
-}
-
-// Auto DJ's status row is no control: no press, no tick.
-bool OutputPage::pressable(uint32_t row) { return !(kind_ == PageKind::AutoDj && row == autodjview::StatusRow); }
+uint32_t OutputPage::rows() { return kRootRows; }
 
 void OutputPage::drawRow(ListView::Row& r) {
-  if (kind_ == PageKind::Pair) {
-    if (r.row == 0) {
-      drawPairStatus(r);
-    } else if (static_cast<int>(r.row) - 1 < scan_.count()) {
-      drawDevice(r, scan_.at(static_cast<int>(r.row) - 1));
-    }
-    return;
-  }
-  if (kind_ == PageKind::About) {
-    drawAbout(r);
-    return;
-  }
-  if (kind_ == PageKind::DeviceInfo) {
-    drawDeviceInfo(r);
-    return;
-  }
-  if (kind_ == PageKind::Language) {
-    drawLanguage(r);
-    return;
-  }
-  if (kind_ == PageKind::AutoDj) {
-    drawAutoDj(r);
-    return;
-  }
   const AppState& s = ui_.state();
   switch (static_cast<RootRow>(r.row)) {
     case BtTop: drawBtTop(r); break;
@@ -559,18 +391,6 @@ void OutputPage::drawLanguageRow(ListView::Row& r) {
   const char* title = tr(S::settings_language);
   const char* sub = uistr::autonym(uistr::lang());
   ListView::lines(r, x, right, title, strlen(title), sub, strlen(sub), col::TXT);
-}
-
-// A language on its page: its name in itself, Bold with the radio on for
-// the one in use (UiText's kLangRowX and kLangRowW, measured by
-// test_ui_strings).
-void OutputPage::drawLanguage(ListView::Row& r) {
-  if (r.row >= uistr::kLangs) return;
-  const auto l = static_cast<uistr::Lang>(r.row);
-  const bool on = l == uistr::lang();
-  Fonts::instance().draw(r.c, on ? Font::Bold : Font::Body, uistr::autonym(l), r.x + uitext::kLangRowX, 21,
-                         uitext::kLangRowW, col::TXT, r.bg);
-  radio(r.c, r.right - 22, 21, on, accent::Output, r.bg);
 }
 
 // The Library row (docs/METADATA.md 3.3.6): "Library: 19,410 tracks", where
@@ -795,16 +615,6 @@ void OutputPage::drawBtTop(ListView::Row& r) {
   }
 }
 
-bool OutputPage::spinPatch(uint32_t row, int cx, int cy, uint16_t colour, uint16_t bg) {
-  ListView& list = ui_.list();
-  if (list.pressedRow() == static_cast<int32_t>(row)) return false;  // its press look: the row whole
-  constexpr int kR = 11;  // the ring (8 px) and its bright dot (2 px), with a margin
-  M5Canvas& c = gfx::strip();
-  c.fillRect(0, 0, 2 * kR, 2 * kR, bg);
-  spinner(c, kR, kR, spin_, colour);
-  return list.pushOnRow(row, c, 0, 0, 2 * kR, 2 * kR, cx - kR, cy - kR);
-}
-
 // (uitext has the boxes: test_ui_library checks every label fits its box.)
 int OutputPage::buttonBoxes(const BtCardView& v, int* x, int* w) const {
   using namespace uitext;
@@ -921,399 +731,9 @@ void OutputPage::drawSpeaker(ListView::Row& r) {
   radio(r.c, 290, 21, active, accent::Output, bg);
 }
 
-void OutputPage::drawPairStatus(ListView::Row& r) {
-  Fonts& f = Fonts::instance();
-  const AppState& s = ui_.state();
-  r.c.fillSprite(col::BG);
-  const bool pairing = s.btLink.phase == BtLink::Phase::Pairing;
-  if (!pairing && !search_.searching()) {
-    // Stopped after its 2 minutes (or the screen went off): a tap on this
-    // row searches again.
-    icons::drawCentred(r.c, icons::kPlus, 24, 21, accent::Output);
-    f.draw(r.c, Font::Bold, tr(S::pair_search_again), 48, 13, kW - 60, accent::Output, col::BG);
-    f.draw(r.c, Font::Small, tr(S::pair_search_stopped), 48, 31, uitext::kPairHintW, col::DIM, col::BG);
-    return;
-  }
-  spinner(r.c, 24, 21, spin_, col::CYAN);
-  f.draw(r.c, Font::Bold, tr(pairing ? S::pair_pairing : S::pair_searching), 48, 13, kW - 60, col::TXT, col::BG);
-  f.draw(r.c, Font::Small, tr(S::pair_hint), 48, 31, uitext::kPairHintW, col::DIM, col::BG);
-}
-
-void OutputPage::drawDevice(ListView::Row& r, const BtDevice& d) {
-  const icons::Icon& icon = d.kind == BtDevice::Kind::Speaker ? icons::kSpeaker : icons::kHeadphones;
-  const int x = ListView::icon(r, icon, col::SOFT);
-  bars(r.c, r.right - 30, 30, BtScanList::bars(d.rssi), col::SOFT);
-  char name[64];
-  if (d.name[0]) {
-    snprintf(name, sizeof(name), "%s", d.name);
-  } else {
-    char addr[12];
-    snprintf(addr, sizeof(addr), "%02X:%02X:%02X", d.addr[3], d.addr[4], d.addr[5]);
-    trf(name, sizeof(name), S::pair_unnamed, addr);
-  }
-  const char* kind = BtScanList::kindName(d.kind);
-  ListView::lines(r, x, r.right - 40, name, strlen(name), kind, strlen(kind), col::TXT);
-}
-
-void OutputPage::drawAbout(ListView::Row& r) {
-  const AppState& s = ui_.state();
-  char value[128] = "";
-  char labelText[96];
-  // The library's counts: the line, or its short form where it doesn't fit.
-  char tracks[40] = "", albums[40] = "";
-  bool library = false;
-  const char* label = "";
-  const icons::Icon* icon = &icons::kInfo;
-  switch (static_cast<AboutItem>(r.row)) {
-    case Battery:
-      label = tr(S::about_battery);
-      if (s.charging) {
-        char pct[16];
-        trf(pct, sizeof(pct), S::format_percent, s.battery);
-        trf(value, sizeof(value), S::about_battery_charging, pct);
-      } else {
-        trf(value, sizeof(value), S::format_percent, s.battery);
-      }
-      break;
-    case Storage:
-      label = tr(S::about_storage);
-      snprintf(value, sizeof(value), "%s", about_.storage);
-      icon = &icons::kSdCard;
-      break;
-    case LibraryInfo: {
-      label = tr(S::about_library);
-      const LibraryIndex* i = ui_.library().index();
-      if (i && i->ready()) {
-        char artists[40];
-        trnf(tracks, sizeof(tracks), S::library_tracks_n, i->trackCount(), i->trackCount());
-        trnf(artists, sizeof(artists), S::library_artists_n, i->artistCount(), i->artistCount());
-        trnf(albums, sizeof(albums), S::library_albums_n, i->albumCount(), i->albumCount());
-        trf(value, sizeof(value), S::about_library_value, tracks, artists, albums);
-        library = true;
-      } else {
-        trf(value, sizeof(value), S::about_no_music);
-      }
-      icon = &icons::kLibrary;
-      break;
-    }
-    case Headphones:
-      label = tr(S::about_headphones);
-      snprintf(value, sizeof(value), "%s", about_.bluetooth);
-      icon = &icons::kHeadphones;
-      break;
-    case PowerInfo:
-      label = tr(S::about_power);
-      snprintf(value, sizeof(value), "%s", about_.power);
-      break;
-    case Memory:
-      label = tr(S::about_memory);
-      trf(value, sizeof(value), S::about_memory_value, about_.ramFree / 1024, about_.ramMin / 1024,
-          uistr::decimal(about_.psramFree / (1024.0f * 1024.0f), 1));
-      break;
-    case Version:
-      trf(labelText, sizeof(labelText), S::about_version_label, about_.built, about_.elf);
-      label = labelText;
-      snprintf(value, sizeof(value), "%s", about_.version);
-      break;
-    case LicenceInfo:
-      label = tr(S::about_licence_label);
-      trf(value, sizeof(value), S::about_licence);
-      break;
-    case SourceInfo:
-      label = tr(S::about_source_label);
-      snprintf(value, sizeof(value), "%s", uitext::kAboutSourceRepo);
-      break;
-    case DeviceInfoRow: {
-      // A page of its own (what the boot screen used to list).
-      const int x = ListView::icon(r, icons::kInfo, col::SOFT);
-      const int right = ListView::chevron(r);
-      const char* t = tr(S::about_device_info);
-      const char* sub = tr(S::about_device_info_sub);
-      ListView::lines(r, x, right, t, strlen(t), sub, strlen(sub), col::TXT);
-      return;
-    }
-    case Tips: {
-      const int x = ListView::icon(r, icons::kInfo, accent::Output);
-      const char* t = tr(S::about_tips);
-      const char* sub = tr(S::about_tips_sub);
-      ListView::lines(r, x, r.right - 8, t, strlen(t), sub, strlen(sub), accent::Output);
-      return;
-    }
-    default: return;
-  }
-  // The label small over its value (small too when it's long: "10000
-  // tracks, 600 artists, 1500 albums"; longer still, the library's tracks
-  // and albums: "99,999 tracks, 1500 albums").
-  Fonts& f = Fonts::instance();
-  const int x = ListView::icon(r, *icon, col::DIM);
-  const int room = r.right - 8 - x;
-  if (library && f.width(Font::Small, value) > room) {
-    trf(value, sizeof(value), S::about_library_value_short, tracks, albums);
-  }
-  f.draw(r.c, Font::Small, label, x, 12, room, col::DIM, r.bg);
-  f.draw(r.c, f.fitting(Font::Body, value, room), value, x, 30, room, col::TXT, r.bg);
-}
-
-// A Device info row: its label (Small) over its value (Body, or Small when
-// it's long: "cc13597, 2026-10-09, ELF 1a2b3c4d"), no icon: the values get
-// the width (UiText's kDeviceInfoX and kDeviceInfoW, measured by
-// test_ui_library).
-void OutputPage::drawDeviceInfo(ListView::Row& r) {
-  if (r.row >= static_cast<uint32_t>(deviceinfo::kItems)) return;
-  const auto item = static_cast<deviceinfo::Item>(r.row);
-  char value[128];
-  deviceinfo::value(item, info_, value, sizeof(value));
-  Fonts& f = Fonts::instance();
-  const int x = r.x + uitext::kDeviceInfoX;
-  const int room = r.right - 8 - x;
-  f.draw(r.c, Font::Small, deviceinfo::label(item), x, 12, room, col::DIM, r.bg);
-  f.draw(r.c, f.width(Font::Body, value) <= room ? Font::Body : Font::Small, value, x, 30, room, col::TXT, r.bg);
-}
-
-// ---- Output > Auto DJ ----
-
-uint32_t OutputPage::autoDjSig(const autodjview::State& d) {
-  uint32_t h = 2166136261u;
-  const uint32_t flags = static_cast<uint32_t>(d.on) | static_cast<uint32_t>(d.matchTempo) << 1 |
-                         static_cast<uint32_t>(d.matchKey) << 2 | static_cast<uint32_t>(d.usable) << 3 |
-                         static_cast<uint32_t>(d.mode) << 4 | static_cast<uint32_t>(d.hold) << 6 |
-                         static_cast<uint32_t>(d.index) << 9 | static_cast<uint32_t>(d.floorPct) << 16 |
-                         static_cast<uint32_t>(d.floorShown) << 24;
-  // The mood filter: Smart filters' value and dimness, the status row's count.
-  const uint32_t moods = static_cast<uint32_t>(d.moods) | static_cast<uint32_t>(d.moodData) << 16 |
-                         static_cast<uint32_t>(d.moodOn) << 17 | static_cast<uint32_t>(d.moodPct) << 24;
-  for (uint32_t v : {flags, d.rows, d.mapped, d.tracks, static_cast<uint32_t>(d.bpmPct) << 8 | d.keyPct, moods, d.fit,
-                     d.fitOf}) {
-    h = (h ^ v) * 16777619u;
-  }
-  // (The language: everything is drawn again when it changes.)
-  return h;
-}
-
-void OutputPage::drawAutoDj(ListView::Row& r) {
-  namespace dv = autodjview;
-  using namespace uitext;
-  const dv::State& d = ui_.state().autoDj;
-  if (r.row >= dv::kPageRows) return;
-  const auto row = static_cast<dv::PageRow>(r.row);
-  const bool live = dv::rowLive(row, d);
-  const char* needs = tr(S::autodj_needs_index);
-  switch (row) {
-    case dv::OnRow: drawAutoDjSwitch(r, tr(S::output_autodj), tr(S::autodj_on_sub), d.on, true); break;
-    case dv::AnchorRow:
-      drawAutoDjValue(r, tr(S::autodj_anchor), tr(dv::modeText(d.mode)), live ? tr(dv::anchorHint(d.mode)) : needs,
-                      live);
-      break;
-    case dv::StrictRow: {
-      char value[48];
-      dv::strictnessText(d.floorShown, value, sizeof(value));
-      drawAutoDjValue(r, tr(S::autodj_strictness), value, live ? tr(S::autodj_strictness_sub) : needs, live);
-      break;
-    }
-    case dv::FilterRow: {
-      // "Any", or what is set (beside the title when it fits whole, else on
-      // the second line in the hint's place, cut to it: frames dj-two,
-      // dj-many); dim with no mood data, "No mood data" over the hint, all
-      // of it FAINT (frame dj-nodata: the hint isn't why).
-      char value[filtergrid::kSummaryBytes];
-      dv::filterValue(d, value, sizeof(value));
-      drawAutoDjValue(r, tr(S::mood_smart_filters), value, tr(S::autodj_smart_sub), live, live ? col::DIM : col::FAINT);
-      break;
-    }
-    case dv::BpmRow: drawAutoDjSwitch(r, tr(S::autodj_bpm), live ? tr(S::autodj_bpm_sub) : needs, d.matchTempo, live); break;
-    case dv::KeyRow:
-      drawAutoDjSwitch(r, tr(S::autodj_harmonic), live ? tr(S::autodj_harmonic_sub) : needs, d.matchKey, live);
-      break;
-    case dv::StatusRow: {
-      // Two lines of Small, no control: why it waits over the index, or how
-      // many tracks fit the mood filter over the coverage, or the index's
-      // two; the first amber when paused, when nothing fits or 50 or fewer
-      // (statusAmber(): frames dj-waiting, dj-few).
-      Fonts& f = Fonts::instance();
-      char a[96], b[96];
-      dv::statusLines(d, a, sizeof(a), b, sizeof(b));
-      const int x = r.x + kAutoDjX;
-      const uint16_t ink = dv::statusAmber(d) ? col::AMBER : col::SOFT;
-      if (!b[0]) {
-        f.draw(r.c, Font::Small, a, x, 21, kAutoDjLineW, ink, r.bg);
-        break;
-      }
-      f.draw(r.c, Font::Small, a, x, 12, kAutoDjLineW, ink, r.bg);
-      f.draw(r.c, Font::Small, b, x, 30, kAutoDjLineW, col::DIM, r.bg);
-      break;
-    }
-    default: break;
-  }
-}
-
-// A switch row: the title over its line up to the switch (Haptics'), the
-// switch at the right; dim without the index it needs.
-void OutputPage::drawAutoDjSwitch(ListView::Row& r, const char* title, const char* sub, bool on, bool live) {
-  const int x = r.x + uitext::kAutoDjX;
-  ListView::lines(r, x, x + uitext::kAutoDjSwitchW, title, strlen(title), sub, strlen(sub), live ? col::TXT : col::FAINT);
-  const int sx = r.right - 58;
-  const uint16_t track = !live ? col::DIV : on ? accent::Output : col::BTN;
-  r.c.fillRoundRect(sx, 11, 44, 20, 10, track);
-  r.c.fillCircle(on ? sx + 34 : sx + 10, 21, 8, !live ? col::FAINT : on ? col::DARK : col::DIM);
-}
-
-// A value row: the title and its value (the section's blue) on the first
-// line when the value fits whole beside it (uitext::autoDjValueBeside()),
-// the hint under them; else the value on the second line, in the hint's
-// place (the value is the setting). Dim without the index the same, the
-// hint being why ("needs an Auto DJ index"): a value under its title
-// takes that line too (uitext::autoDjSecondLine(); UiText.h's Output >
-// Auto DJ note says why). The hint in `hintInk`.
-void OutputPage::drawAutoDjValue(ListView::Row& r, const char* title, const char* value, const char* hint,
-                                 bool live, uint16_t hintInk) {
-  using namespace uitext;
-  Fonts& f = Fonts::instance();
-  const int x = r.x + kAutoDjX;
-  const int tw = f.width(Font::Body, title);
-  const int vw = f.width(Font::Small, value);
-  const uint16_t ink = live ? col::TXT : col::FAINT;
-  const uint16_t valueInk = live ? accent::Output : col::FAINT;
-  const bool beside = autoDjValueBeside(tw, vw);
-  f.draw(r.c, Font::Body, title, x, 13, beside ? kAutoDjLineW - vw - kAutoDjValueGap : kAutoDjLineW, ink, r.bg);
-  if (beside) f.draw(r.c, Font::Small, value, x + kAutoDjLineW, 13, vw, valueInk, r.bg, Fonts::Align::Right);
-  f.draw(r.c, Font::Small, autoDjSecondLine(tw, vw, value, hint), x, 31, kAutoDjLineW, beside ? hintInk : valueInk,
-         r.bg);
-}
-
-// A tap on a row of Output > Auto DJ: saved and applied at once (app/AutoDj,
-// NVS); the rows follow from the next snapshot. A dim row: why, as a note.
-// Smart filters: the editor, or its own note (editMoods()), before the
-// index's: it needs mood data, not the index (MOOD-FILTERS.md 4.4).
-void OutputPage::onAutoDjTap(uint32_t row) {
-  namespace dv = autodjview;
-  if (row >= dv::kPageRows || row == dv::StatusRow) return;
-  const AppState& s = ui_.state();
-  const dv::State& d = s.autoDj;
-  const auto r = static_cast<dv::PageRow>(row);
-  if (r == dv::FilterRow) {
-    editMoods();
-    return;
-  }
-  if (!dv::rowLive(r, d)) {
-    ui_.warn(tr(S::toast_autodj_needs_index));
-    return;
-  }
-  UiHost& h = ui_.host();
-  switch (r) {
-    case dv::OnRow:
-      Serial.printf("[ui] output: Auto DJ %s\n", d.on ? "off" : "on");
-      // On with nothing queued: nothing starts (B stays inert); it follows
-      // the next track the listener plays. (No usable index: its toast,
-      // random picks, comes from app/AutoDj.)
-      if (h.autoDjSetOn(!d.on) && !d.on && s.queueSize == 0 && d.usable) {
-        ui_.toast(tr(S::toast_autodj_on_empty), false);
-      }
-      break;
-    case dv::AnchorRow:
-      Serial.printf("[ui] output: Auto DJ's Anchor: %s\n", d.mode == autodj::Mode::Locked ? "Follow the vibe" : "Stay on seed");
-      h.autoDjSetMode(d.mode == autodj::Mode::Locked ? autodj::Mode::Rolling : autodj::Mode::Locked);
-      break;
-    case dv::StrictRow: {
-      const uint8_t next = dv::tapFloor(d);  // (the step after the value shown)
-      Serial.printf("[ui] output: Auto DJ's Match strictness %u %%\n", static_cast<unsigned>(next));
-      h.autoDjSetFloor(next);
-      break;
-    }
-    case dv::BpmRow:
-      Serial.printf("[ui] output: BPM continuity %s\n", d.matchTempo ? "off" : "on");
-      h.autoDjSetMatch(!d.matchTempo, d.matchKey);
-      break;
-    case dv::KeyRow:
-      Serial.printf("[ui] output: Harmonic mixing %s\n", d.matchKey ? "off" : "on");
-      h.autoDjSetMatch(d.matchTempo, !d.matchKey);
-      break;
-    default: break;
-  }
-}
-
-// Smart filters (MOOD-FILTERS.md 4.4): behind the library update's fence
-// the row keeps its last value and the count would be old, so wait; no
-// mood data on the card, the dim row's note (amber: sync it from mStream;
-// a saved filter stays, its picks unfiltered: D4); else the editor, from
-// what the snapshot holds (the filter and its count).
-bool OutputPage::editMoods() {
-  const AppState& s = ui_.state();
-  const autodjview::State& d = s.autoDj;
-  if (s.libraryFenced) {
-    ui_.toast(tr(S::library_updating_wait), false);
-    return false;
-  }
-  if (!autodjview::rowLive(autodjview::FilterRow, d)) {
-    Serial.println("[ui] output: Smart filters: no mood data on this card");
-    ui_.warn(tr(S::toast_autodj_no_mood));
-    return false;
-  }
-  editWord_ = d.moods;
-  editFit_ = d.fit;
-  ui_.openFilters(this);
-  return true;
-}
-
-bool OutputPage::setFilterWord(uint16_t q) {
-  // Applied and saved at once ([dj]'s line says so, with its count); the
-  // editor's count is that count. Never refused: nothing is carved.
-  editFit_ = ui_.host().autoDjSetMoods(q);
-  editWord_ = q;
-  return true;
-}
-
-uint32_t OutputPage::filterTotal() { return ui_.state().autoDj.fitOf; }
-
-void OutputPage::onFiltersClosed(bool changed) {
-  if (!changed) return;  // (the band pushed again as it was: Ui::repaintUnder())
-  ui_.host().autoDjMoodSettled();
-  // The page's rows from the snapshot, rendered again (Smart filters' value,
-  // the status row's count), once: drawnAutoDj_ says they are, so update()
-  // draws them again only if the snapshot moves on (the last tap's count
-  // lands in the next one).
-  if (kind_ != PageKind::AutoDj || ui_.list().source() != this) return;
-  ui_.list().refreshAll();
-  drawnAutoDj_ = autoDjSig(ui_.state().autoDj);
-}
-
 // ---- taps ----
 
 ListView::Tap OutputPage::onTapAt(uint32_t row, int x, bool rightEdge) {
-  if (kind_ == PageKind::Pair) {
-    if (row >= 1) {
-      pick(static_cast<int>(row) - 1);
-    } else if (!search_.searching() && ui_.state().btLink.phase != BtLink::Phase::Pairing) {
-      // Search again: the list starts over, for another 2 minutes.
-      ui_.tick();
-      scan_.clear();
-      scanVersion_ = 0;
-      ui_.host().btPairScan(true);
-      search_.start(millis());
-      Serial.println("[ui] output: pair screen: searching again");
-      ui_.list().reload();
-      repaintHeader();
-    }
-    return ListView::Tap::Handled;
-  }
-  if (kind_ == PageKind::About) {
-    if (row == DeviceInfoRow) {
-      ui_.push(page(PageKind::DeviceInfo));
-    } else if (row == Tips) {
-      ui_.showCoach();
-    }
-    return ListView::Tap::Handled;
-  }
-  if (kind_ == PageKind::DeviceInfo) return ListView::Tap::Handled;  // nothing to tap
-  if (kind_ == PageKind::AutoDj) {
-    onAutoDjTap(row);
-    return ListView::Tap::Handled;
-  }
-  if (kind_ == PageKind::Language) {
-    // At once: saved, and everything drawn again in it (the first boot's
-    // goes on to Now Playing).
-    if (row < uistr::kLangs) ui_.chooseLanguage(static_cast<uistr::Lang>(row));
-    return ListView::Tap::Handled;
-  }
   const AppState& s = ui_.state();
   switch (static_cast<RootRow>(row)) {
     case BtTop: onCard(); break;
@@ -1528,49 +948,22 @@ void OutputPage::onCpuSpeed() {
   ui_.openDialog(this, title, pc::cpuDialogBody(to), buttons, 2);
 }
 
-// A device on the Pair screen: pair (asked first when it replaces the
-// headphones remembered now).
-void OutputPage::pick(int device) {
-  if (device < 0 || device >= scan_.count()) return;
-  picked_ = device;
-  const AppState& s = ui_.state();
-  const BtDevice& d = scan_.at(device);
-  ask_ = Ask::Pair;
-  if (s.btLink.remembered) {
-    const char* const buttons[2] = {tr(S::dialog_cancel), tr(S::pair_confirm_button)};
-    char title[96], body[256];
-    if (d.name[0]) {
-      trf(title, sizeof(title), S::pair_confirm_title, d.name);
-    } else {
-      trf(title, sizeof(title), S::pair_confirm_title_device);
-    }
-    if (s.btName[0]) {
-      trf(body, sizeof(body), S::pair_confirm_body, s.btName);
-    } else {
-      trf(body, sizeof(body), S::pair_confirm_body_unnamed);
-    }
-    ui_.openDialog(this, title, body, buttons, 2);
-    return;
-  }
-  onDialog(1);
-}
-
 void OutputPage::onDialog(int button) {
   const Ask ask = ask_;
   ask_ = Ask::None;
   if (ask == Ask::Forget) {
-    if (button == 1 && kind_ == PageKind::Output) forget();
+    if (button == 1 && shown()) forget();
     return;
   }
   if (ask == Ask::RemoveCal) {
-    if (button != 1 || kind_ != PageKind::Output) return;
+    if (button != 1 || !shown()) return;
     ui_.input().resetCalibration();
     Serial.println("[ui] touch calibration removed: no correction");
     ui_.toast(tr(S::settings_cal_removed), false);  // (its row follows: tick())
     return;
   }
   if (ask == Ask::Rescan) {
-    if (button != 1 || kind_ != PageKind::Output) return;
+    if (button != 1 || !shown()) return;
     if (ui_.host().rescanTags()) {
       ui_.toast(tr(S::library_row_rescan_started), false);
     } else {
@@ -1580,7 +973,7 @@ void OutputPage::onDialog(int button) {
   }
   if (ask == Ask::CpuRestart) {
     // Cancel saves nothing.
-    if (button != 1 || kind_ != PageKind::Output || !askCpuMhz_) return;
+    if (button != 1 || !shown() || !askCpuMhz_) return;
     const uint16_t mhz = askCpuMhz_;
     askCpuMhz_ = 0;
     if (ui_.host().setCpuSpeed(mhz)) {
@@ -1594,25 +987,6 @@ void OutputPage::onDialog(int button) {
     }
     return;
   }
-  if (ask != Ask::Pair || kind_ != PageKind::Pair || button != 1 || picked_ < 0 || picked_ >= scan_.count()) return;
-  const BtDevice d = scan_.at(picked_);
-  picked_ = -1;
-  searchEnded_ = false;
-  char text[96];
-  if (ui_.host().btPairWith(d)) {
-    if (d.name[0]) {
-      trf(text, sizeof(text), S::pair_pairing_with, d.name);
-    } else {
-      trf(text, sizeof(text), S::pair_pairing_with_it);
-    }
-  } else if (d.name[0]) {
-    // The headphones linked now: nothing to pair (they're the output now).
-    trf(text, sizeof(text), S::pair_connected_already, d.name);
-  } else {
-    trf(text, sizeof(text), S::pair_connected_already_them);
-  }
-  ui_.back();  // the card shows how it goes
-  ui_.toast(text, false);
 }
 
 }  // namespace ui

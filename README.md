@@ -1131,8 +1131,10 @@ src/                  Core2 firmware
                       (the mood filters' editor), EmptyState,
                       the pages (NowPlaying, Library with its stats pages
                       in LibraryStats: the entry row, the hub, the shelves,
-                      Last 7 days; Queue, Dance, Output with Pair and
-                      About), Thumbs (album covers: the
+                      Last 7 days; Queue, Dance; the Output tab's six, an
+                      object each: OutputPage its root, PairPage, AutoDjPage,
+                      LanguagePage, AboutPage with DeviceInfoPage, over
+                      OutputTabPage and OutputParts), Thumbs (album covers: the
                       card worker decodes them below the loop),
                       Fonts + VlwFonts (DejaVu, anti-aliased; CJK and
                       Hangul from the glyph store behind it), Icons +

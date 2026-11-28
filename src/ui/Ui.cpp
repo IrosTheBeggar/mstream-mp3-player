@@ -32,15 +32,21 @@ namespace ui {
 
 using uistr::S;
 
-// The UI's object, byte-exact: the owner's reading of call 2's "no growth"
-// for S3b (docs/LISTENING-STATS.md section 1) is main's size to the byte,
-// 9,416 B (gdb on 37ed055's core2 and core2-dio ELFs). main.cpp carves it in
-// PSRAM (psramNew: TLSF's 9,472 B carve, 9,416 + 12 B rounded to its class's
-// 256 B step), and the stats pages' few new bytes go in its padding holes
-// (Ui's after railHold_, ListView's before lastHoldUs_, LibraryPage's,
-// ListLayout's after topBar_), never on its end. A byte that can't fit
-// fails here: it goes to the owner with the figure, not into the carve.
-static_assert(sizeof(Ui) == 9416, "ui::Ui stays main's 9,416 B (S3b's byte-exact call: new bytes go in its holes)");
+// The UI's object, byte-exact: every byte it gains is the owner's call.
+// For S3b that call was "no growth" (2026-11-22; docs/LISTENING-STATS.md
+// section 1): main's 9,416 B to the byte, the stats pages' few new bytes in
+// its padding holes (Ui's after railHold_, ListView's before lastHoldUs_,
+// LibraryPage's, ListLayout's after topBar_). For the pages' untangling
+// (2026-11-27) the owner let it go one TLSF block up. main.cpp carves it in
+// PSRAM (psramNew: the size and 12 B, rounded to its class's 256 B step):
+// 9,472 B until then, 9,728 B now, so up to 9,716 B here, and the size is
+// pinned again as each part of that work lands. The Output tab's six pages
+// as six objects made it 9,520 B (+104: each of the five new ones has its
+// own 20 B of bases and touch state, and Pair its own spinner). A byte
+// that isn't accounted for fails here: it goes to the owner with the
+// figure, not into the carve.
+static_assert(sizeof(Ui) == 9520, "ui::Ui is 9,520 B (every byte of it is the owner's call: say what grew)");
+static_assert(sizeof(Ui) + 12 <= 9728, "ui::Ui has left the 9,728 B carve the owner allowed it");
 // lib/core's statsview names the stats pages' kinds (its pure rules over a
 // nav stack: onStatsPages()) as these.
 static_assert(static_cast<uint8_t>(PageKind::StatsHub) == statsview::kKindHub &&
@@ -116,6 +122,11 @@ Ui::Ui(UiHost& host, Input& input, PlaybackController& player, QueueModel& queue
       queuePage_(*this),
       dancePage_(*this),
       outputPage_(*this),
+      pairPage_(*this),
+      autoDjPage_(*this),
+      languagePage_(*this),
+      aboutPage_(*this),
+      deviceInfoPage_(*this),
       glance_(*this, NowPlayingPage::Mode::Glance),
       thumbs_(library),
       waves_(library) {
@@ -300,12 +311,12 @@ Page* Ui::pageFor(uint8_t kind) {
     case PageKind::StatsWeek: return &libraryPage_;
     case PageKind::Queue: return &queuePage_;
     case PageKind::Dance: return &dancePage_;
-    case PageKind::Output:
-    case PageKind::Pair:
-    case PageKind::About:
-    case PageKind::DeviceInfo:
-    case PageKind::Language:
-    case PageKind::AutoDj: return &outputPage_;
+    case PageKind::Output: return &outputPage_;
+    case PageKind::Pair: return &pairPage_;
+    case PageKind::About: return &aboutPage_;
+    case PageKind::DeviceInfo: return &deviceInfoPage_;
+    case PageKind::Language: return &languagePage_;
+    case PageKind::AutoDj: return &autoDjPage_;
     default: return &nowPlaying_;
   }
 }
@@ -2835,10 +2846,10 @@ void Ui::filtersCommand(const char* a) {
     return;
   }
   if (a[0] == 'e' && !a[1]) {
-    if (page_ == &outputPage_ && outputPage_.onAutoDj()) {
+    if (page_ == &autoDjPage_) {
       // Over Output > Auto DJ: its editor, as Smart filters' tap opens it
       // (or its note: no mood data).
-      outputPage_.editMoods();
+      autoDjPage_.editMoods();
       return;
     }
     libraryPage_.refreshFilter();  // (its albums, if the fence or a rebuild dropped them)
@@ -3116,6 +3127,9 @@ void Ui::command(const char* a) {
   } else if (a[0] == 'S') {
     statsCommand(a + 1);
     return;
+  } else if (a[0] == 'O') {
+    outputCommand(a[1]);
+    return;
   } else {
     Serial.println("[ui] ui: the navigation state; ui0-ui4 tap a tab (0 Now Playing, 1 Library, 2 Queue, 3 Dance, "
                    "4 Output); uib back; uic the coach cards; uiL<tag> the language (uiL the list, uiL- forget it and "
@@ -3129,10 +3143,40 @@ void Ui::command(const char* a) {
                    "listening stats' pages (no wake: a dark screen stays dark), uiSh their hub (as the entry row's "
                    "tap; the push's ms), uiS<shelf>[w] a shelf over it (0-4: Most played, its window w 0-2, New "
                    "finds, Old favourites, Not played yet, Recently played), uiSw Last 7 days over it, uiSx<n> a "
-                   "made-up stats view, look only (1-9; uiSx0 the card's own; uiSx the list)");
+                   "made-up stats view, look only (1-9; uiSx0 the card's own; uiSx the list); uiO<p/j/l/a/d> a page "
+                   "of the Output tab over its root, as its row's tap opens it (p Pair: its search starts, j Auto "
+                   "DJ, l Language, a About, d About's Device info)");
     return;
   }
   printState();
+}
+
+// uiO<p|j|l|a|d>: a page of the Output tab over its root, as a tap on its
+// row opens it (no finger on a list of settings): Pair (its search starts,
+// as a tap's; leaving the page stops it), Auto DJ, Language, About, and
+// About's Device info (over About, so Back goes where it does).
+void Ui::outputCommand(char which) {
+  PageKind kinds[2] = {PageKind::None, PageKind::None};
+  switch (which) {
+    case 'p': kinds[0] = PageKind::Pair; break;
+    case 'j': kinds[0] = PageKind::AutoDj; break;
+    case 'l': kinds[0] = PageKind::Language; break;
+    case 'a': kinds[0] = PageKind::About; break;
+    case 'd':
+      kinds[0] = PageKind::About;
+      kinds[1] = PageKind::DeviceInfo;
+      break;
+    default:
+      Serial.println("[ui] uiO<p|j|l|a|d>: a page of the Output tab over its root (Pair, Auto DJ, Language, About, "
+                     "Device info)");
+      return;
+  }
+  showTab(NavModel::Tab::Output);
+  toRoot();
+  for (const PageKind k : kinds) {
+    if (k != PageKind::None) push(ref(k));
+  }
+  Serial.printf("[ui] uiO%c: %s shown over the Output tab's root\n", which, pageKindName(nav_.top().kind));
 }
 
 // ---- the listening stats' pages (docs/LISTENING-STATS.md 7.1, 7.2, 9.7) ----

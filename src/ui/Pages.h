@@ -953,7 +953,51 @@ private:
 
 // ---- Output (spec §6.6, mockups 19-21, with the review's grafts) ----
 //
-// The Output tab is a list (it scrolls: the cards, then the settings):
+// The Output tab is six pages, each a list on the hardware scroll under the
+// tab's header: its root (OutputPage: the cards, then the settings) and
+// what its rows open: Pair, Auto DJ, Language, About, and About's Device
+// info. One object each (Ui::pageFor()); what they share is OutputTabPage
+// and ui/OutputParts.h's pieces.
+
+// A page of the Output tab: its header (a "‹" where there is a way back, a
+// title, its line), the list under it, and a touch on either.
+class OutputTabPage : public Page, public ListView::Source {
+public:
+  const char* name() const override { return "Output"; }
+  bool scrolls() const override { return true; }
+  void leave() override;
+  void repaint() override;
+  void repaintHeader() override;
+  bool update(uint32_t nowMs, bool frameDue, bool wholeRows) override;
+  bool animating() const override;
+  void onEvent(const InputEvent& e) override;
+  void home() override;
+  // "Output (<the page's kind>): where it plays, the Bluetooth card, the
+  // volumes", then the page's own words (describeMore()).
+  void describe(char* buf, size_t size) const override;
+
+  // ListView::Source
+  uint16_t accent() override;
+  bool emptyState(EmptyState& e) override;
+
+protected:
+  explicit OutputTabPage(Ui& ui) : Page(ui) {}
+  virtual PageKind kind() const = 0;
+  virtual Header header() const = 0;
+  virtual const char* describeMore() const { return ""; }
+  // The way in, after the page's own: the last touch forgotten, the header
+  // drawn, the list attached (at `scrollPx` when the entry has no place of
+  // its own yet).
+  void show(NavModel::PageRef& ref, int32_t scrollPx = 0);
+  // The list shows this page (a dialog's answer acts only then).
+  bool shown() const;
+
+private:
+  bool touchInList_ = false;
+  int headerPressed_ = 0;
+};
+
+// The tab's root: a list (it scrolls: the cards, then the settings):
 //   the Bluetooth card (two rows): the headphones in their state's colour
 //       (OutputModel: not paired, off, connecting "try 2 of 3",
 //       searching, pairing, connected "SBC 44.1 kHz, 175 ms", failed,
@@ -974,98 +1018,26 @@ private:
 //   (Low ... Max), Touch when off (Nothing / Wake / Track), Turn off when
 //   idle (10 min ... Never), Touch calibration >, Language > (the one in
 //   use, in its own name), About >
-// Pair (mockup 21): "Searching", the audio devices found (their kind and a
-// signal of 4 bars); a tap pairs (after a confirmation when it replaces
-// the remembered headphones), and the card shows how it goes.
-// About: the battery, storage, the library, the headphones, memory,
-// Device info >, the version, the licence and where the source is, and
-// "Show the tips again" (the coach cards).
-// Language: the ten languages, each in its own name (English, Deutsch,
-// 日本語...), a radio on the one in use; a tap uses one at once (saved, and
-// the whole UI drawn again in it: Ui::chooseLanguage()). The same page is a
-// fresh unit's first screen (kFirstBootPicker: no back arrow; a pick goes
-// on to Now Playing, the touch check and the tips). Full-width rows hit by
-// y, as the touch check's: a panel that reads x wrong still picks right.
-// Auto DJ (the engine design's 5.1, the user's D6; lib/core/AutoDjView):
-// Language's list (no icons, from x 16): Auto DJ (a switch; on with
-// nothing queued, a toast: it follows the next track played, nothing
-// starts), Anchor (Follow the vibe / Stay on seed, its value right on the
-// title's line, its hint under it; a tap swaps), Match strictness ("55% or
-// closer", the steps 55-75 by 5: a tap the next), BPM continuity and
-// Smart filters (the mood filter: "Any", or what is set; a tap opens the
-// mood filters' editor, in the Output tab's blue, counting tracks:
-// docs/MOOD-FILTERS.md 4.4), BPM continuity and Harmonic mixing
-// (switches), and a status row that is no control (the index's coverage,
-// or how many tracks fit the filter, or why there is none, or why Auto DJ
-// waits; its first line amber when nothing or 50 or fewer fit, or paused).
-// Without a usable index Anchor, Match strictness and the two switches are
-// dim, "needs an Auto DJ index" under each (a value that can't sit beside
-// its title, Match strictness's in some languages, there instead), a tap a
-// note; the switch and the status stay live. Smart filters is dim exactly
-// while the card has no mood data ("No mood data", a tap a note to sync
-// the card from mStream; a saved filter kept, its picks unfiltered: D4).
-// Behind the library update's fence the rows keep their last values, and
-// Smart filters' tap says to wait. Each change saved once the taps rest
-// (NVS, app/AutoDjStore) and applied from the next pick; the editor's each
-// tap.
-// Device info: what the boot screen used to list (the board, the power
-// chip, the IMU, the chip, flash, PSRAM, the last reset, the battery, the
-// library, internal RAM), with the CPU's clock, the uptime, the firmware
-// and its build: DeviceInfo's rows, a label over each value, refreshed
-// every 3 s while the page is open, as About.
-class OutputPage : public Page, public ListView::Source, public FilterOwner {
+class OutputPage : public OutputTabPage {
 public:
-  explicit OutputPage(Ui& ui) : Page(ui) {}
-  const char* name() const override { return "Output"; }
-  bool scrolls() const override { return true; }
+  explicit OutputPage(Ui& ui) : OutputTabPage(ui) {}
   void enter(NavModel::PageRef& ref) override;
-  void leave() override;
-  void repaint() override;
-  void repaintHeader() override;
   bool update(uint32_t nowMs, bool frameDue, bool wholeRows) override;
-  bool animating() const override;
-  void onEvent(const InputEvent& e) override;
   void onDialog(int button) override;
   void onSheet(int choice) override;
-  void home() override;
-  void screenOff() override;
-  void tick(uint32_t nowMs) override;
-  void describe(char* buf, size_t size) const override;
-  // The Pair screen's search runs: from the page's entry or Search again
-  // until its 2 minutes, the screen off, a device picked or the page
-  // closed (leave() stops it). Ui::pairSearching().
-  bool pairSearching() const { return kind_ == PageKind::Pair && search_.searching(); }
-  // Output > Auto DJ is the page shown (the console's uiMe: its editor).
-  bool onAutoDj() const { return kind_ == PageKind::AutoDj; }
-  // Smart filters' tap (and uiMe over this page): the mood filters'
-  // editor for Auto DJ's filter (Ui::openFilters()), or why not: no mood
-  // data on the card (a note to sync it from mStream), the library update's
-  // fence (wait). False: not opened.
-  bool editMoods();
-
-  // FilterOwner: Auto DJ's mood filter (MOOD-FILTERS.md 4.3's "From Auto
-  // DJ"), applied and saved at each tap (UiHost::autoDjSetMoods(), which
-  // counts the tracks inside it at once); the count is that count, of the
-  // library's tracks. Its close, with a change, settles it
-  // (UiHost::autoDjMoodSettled()) and draws the page's rows again.
-  uint16_t filterWord() override { return editWord_; }
-  bool setFilterWord(uint16_t q) override;
-  uint32_t filterFits() override { return editFit_; }
-  uint32_t filterTotal() override;
-  filtergrid::Scope filterScope() override { return filtergrid::Scope::Tracks; }
-  void onFiltersClosed(bool changed) override;
 
   // ListView::Source
   uint32_t rows() override;
   void drawRow(ListView::Row& r) override;
-  uint16_t accent() override;
   ListView::Tap onTapAt(uint32_t row, int x, bool rightEdge) override;
-  bool emptyState(EmptyState& e) override;
-  bool pressable(uint32_t row) override;
+
+protected:
+  PageKind kind() const override { return PageKind::Output; }
+  Header header() const override;
 
 private:
   // What the dialog or sheet up is asking.
-  enum class Ask : uint8_t { None, Pair, More, Forget, CpuRestart, Touch, RemoveCal, Rescan };
+  enum class Ask : uint8_t { None, More, Forget, CpuRestart, Touch, RemoveCal, Rescan };
   enum RootRow : uint8_t {
     BtTop,
     BtButtons,
@@ -1086,26 +1058,8 @@ private:
     AboutRow,
     kRootRows
   };
-  enum AboutItem : uint8_t {
-    Battery,
-    Storage,
-    LibraryInfo,
-    Headphones,
-    PowerInfo,
-    Memory,
-    DeviceInfoRow,
-    Version,
-    LicenceInfo,
-    SourceInfo,
-    Tips,
-    kAboutRows
-  };
 
   void drawBtTop(ListView::Row& r);
-  // The spinner's step alone, pushed onto `row` at (cx, cy) over `bg`
-  // (ListView::pushOnRow), not the row rendered and pushed whole (~11 ms,
-  // 8 times a second while it spins). False: the row must be drawn whole.
-  bool spinPatch(uint32_t row, int cx, int cy, uint16_t colour, uint16_t bg);
   void drawBtButtons(ListView::Row& r);
   void drawSpeaker(ListView::Row& r);
   void drawSetting(ListView::Row& r, const icons::Icon& icon, const char* title, const char* sub, uint16_t ink,
@@ -1130,69 +1084,239 @@ private:
   void onRescan();
   static uint32_t librarySig(const AppState& s);
   static uint32_t screenSig(const AppState& s);
-  void drawDevice(ListView::Row& r, const BtDevice& d);
-  void drawPairStatus(ListView::Row& r);
-  // "Language" on the Output list (a globe drawn here), and a language on
-  // its page.
+  // "Language" on the list (a globe drawn here).
   void drawLanguageRow(ListView::Row& r);
-  void drawLanguage(ListView::Row& r);
-  void drawAbout(ListView::Row& r);
-  void drawDeviceInfo(ListView::Row& r);
-  // Output > Auto DJ: a row of its page (autodjview::PageRow), its switch
-  // rows, its value rows, and a tap on one.
-  void drawAutoDj(ListView::Row& r);
-  void drawAutoDjSwitch(ListView::Row& r, const char* title, const char* sub, bool on, bool live);
-  // `hintInk`: the hint's (beside: the value on the first line), DIM: a
-  // dim row's hint says why it is dim; Smart filters' doesn't (FAINT then).
-  void drawAutoDjValue(ListView::Row& r, const char* title, const char* value, const char* hint, bool live,
-                       uint16_t hintInk = col::DIM);
-  void onAutoDjTap(uint32_t row);
-  // What Auto DJ's rows show (the root's row, the page's): drawn again when it changes.
-  static uint32_t autoDjSig(const autodjview::State& d);
   // The card's buttons: how many, and each one's x and width.
   int buttonBoxes(const BtCardView& v, int* x, int* w) const;
   void onCardButton(BtButton b);
   void onCard();
-  void pick(int device);
   void forget();
-  Header header() const;
   uint32_t btSig() const;
   uint32_t speakerSig() const;
   const char* btName() const;
 
-  PageKind kind_ = PageKind::Output;
-  NavModel::PageRef* ref_ = nullptr;
-  bool firstBoot_ = false;  // the Language page as the first boot's picker
-  bool touchInList_ = false;
-  int headerPressed_ = 0;
   ConfirmTap forget_;
   uint32_t drawnBt_ = 0, drawnSpeaker_ = 0;
   bool drawnHaptics_ = false;
   bool drawnCalibrated_ = false;
   uint32_t drawnScreen_ = 0xFFFFFFFFu;  // the screen, idle and power settings drawn (screenSig())
   uint32_t drawnLibrary_ = 0xFFFFFFFFu;  // the Library row drawn (librarySig())
-  uint32_t drawnAutoDj_ = 0xFFFFFFFFu;   // Auto DJ's rows drawn (autoDjSig())
+  uint32_t drawnAutoDj_ = 0xFFFFFFFFu;   // Auto DJ's row drawn (AutoDjPage::autoDjSig())
+  uint32_t nextSpinMs_ = 0;
+  uint8_t spin_ = 0;  // the card's spinner's step (8 a turn)
+  Ask ask_ = Ask::None;
+  uint16_t askCpuMhz_ = 0;  // Ask::CpuRestart: the speed it restarts at
+};
+
+// Output > Pair new headphones (mockup 21): "Searching", the audio devices
+// found (their kind and a signal of 4 bars); a tap pairs (after a
+// confirmation when it replaces the remembered headphones), and the card
+// shows how it goes.
+class PairPage : public OutputTabPage {
+public:
+  explicit PairPage(Ui& ui) : OutputTabPage(ui) {}
+  void enter(NavModel::PageRef& ref) override;
+  void leave() override;
+  bool update(uint32_t nowMs, bool frameDue, bool wholeRows) override;
+  void onDialog(int button) override;
+  void screenOff() override;
+  void tick(uint32_t nowMs) override;
+  // Its search runs: from the page's entry or Search again until its 2
+  // minutes, the screen off, a device picked or the page closed (leave()
+  // stops it). Ui::pairSearching().
+  bool searching() const { return search_.searching(); }
+
+  // ListView::Source
+  uint32_t rows() override;
+  void drawRow(ListView::Row& r) override;
+  ListView::Tap onTapAt(uint32_t row, int x, bool rightEdge) override;
+
+protected:
+  PageKind kind() const override { return PageKind::Pair; }
+  Header header() const override;
+  const char* describeMore() const override;
+
+private:
+  void drawDevice(ListView::Row& r, const BtDevice& d);
+  void drawPairStatus(ListView::Row& r);
+  void pick(int device);
+
+  // The scan's list as last copied, and the device picked.
+  BtScanList scan_;
+  PairSearch search_;  // its scan stops by itself after 2 min
+  bool searchEnded_ = false;  // ... just now (tick(), screenOff()): the status row to redraw
+  bool asking_ = false;       // the dialog up is its question (these instead of the ones remembered?)
+  uint8_t spin_ = 0;          // the status row's spinner's step (8 a turn)
+  uint32_t scanVersion_ = 0;
+  uint32_t nextScanMs_ = 0;
+  uint32_t nextSpinMs_ = 0;
+  int picked_ = -1;
+  mutable char headerSub_[48] = "";
+};
+
+// Output > About: the battery, storage, the library, the headphones,
+// memory, Device info >, the version, the licence and where the source is,
+// and "Show the tips again" (the coach cards). Refreshed on the way in and
+// every few seconds.
+class AboutPage : public OutputTabPage {
+public:
+  explicit AboutPage(Ui& ui) : OutputTabPage(ui) {}
+  void enter(NavModel::PageRef& ref) override;
+  bool update(uint32_t nowMs, bool frameDue, bool wholeRows) override;
+
+  // ListView::Source
+  uint32_t rows() override;
+  void drawRow(ListView::Row& r) override;
+  ListView::Tap onTapAt(uint32_t row, int x, bool rightEdge) override;
+
+protected:
+  PageKind kind() const override { return PageKind::About; }
+  Header header() const override;
+
+private:
+  enum AboutItem : uint8_t {
+    Battery,
+    Storage,
+    LibraryInfo,
+    Headphones,
+    PowerInfo,
+    Memory,
+    DeviceInfoRow,
+    Version,
+    LicenceInfo,
+    SourceInfo,
+    Tips,
+    kAboutRows
+  };
+
+  AboutInfo about_;
+  uint32_t nextAboutMs_ = 0;
+};
+
+// About > Device info: what the boot screen used to list (the board, the power
+// chip, the IMU, the chip, flash, PSRAM, the last reset, the battery, the
+// library, internal RAM), with the CPU's clock, the uptime, the firmware
+// and its build: DeviceInfo's rows, a label over each value, refreshed
+// every 3 s while the page is open, as About.
+class DeviceInfoPage : public OutputTabPage {
+public:
+  explicit DeviceInfoPage(Ui& ui) : OutputTabPage(ui) {}
+  void enter(NavModel::PageRef& ref) override;
+  bool update(uint32_t nowMs, bool frameDue, bool wholeRows) override;
+
+  // ListView::Source
+  uint32_t rows() override;
+  void drawRow(ListView::Row& r) override;
+  ListView::Tap onTapAt(uint32_t row, int x, bool rightEdge) override;
+
+protected:
+  PageKind kind() const override { return PageKind::DeviceInfo; }
+  Header header() const override;
+
+private:
+  deviceinfo::Facts info_;
+  uint32_t nextMs_ = 0;
+};
+
+// Output > Language: the ten languages, each in its own name (English, Deutsch,
+// 日本語...), a radio on the one in use; a tap uses one at once (saved, and
+// the whole UI drawn again in it: Ui::chooseLanguage()). The same page is a
+// fresh unit's first screen (kFirstBootPicker: no back arrow; a pick goes
+// on to Now Playing, the touch check and the tips). Full-width rows hit by
+// y, as the touch check's: a panel that reads x wrong still picks right.
+class LanguagePage : public OutputTabPage {
+public:
+  explicit LanguagePage(Ui& ui) : OutputTabPage(ui) {}
+  void enter(NavModel::PageRef& ref) override;
+
+  // ListView::Source
+  uint32_t rows() override;
+  void drawRow(ListView::Row& r) override;
+  ListView::Tap onTapAt(uint32_t row, int x, bool rightEdge) override;
+
+protected:
+  PageKind kind() const override { return PageKind::Language; }
+  Header header() const override;
+
+private:
+  bool firstBoot_ = false;  // the page as the first boot's picker
+};
+
+// Output > Auto DJ (the engine design's 5.1, the user's D6; lib/core/AutoDjView):
+// Language's list (no icons, from x 16): Auto DJ (a switch; on with
+// nothing queued, a toast: it follows the next track played, nothing
+// starts), Anchor (Follow the vibe / Stay on seed, its value right on the
+// title's line, its hint under it; a tap swaps), Match strictness ("55% or
+// closer", the steps 55-75 by 5: a tap the next), BPM continuity and
+// Smart filters (the mood filter: "Any", or what is set; a tap opens the
+// mood filters' editor, in the Output tab's blue, counting tracks:
+// docs/MOOD-FILTERS.md 4.4), BPM continuity and Harmonic mixing
+// (switches), and a status row that is no control (the index's coverage,
+// or how many tracks fit the filter, or why there is none, or why Auto DJ
+// waits; its first line amber when nothing or 50 or fewer fit, or paused).
+// Without a usable index Anchor, Match strictness and the two switches are
+// dim, "needs an Auto DJ index" under each (a value that can't sit beside
+// its title, Match strictness's in some languages, there instead), a tap a
+// note; the switch and the status stay live. Smart filters is dim exactly
+// while the card has no mood data ("No mood data", a tap a note to sync
+// the card from mStream; a saved filter kept, its picks unfiltered: D4).
+// Behind the library update's fence the rows keep their last values, and
+// Smart filters' tap says to wait. Each change saved once the taps rest
+// (NVS, app/AutoDjStore) and applied from the next pick; the editor's each
+// tap.
+class AutoDjPage : public OutputTabPage, public FilterOwner {
+public:
+  explicit AutoDjPage(Ui& ui) : OutputTabPage(ui) {}
+  void enter(NavModel::PageRef& ref) override;
+  bool update(uint32_t nowMs, bool frameDue, bool wholeRows) override;
+  void describe(char* buf, size_t size) const override;
+  // Smart filters' tap (and uiMe over this page): the mood filters'
+  // editor for Auto DJ's filter (Ui::openFilters()), or why not: no mood
+  // data on the card (a note to sync it from mStream), the library update's
+  // fence (wait). False: not opened.
+  bool editMoods();
+
+  // FilterOwner: Auto DJ's mood filter (MOOD-FILTERS.md 4.3's "From Auto
+  // DJ"), applied and saved at each tap (UiHost::autoDjSetMoods(), which
+  // counts the tracks inside it at once); the count is that count, of the
+  // library's tracks. Its close, with a change, settles it
+  // (UiHost::autoDjMoodSettled()) and draws the page's rows again.
+  uint16_t filterWord() override { return editWord_; }
+  bool setFilterWord(uint16_t q) override;
+  uint32_t filterFits() override { return editFit_; }
+  uint32_t filterTotal() override;
+  filtergrid::Scope filterScope() override { return filtergrid::Scope::Tracks; }
+  void onFiltersClosed(bool changed) override;
+  // What Auto DJ's rows show (this page's, and its row on the tab's root):
+  // drawn again when it changes.
+  static uint32_t autoDjSig(const autodjview::State& d);
+
+  // ListView::Source
+  uint32_t rows() override;
+  void drawRow(ListView::Row& r) override;
+  ListView::Tap onTapAt(uint32_t row, int x, bool rightEdge) override;
+  bool pressable(uint32_t row) override;
+
+protected:
+  PageKind kind() const override { return PageKind::AutoDj; }
+  Header header() const override;
+
+private:
+  // A row of the page (autodjview::PageRow): its switch rows, its value
+  // rows, and a tap on one.
+  void drawAutoDjSwitch(ListView::Row& r, const char* title, const char* sub, bool on, bool live);
+  // `hintInk`: the hint's (beside: the value on the first line), DIM: a
+  // dim row's hint says why it is dim; Smart filters' doesn't (FAINT then).
+  void drawAutoDjValue(ListView::Row& r, const char* title, const char* value, const char* hint, bool live,
+                       uint16_t hintInk = col::DIM);
+  void onAutoDjTap(uint32_t row);
+
+  uint32_t drawnAutoDj_ = 0xFFFFFFFFu;  // the rows drawn (autoDjSig())
   // The mood filters' editor over Auto DJ's page: the filter its last tap
   // set and the tracks that fit it, as counted then (the snapshot catches
   // up at the next pass).
   uint16_t editWord_ = 0;
   uint32_t editFit_ = 0;
-  uint32_t nextSpinMs_ = 0;
-  uint8_t spin_ = 0;  // the spinner's step (8 a turn)
-  // Pair: the scan's list as last copied, and the device picked.
-  BtScanList scan_;
-  PairSearch search_;  // its scan stops by itself after 2 min
-  bool searchEnded_ = false;  // ... just now (tick(), screenOff()): the status row to redraw
-  uint32_t scanVersion_ = 0;
-  uint32_t nextScanMs_ = 0;
-  int picked_ = -1;
-  Ask ask_ = Ask::None;
-  uint16_t askCpuMhz_ = 0;  // Ask::CpuRestart: the speed it restarts at
-  // About and Device info: refreshed on the way in and every few seconds.
-  AboutInfo about_;
-  deviceinfo::Facts info_;
-  uint32_t nextAboutMs_ = 0;
-  mutable char headerSub_[48] = "";
 };
 
 }  // namespace ui
