@@ -8,6 +8,7 @@
 
 #include "InputEvent.h"
 #include "KineticScroll.h"
+#include "ListFrames.h"
 #include "ListLayout.h"
 #include "NavModel.h"
 #include "RowSlots.h"
@@ -614,7 +615,9 @@ private:
   void tapItem(int32_t item, const InputEvent& e);
   void setExpanded(int32_t row);
   int drawRailSprite(int32_t off);
-  bool bandInRows(int32_t off) const;
+  // What a pass finds, and where the finger is, for lib/core's ListFrames.
+  listframes::Pass pass(uint32_t nowMs, bool frameDue, bool wholeRows) const;
+  listframes::Touch touch() const;
   void startBand(int32_t off);
   bool bandStep(bool frameDue);
   void hideRail();

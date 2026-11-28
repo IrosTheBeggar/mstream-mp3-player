@@ -998,6 +998,10 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
   RowSlots            A list's six row sprites: which a row takes, which rows
                       keep theirs, which is rendered ahead of a move, and
                       which a list caught by a finger gets back
+  ListFrames          What a list does with a loop pass (a frame, a band's
+                      row, the rail alone, nothing), when a move's bus hold
+                      begins on the panel's scan, and what the time between
+                      two frames is for
   RefillPacer         The decoder's gentle refill after a track start (on)
   BtControl           Bluetooth decisions: media stream (StreamControl), volume
                       (AbsVolumePolicy, GainRamp), reconnect (ReconnectPlanner)

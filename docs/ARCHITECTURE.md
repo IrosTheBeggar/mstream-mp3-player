@@ -22,7 +22,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  LibraryIndex  LibrarySynth  TextFold  TouchGesture           |
               |  LibraryBuilder  LibraryUpdate  CardJobs  ScanScheduler       |
               |  KineticScroll  ScrollGovernor  VScrollMap  RefillPacer       |
-              |  ScanSync  ScrubPacer  RowSlots  RadioLinkNotes               |
+              |  ScanSync  ScrubPacer  RowSlots  ListFrames  RadioLinkNotes   |
               |  ByteStream  QueueModel  QueueText  TrackCatalog              |
               |  TouchCalibration  TouchCheck  TouchRecognizer  ButtonGesture |
               |  ButtonPolicy  InputEvent                                     |
@@ -4224,6 +4224,58 @@ Queue, Dance and Output (with its Pair and About pages).
   track changes (they would hold the old mark); a cover that arrives is
   painted into the rows that hold its album (Covers, below). `ui` counts
   the rows rendered ahead.
+  **What a pass does with the band, and when a move's hold begins** are
+  `lib/core/ListFrames`'s since 2026-11-27 (the second step of moving the
+  list's decisions where a host test can hold them; nothing of what it does
+  changed). `ListView::update()` hands in what the pass finds (a `Pass`:
+  the scroll, what is owed whole, the frame clock, the edge and the finger,
+  the panel) and carries out `listframes::choose()`'s word: the rail off
+  the glass while the list moves, a band's next row, the rail alone under a
+  paced scrub, a move on the panel's scan, a band begun, a frame drawn now,
+  a recount's stale item. `scanFrame()` takes its timing from it in the
+  order it always made it: `window()` (the refresh under way's, one frame a
+  refresh), `behind()`, `shownInUs()` (where a list moving by itself is
+  drawn), `start()` (now, at the window, or not in this pass) and `late()`;
+  `renderAhead()` and `renderNeighbours()` their gates (`look()`,
+  `rests()`). test_list_frames has each rule, and then the Core2's loop
+  around a list pass by pass with a clock of its own: the real scroll, scan
+  rule and sprites' rules, a model of what a row, a line on the bus and the
+  rest of a pass cost (3 ms, 130 us, 1.2 ms), and one task above the loop
+  that takes the core at a steady pace, as the decoder does (an MP3: 10 ms
+  in every 27; the loop's own work waits for it, its sleep for a window and
+  its hold don't). With the core to itself a fling at the cap is 203 frames
+  at 70.1 a second, none a refresh and a half after the one before, no row
+  rendered in a frame (the Core2: 199-203 frames at 67-69, at most 1 of 140
+  apart, none). Under the decoder it is 58.6 a second, 18 in a hundred
+  apart, 43 ms at the most, and 4 to 10 rows a fling rendered in frames
+  (the Core2: 54-56, 26-30 in a hundred, 37-54 ms, 2 to 10). How it comes
+  about shows there: the decoder's turn falls the moment a hold ends, so
+  the time before the next frame is gone; a row it cut into counts for
+  more (`noteRowTime()`), so the next find no room, until a frame's own
+  render brings the figure down. Those are today's rules' figures, written
+  down as tests for the change that is to move them.
+  On the Core2 the build before and the build with the rules in lib/core
+  ran one scripted session each (2026-11-27: four flings on Artists, the
+  A-Z rail down Albums in 3 s, four flings caught and pulled back, the
+  bench, all three again with an MP3 decoding, the stats' hub and two of
+  its pages landing, the Queue) and came to the same, as near as two runs
+  of one build do. MEASURED, before and after: the flings at 66.7-69.9 and
+  67.8-69.8 frames a second, none of their 561 and 546 frames late, a row
+  rendered in a frame once in each run's first fling and never after; the
+  rail's scrub 48 bands in 3.18 s both times (a band 52.4 and 52.5 ms, the
+  thumb drawn 121 and 122 times); the flings pulled back at 49.9-53.7 and
+  51.5-53.8; a row rendered in 3.57 and 3.53 ms, the band in place in 37.8
+  and 37.9, a move of 42 lines in 8.66 and 8.64. With the MP3: the flings
+  at 53.0-54.8 and 54.2-56.2, 100 of 360 and 107 of 411 frames late, 18
+  and 19 rows rendered in frames; pulled back, 35.4-39.7 and 38.2-40.3, 30
+  of 55 and 28 of 56 late, 18 and 19 rows. The stats' pages staged the
+  same rows in the same order. (Figures and log lines: no picture of the
+  glass was compared.) One order is not the old one: a pass is read before
+  the rail is taken off the glass, where the old code asked the rail's
+  place after it. It shows only on a list that lost its A-Z rail under a
+  finger resting on it, mid-scrub (a reload to a list without one): the
+  rail alone, wiped and pushed again every pass there, now comes every
+  other pass.
   **A row's text goes straight into its sprite** and **the sprites lie in
   the PSRAM's fast half** (below: Text, and "The list's memory"): a row
   renders in 3.0-3.4 ms (5.6 before 0.14.0), and a fling draws in 1-2 ms a
