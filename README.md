@@ -1137,7 +1137,9 @@ src/                  Core2 firmware
                       Fonts + VlwFonts (DejaVu, anti-aliased; CJK and
                       Hangul from the glyph store behind it), Icons +
                       IconData, Gfx (pushes through the scroll and the
-                      bus lock), Theme; Input (the one input layer: corrected
+                      bus lock; a picture that changes in place put whole,
+                      on the panel's scan: PanelScan's Whole), Theme; Input
+                      (the one input layer: corrected
                       touches and the buttons as events, haptic feedback,
                       settings in NVS); CalibrationScreen (touch calibration);
                       BootScreen (the mStream logo and the version);

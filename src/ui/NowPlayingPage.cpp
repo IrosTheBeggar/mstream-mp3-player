@@ -223,6 +223,22 @@ void NowPlayingPage::thumbReady(uint32_t album) {
   if (album == playingAlbum() && !drawn_.coverShown) drawCover();
 }
 
+void NowPlayingPage::put(M5Canvas& c, int x, int y, int w, int h) {
+  if (drawn_.valid) {
+    gfx::pushWhole(c, x, y, w, h);
+  } else {
+    gfx::push(c, x, y, w, h);
+  }
+}
+
+void NowPlayingPage::putRows(M5Canvas& c, int x, int y, int w, int sy0, int sy1) {
+  if (drawn_.valid) {
+    gfx::pushRowsWhole(c, x, y, w, sy0, sy1);
+  } else {
+    gfx::pushRows(c, x, y, w, sy0, sy1);
+  }
+}
+
 void NowPlayingPage::drawCover() {
   const uint32_t album = playingAlbum();
   const uint16_t* px = album != LibraryIndex::kNone ? ui_.thumbs().get(album, ThumbCache::Size::Large) : nullptr;
@@ -246,7 +262,7 @@ void NowPlayingPage::drawCover() {
     c.fillCircle(1 + kCoverPx / 2, 1 + kCoverPx / 2, 28, col::BTN);
     icons::drawCentred(c, icons::kNote, 1 + kCoverPx / 2, 1 + kCoverPx / 2, ui_.state().current >= 0 ? col::DIM : col::FAINT);
   }
-  gfx::pushRows(c, kCoverX - 1, kCoverY - 1, kCoverPx + 2, 0, shownRows);
+  putRows(c, kCoverX - 1, kCoverY - 1, kCoverPx + 2, 0, shownRows);
 }
 
 void NowPlayingPage::drawTitle(int rows) {
@@ -289,7 +305,7 @@ void NowPlayingPage::drawTitle(int rows) {
       trf(line, sizeof(line), S::now_playing_wait_connecting);
     }
     f.draw(c, Font::Small, line, kWaitTextX, 43, kWaitTextW, col::DIM, col::DIM);
-    gfx::push(c, kColumnX, kTitleY, w, h);
+    put(c, kColumnX, kTitleY, w, h);
     return;
   }
   // Two big lines (Title), else up to three smaller ones (Bold): too long
@@ -302,7 +318,7 @@ void NowPlayingPage::drawTitle(int rows) {
   for (int i = 0; i < l.count; ++i) {
     f.draw(c, l.bold ? Font::Bold : Font::Title, lines[i], x, titlelayout::lineY(l, i), kTextW, ink, ink);
   }
-  gfx::push(c, kColumnX, kTitleY, w, h);
+  put(c, kColumnX, kTitleY, w, h);
 }
 
 void NowPlayingPage::repaintHeader() {
@@ -324,7 +340,7 @@ void NowPlayingPage::repaintHeader() {
   // colour, as drawCover() has it then); the title strip's.
   const int coverRows = kRowEnd - (kCoverY - 1);
   if (cover_) {
-    gfx::pushRows(*cover_, kCoverX - 1, kCoverY - 1, kCoverPx + 2, 0, coverRows);
+    putRows(*cover_, kCoverX - 1, kCoverY - 1, kCoverPx + 2, 0, coverRows);
   } else {
     gfx::fill(kCoverX, kCoverY, kCoverPx, kRowEnd - kCoverY, col::CARD);
   }
@@ -359,7 +375,7 @@ void NowPlayingPage::drawArtistAlbum() {
     }
     f.draw(c, Font::Body, album, x, kArtistH + kAlbumH / 2, kTextW, col::DIM, bg);
   }
-  gfx::push(c, kColumnX, kArtistY, w, kArtistH + kAlbumH);
+  put(c, kColumnX, kArtistY, w, kArtistH + kAlbumH);
 }
 
 bool NowPlayingPage::seekable() const {
@@ -544,15 +560,15 @@ void NowPlayingPage::drawSeekBar(const wave::Strip& now, int rx, int rw, wave::T
       c.fillRect(0, wave::kStripH, kW, wave::kTextRowH, col::BG);
     }
     drawBar(c, now, 0, kW);
-    gfx::push(c, 0, wave::kStripY, kW, wave::kStripAndTextH);
+    put(c, 0, wave::kStripY, kW, wave::kStripAndTextH);
   } else {
     if (rw > 0) {
       drawBar(c, now, rx, rw);
-      gfx::push(c, rx, wave::kStripY, rw, wave::kStripH);
+      put(c, rx, wave::kStripY, rw, wave::kStripH);
     }
     if (text == TextDraw::Draw) {
       drawProgressText(c, 0);
-      gfx::pushRows(c, 0, kTextCellY, kW, 1, 1 + wave::kTextRowH);
+      putRows(c, 0, kTextCellY, kW, 1, 1 + wave::kTextRowH);
     }
   }
   if (rw > 0) drawn_.strip = now;
@@ -595,7 +611,7 @@ void NowPlayingPage::drawReadout() {
   if (!drawn_.scrubUp && ui_.state().headphonesWait()) {
     gfx::fill(kColumnX, kArtistY, kW - kColumnX, kArtistH, col::BG);
   }
-  gfx::push(c, 0, kReadoutY, kW, kReadoutH);
+  put(c, 0, kReadoutY, kW, kReadoutH);
   drawn_.scrubUp = true;
   drawn_.readout = bar_.readout();
 }
@@ -609,7 +625,7 @@ void NowPlayingPage::endScrub() {
   drawn_.scrubUp = false;
   const int from = kReadoutY - (kCoverY - 1);  // the sprite's row on the readout's first
   if (cover_) {
-    gfx::pushRows(*cover_, kCoverX - 1, kCoverY - 1, kCoverPx + 2, from, kCoverPx + 2);
+    putRows(*cover_, kCoverX - 1, kCoverY - 1, kCoverPx + 2, from, kCoverPx + 2);
   } else {
     gfx::fill(kCoverX, kReadoutY, kCoverPx, kCoverY + kCoverPx - kReadoutY, col::CARD);
   }
@@ -678,7 +694,7 @@ void NowPlayingPage::drawWaiting() {
   c.fillRoundRect(kWaitCancelX, 4, kWaitCancelW, 36, 8, cn);
   f.draw(c, Font::Body, tr(S::now_playing_wait_cancel), kWaitCancelX + kWaitCancelW / 2, 22,
          kWaitCancelW - kWaitButtonPad, col::TXT, cn, Fonts::Align::Centre);
-  gfx::push(c, kColumnX, kArtistY, w, h);
+  put(c, kColumnX, kArtistY, w, h);
 }
 
 void NowPlayingPage::drawTransport() {
@@ -708,7 +724,7 @@ void NowPlayingPage::drawTransport() {
       drawZoneInto(c, z, z * kZoneW + kZoneW / 2, cy, pressed_ == static_cast<Zone>(Volume + z));
     }
   }
-  gfx::push(c, 0, kTransportDrawY, kW, kTransportDrawH);
+  put(c, 0, kTransportDrawY, kW, kTransportDrawH);
   drawn_.shuffle = s.shuffle;
   drawn_.repeat = s.repeat;
 }
@@ -747,7 +763,7 @@ void NowPlayingPage::drawZone(int z) {
   M5Canvas& c = gfx::strip();
   c.fillRect(0, 0, kZoneW, kTransportDrawH, col::BG);
   drawZoneInto(c, z, kZoneW / 2, kTransportDrawH / 2, pressed_ == static_cast<Zone>(Volume + z));
-  gfx::push(c, z * kZoneW, kTransportDrawY, kZoneW, kTransportDrawH);
+  put(c, z * kZoneW, kTransportDrawY, kZoneW, kTransportDrawH);
 }
 
 void NowPlayingPage::drawModes(M5Canvas& c, int cx, int cy) {

@@ -205,6 +205,16 @@ private:
   // The playing track's album in the library index (kNone: none, or a
   // built-in track).
   uint32_t playingAlbum() const;
+  // A piece of the page on the glass. Once the page is up, as one picture
+  // to the eye (gfx::pushWhole(): begun where the panel's scan won't show
+  // it half written, in one bus hold above the decoder): the seek bar's
+  // strip as it plays or under a finger, the cover when it lands, a
+  // pressed zone. While the page itself is being drawn (drawn_ not valid
+  // yet: its first draw, a repaint), as it comes: a page takes 40 ms and
+  // more to draw, so nothing of it is whole to the eye, and each piece
+  // would wait for its own place in the scan.
+  void put(M5Canvas& c, int x, int y, int w, int h);
+  void putRows(M5Canvas& c, int x, int y, int w, int sy0, int sy1);
   void drawCover();
   // The title strip (while a play waits: the title on one line and the
   // wait's status).

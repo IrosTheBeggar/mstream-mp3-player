@@ -47,64 +47,8 @@ constexpr uint32_t kHoldExtraUs = 60;
 // A list moving by itself sleeps up to this long for its frame's window
 // (a finger's frames poll instead: its latest place counts).
 constexpr int32_t kSleepMaxUs = 13000;
-// The loop task's priority for a frame's last wait and its hold: above the
-// audio decoder (2, on this core too), level with the speaker's pump.
-constexpr UBaseType_t kHoldPriority = 3;
-
-// The loop task above the decoder while a frame waits out the last of its
-// window and holds the bus (a millisecond or two, then 4 ms at a fling's
-// top speed, 12 at the most): an MP3's decoder runs some 10 ms at a time,
-// and a pass of it across a window made every other frame miss its
-// refresh, one across a hold sent the address late (a tear). It has 1.4 s
-// of audio buffered and every moment between the holds; rendering stays
-// below it.
-class HoldBoost {
-public:
-  HoldBoost() : was_(uxTaskPriorityGet(nullptr)) {
-    if (was_ < kHoldPriority) vTaskPrioritySet(nullptr, kHoldPriority);
-  }
-  ~HoldBoost() {
-    if (was_ < kHoldPriority) vTaskPrioritySet(nullptr, was_);
-  }
-  HoldBoost(const HoldBoost&) = delete;
-  HoldBoost& operator=(const HoldBoost&) = delete;
-
-private:
-  UBaseType_t was_;
-};
-
-// The calling task asleep until `atUs` (esp_timer_get_time()), to a tenth
-// of a millisecond: a one-shot timer wakes it (a tick's sleep would end up
-// to a millisecond early, every frame, and the wait for the window is
-// spent above the decoder). Made at the first use (a semaphore and a
-// timer: ~150 B of internal RAM); without them, a tick's sleep that ends
-// early.
-void sleepUntil(int64_t atUs) {
-  static SemaphoreHandle_t woke = nullptr;
-  static esp_timer_handle_t timer = nullptr;
-  static bool made = false;
-  if (!made) {
-    made = true;
-    woke = xSemaphoreCreateBinary();
-    if (woke) {
-      esp_timer_create_args_t args = {};
-      args.callback = [](void* arg) { xSemaphoreGive(static_cast<SemaphoreHandle_t>(arg)); };
-      args.arg = woke;
-      args.dispatch_method = ESP_TIMER_TASK;
-      args.name = "list frame";
-      if (esp_timer_create(&args, &timer) != ESP_OK) timer = nullptr;
-    }
-  }
-  const int64_t wait = atUs - esp_timer_get_time();
-  if (wait < 150) return;
-  if (!timer) {
-    if (wait >= 1000) vTaskDelay(pdMS_TO_TICKS(wait / 1000));
-    return;
-  }
-  xSemaphoreTake(woke, 0);  // (one given after a wait that timed out)
-  if (esp_timer_start_once(timer, static_cast<uint64_t>(wait)) != ESP_OK) return;
-  if (xSemaphoreTake(woke, pdMS_TO_TICKS(wait / 1000 + 4)) != pdTRUE) esp_timer_stop(timer);
-}
+// (The hold's priority, HoldBoost and sleepUntil() are ui/PanelScan's: a
+// picture put in place goes by them too.)
 }  // namespace
 
 // ui::Ui holds one (Ui.h): S3b's staging state sits in its padding, so the
@@ -293,6 +237,7 @@ bool ListView::pushOnRow(uint32_t row, M5Canvas& c, int sx, int sy, int w, int h
   const int32_t c0 = std::max(top, off);
   const int32_t c1 = std::min(top + h, off + height_);
   if (c0 >= c1) return false;  // off screen
+  Whole whole(scan_, kTop + static_cast<int>(c0 - off), static_cast<int>(c1 - c0), w, !moving());
   vs_->pushRectAtScreen(c, sx, sy + static_cast<int>(c0 - top), w, static_cast<int>(c1 - c0), x,
                         kTop + static_cast<int>(c0 - off), &gfx::holds());
   return true;
@@ -750,6 +695,13 @@ bool ListView::pushItemInPlace(uint32_t item) {
   auto& d = M5.Display;
   const int w = pushWidth();
   const int bandEnd = vs_->map().top() + vs_->map().height();
+  // Its rows on the glass as one picture (ui/PanelScan's Whole): begun where
+  // the panel's scan won't see them half written, the decoder kept off the
+  // loop until the last of them. (It is rendered by now: only the push is
+  // held.) Under a list that moves (a fling, a finger that drags it: the
+  // press lifted at the drag's start too), at once: the next frame's own
+  // window comes first.
+  Whole whole(scan_, kTop + static_cast<int>(c - off), static_cast<int>(end - c), w, !moving());
   while (c < end) {
     const int g = vs_->map().gramLineForContent(c);
     const int n = std::min<int32_t>(end - c, bandEnd - g);  // up to the wrap

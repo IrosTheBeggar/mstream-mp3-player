@@ -3833,6 +3833,63 @@ Queue, Dance and Output (with its Pair and About pages).
   redraws, always. Another page's animation (Now Playing while a finger
   scrubs its seek bar) stays at 30 a second on the clock. Everything is drawn into a PSRAM sprite and pushed in
   pieces of at most 40 lines, each under its own `LcdLock` (`ui/Gfx`).
+  **A picture put in place goes whole** (`ui/PanelScan`'s `Whole`,
+  `gfx::pushWhole()`; the rule is `ScanSync::rows()`, host-tested): a list
+  row drawn again where it shows (a press, a cover that landed, a
+  recount's row, `pushOnRow()`'s piece) and, once the page is up, Now
+  Playing's seek bar, readout, cover, text and zones. Such a picture used
+  to go out when its caller got to it, in those holds of 40 lines, at the
+  loop's priority: the scan could come on the line being written (the rows
+  above it new, those below old, for a refresh), and a decoder pass could
+  cut in (the picture half written for 10 ms and more). Now it is composed
+  first; then the scan is read and the hold begins when the scan will not
+  come on the written line. A wide picture's line is slower on the bus
+  than a scan row (130-140 us against 57): begun just behind the scan,
+  done before the scan is back. A narrow one's is quicker: begun clear of
+  the part the writing would overtake the scan in. How long a hold takes
+  is known between two figures (the wire's 0.4 us a pixel; 7/16 us a
+  pixel, 8 us a line and 100 us a hold), and the two limits lean on
+  opposite ones, so the window is the one that is clear for both and all
+  between. That is two thirds of a refresh for a list row, so the wait is
+  nothing most times and 4.6 ms at the worst (5.8 for Now Playing's
+  transport strip, the tallest). The loop task then holds the bus for all
+  of it at priority 3, as a move does (6 ms for a row, 8 at the most).
+  Three cases don't wait. A picture under a list that moves (a fling, a
+  drag, the press lifted at a drag's start) is held the same but begun at
+  once: the next frame has a window of its own to make. A page being drawn
+  whole (Now Playing's first draw, a repaint) pushes its pieces plainly,
+  as before: nothing of a 40 ms draw is whole to the eye. And with no scan
+  to go by (a panel that doesn't answer, the screen dark, inside a move's
+  own hold) the push is the plain one. A picture too tall for its hold to
+  stay clear of the scan (over 145 rows at full width: none is) would go
+  as before too. MEASURED on the owner's Core2, 2026-11-27, in one build
+  with the pictures as before and whole by turns (the console's `uiw0` /
+  `uiw1`, which counts them and says of each, by how long its hold really
+  took, whether the scan came on its written line: `ScanSync::met()`), an
+  MP3 decoding in silent test mode, nothing in the session moving the
+  player's place:
+
+  | | as before (`uiw0`) | whole (`uiw1`) |
+  |---|---|---|
+  | Now Playing's waiting panel shown and taken away from the console (`uiFw` / `uiF0`: what of the page changes with it; 2 runs, the screen dark for the later half of each) | 39 pictures: the scan on the written line of 19, 6 cut into | 44: none, none |
+  | A finger along the seek bar for 2.6 s, then off it (2 runs) | 307: 96 and 62; 74 frames, a frame's draw 17.3 ms; the LCD's bus holds 5.7 ms each | 306: none, none; 74 frames, 17.6-18.0 ms; 3.3 ms each |
+  | The Albums list, six flings (a row pressed and let go at each, the covers that land after; 2 runs) | 33: 12 at once under the moving list; of the other 21, 9; 13 of them all cut into | 27: 12 at once; of the other 15, none; none cut into |
+  | ... those flings' frames | 54.1-54.4 a second, 28-30 % late | 54.0-54.8 a second, 29 % late |
+
+  (Cut into: the hold took over twice its slowest and 1.5 ms. The flings'
+  frames are the moving list's own, which this leaves alone. A whole
+  picture's hold, 3.3 ms over a scrub's strips and readouts of 21 and 27
+  lines, is between the two figures' 3.1 and 3.7; as before the bus was
+  held 5.7 ms a time, the decoder's passes in it.) Two sessions the same
+  day before the window took two figures (it had the slower one alone, and
+  `uiw` counted the pictures begun outside it) said the same over 1,820
+  more pictures: as before 13-22 % begun outside and as many cut into,
+  whole none of either; a scrub's 83-85 frames and a fling's 54-55 a
+  second both ways, 67-69 with nothing playing; and Now Playing after such
+  pictures the same screenshot, byte for byte, as after a draw of the
+  whole page. Not checked: by eye (the counts say where the scan was, not
+  what the glass showed); a real finger; the seek bar under a real play;
+  music over Bluetooth.
 - **Navigation** (`NavModel`, host-tested): five tabs (Now Playing, Library,
   Queue, Dance, Output), a stack of pages each. A tab tap switches (the tab
   keeps its stack); a tap on the current tab takes it to its root (the Queue:
@@ -5081,6 +5138,10 @@ Queue, Dance and Output (with its Pair and About pages).
   frames go (the panel's scan as timed, the list's reserved memory, what a
   pushed line and a row cost now; `uiv0` / `uiv1` take the frames off the
   scan and back, to compare by eye, `uiv!` times the panel again),
+  `uiw` counts the pictures put in place since the last `uiw` (how many
+  went at once under a moving list, how many of the others the scan came
+  on the written line of, how many something cut into; `uiw0` / `uiw1`
+  puts them as they were before / whole, to compare the two),
   `uif<ms>` sets the frame clock's period, `uiB` times the list shown (a
   row sprite's fill, a row's render, the band in place, a move), `uiBv`
   checks the sprites' fast text against M5GFX's and `uiBf0` / `uiBf1`
@@ -5144,7 +5205,18 @@ Queue, Dance and Output (with its Pair and About pages).
   touch after it lifted on the sheet's Play). So on a list a session
   flings (`uis`), holds a finger only where nothing acts (the Library's
   own selected segment), reads `ui`'s overlays before each touch, and
-  starts with `z`.
+  starts with `z`. It also reads the log after every command for a press
+  on the device itself (a `[button]` line, a `[touch]` line that isn't
+  `scripted`) and sends nothing more after one: the same day someone
+  pressed B on the Core2 in the middle of a session (play, then pause, in
+  silent mode), and three more flings went out before the session's own
+  check of the queue stopped it. What a session needs of Now Playing it
+  can have without moving the player's place: `uiFw` / `uiF0` (the waiting
+  panel, shown only: its buttons would act) and a finger along the seek
+  bar that leaves it before the lift (`uid40,150,280,96,3000`: `no seek
+  (slid off the bar)`). `uiF...` and `Rf...` don't count as input: the
+  screen goes dark 15 s into a run of them, and a dark screen draws
+  nothing (`Ps1` between them).
   Every list motion logs `[ui] scroll: <ms>, <frames> (<fps>), draw mean/max
   (n over 35 ms), ring min, underruns +n, governor` when it settles, and
   under it its moves against the panel's scan: `[ui] scroll moves: N in

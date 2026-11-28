@@ -191,6 +191,7 @@ void Ui::start(uint32_t nowMs) {
   // The panel's scan (awake since the boot screen): timed once, ~60 ms.
   scan_.calibrate();
   scan_.print();
+  gfx::setScan(&scan_);  // a picture put in place goes by it too (gfx::pushWhole())
   if (pickerDue_) {
     Serial.println("[ui] up: the first boot's language picker (then the touch check and the tips; console ui: the "
                    "navigation state)");
@@ -3069,6 +3070,21 @@ void Ui::command(const char* a) {
                                        : "on the frame clock (uiv0)",
                   (unsigned long)list_.lineUs(), (unsigned long)list_.rowUs());
     return;
+  } else if (a[0] == 'w') {
+    // uiw: the pictures put in place since the last uiw (ui/PanelScan's
+    // Whole: a list row drawn again where it shows, Now Playing's seek bar
+    // and cover); uiw0 / uiw1: put as before / whole, to compare the two.
+    if (a[1] == '0' || a[1] == '1') scan_.setWhole(a[1] == '1');
+    const PanelScan::WholeStats w = scan_.takeWhole();
+    Serial.printf("[ui] pictures in place: %s; since the last uiw %u: %u at once under a list that moved; of the "
+                  "other %u, the scan came on the line being written of %u (shown half written for a refresh); %u "
+                  "of them all cut into (over twice their time on the bus)\n",
+                  !scan_.ok()        ? "as they come (the scan can't be read)"
+                  : scan_.wholeOn()  ? "whole (on the panel's scan, in one hold above the decoder)"
+                                     : "as before (uiw0)",
+                  (unsigned)w.pictures, (unsigned)w.atOnce, (unsigned)(w.pictures - w.atOnce), (unsigned)w.met,
+                  (unsigned)w.cut);
+    return;
   } else if (a[0] == 'f') {
     // uif<ms>: the frame clock's period for a moving list (uif: as it is by itself).
     forcedFrameMs_ = static_cast<uint32_t>(atoi(a + 1));
@@ -3107,7 +3123,8 @@ void Ui::command(const char* a) {
                    "decoded again (timings); uil<n> the Library browses a synthetic library of n tracks (uil0: the "
                    "card's); uit/uih/uis/uid/uip a scripted finger; uiM the Albums list's mood filter (uiMa<hex> set "
                    "it, uiMa0 clear it, uiMe the editor); uiv the panel's scan and the list's frames (uiv0 / uiv1 "
-                   "ignore / follow it, uiv! time it again), uif<ms> the frame clock's period; uiB the list's bench, "
+                   "ignore / follow it, uiv! time it again), uif<ms> the frame clock's period; uiw the pictures put in "
+                   "place (uiw0 / uiw1 as before / whole on the scan); uiB the list's bench, "
                    "uiBv the sprites' text checked against M5GFX's, uiBf0 / uiBf1 their fast text off / on; uiS the "
                    "listening stats' pages (no wake: a dark screen stays dark), uiSh their hub (as the entry row's "
                    "tap; the push's ms), uiS<shelf>[w] a shelf over it (0-4: Most played, its window w 0-2, New "
