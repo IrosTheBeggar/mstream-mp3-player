@@ -9,7 +9,8 @@
 #include "NavModel.h"
 
 // A page of the UI: what a tab shows (its root) or what was pushed on it.
-// One object per kind of page (static, in the Ui, no heap churn); the
+// One object per page (static, in the Ui, no heap churn; the Library's
+// kinds are still one LibraryPage's: Ui::pageFor()); the
 // state of each place it is shown at lives in its nav entry (PageRef): the
 // thing it shows (an artist id...), its scroll position, its expanded row.
 namespace ui {

@@ -1811,7 +1811,7 @@ void test_output_texts_fit() {
   }
   fits(small, v, kAboutValueW);
   // Bigger still, the three counts don't fit in Small: the tracks and the
-  // albums (about.library_value_short, OutputPage::drawAbout()), in every
+  // albums (about.library_value_short, AboutPage::drawRow()), in every
   // language.
   for (uistr::Lang l : kAllLangs) {
     if (!uistr::hasCatalogue(l)) continue;
