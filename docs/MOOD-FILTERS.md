@@ -185,7 +185,7 @@ A NULL head fails only its own scale. A song with no row matches nothing. An alb
 | Press | Finger down | That tray or chip alone: BTN_HI, or SOFT if picked | Acts on Tap |
 | Level alone | Level moved, nothing set | Level cell dim, label kept. Clear TXT. Count as nothing set | Cycles. Filters nothing |
 | Zero | Count 0 | Count amber. Stays open | Everything still works |
-| From Auto DJ | `OutputPage` owner | Blue accent, "1,204 of 19,412 tracks" | Applied and saved at each tap |
+| From Auto DJ | `AutoDjPage` owner (`OutputPage` until the Output tab's pages were split, 2026-11-27) | Blue accent, "1,204 of 19,412 tracks" | Applied and saved at each tap |
 | Wide language | pl, ru | Small for the whole grid. One ru tag on two Small lines | |
 | A toast at opening | A toast is up as it opens | It goes, its Undo with it | |
 | A toast while up | A toast arrives while it is up | Toast over y 36-71, as over any sheet | A Down above y 72 goes nowhere, so an unseen Clear can't be hit. The sleep timer's buttons stay first (`src/ui/Ui.cpp:1654`) |
@@ -1304,7 +1304,7 @@ Needs S3's editor and S4. One PR. Merged, then held out of a release until S7 (9
   - This Mac has no Pillow, so the widths were measured with a host harness over the firmware's VLW arrays and CJK store, and by `test_ui_strings` and `test_ui_library`.
 - 2, the page (afe2aa6):
   - The row is drawn by `drawAutoDjValue`, all FAINT when dim, as `dj-nodata`.
-  - A tap opens `Ui::openFilters()` in Output's blue, counting tracks. `OutputPage` is a `FilterOwner`.
+  - A tap opens `Ui::openFilters()` in Output's blue, counting tracks. `AutoDjPage` (the Output tab's one `OutputPage` until 2026-11-27) is a `FilterOwner`.
   - `UiHost::autoDjSetMoods(q)` returns the editor's count. `autoDjMoodSettled()` settles a changed close, and D5's log line moved into it; `Dq` calls it at once.
   - A dim row's tap says `toast.autodj_no_mood`, before the index's note. Behind the fence a tap says `library.updating_wait`. `uiMe` over Output opens Auto DJ's editor.
   - The "..." sheet has a per-row ink (`Ui::autoDjDetail()`), and the detail is cut beside its label.

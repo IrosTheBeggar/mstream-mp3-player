@@ -3281,7 +3281,8 @@ strings.
   `Hc0`, `Hc1`, `Hc` the cap. `.bss` is 16 B over main's (`StatsLists`
   24 to 44 B); `DanceMode`, `ui::Ui`, `CardTasks` and Auto DJ's object
   are main's sizes (`ui::Ui` held at 9,416 B by a `static_assert` since
-  S3b). S3a first carved the snapshot as a plain block, and
+  S3b; 9,520 B since the pages' untangling, the UI section's "The pages'
+  objects"). S3a first carved the snapshot as a plain block, and
   the device's run 3a-4 (2026-11-21) found that, held, it moved main's
   PSRAM (free 3,908 B under, the largest free block 24,576-90,112 B
   under from the second library update on), where the visits alone,
@@ -3329,8 +3330,9 @@ strings.
   never moves the hub's rows or the tray under the finger. The console's
   made-up views (`uiSx1`-`uiSx9`, look only: the UI's console `ui`,
   below) write theirs into the same Dance block (views 1, 3 and 4), carving
-  nothing. `ui::Ui` stays main's 9,416 B to the byte (the owner's
-  "Byte-exact", 2026-11-22; a `static_assert`): its three new bytes, the
+  nothing. `ui::Ui` stayed main's 9,416 B to the byte for it (the owner's
+  "Byte-exact", 2026-11-22; a `static_assert`, which holds its size still:
+  the UI section's "The pages' objects"): its three new bytes, the
   held condition, the card-out mark and the made-up view (RAM only), sit
   in its padding. `LibraryPage` stays 836 B (the entry row's latch, the
   minute, the drawn shape and texts and the counting days held are in its
@@ -3896,6 +3898,51 @@ Queue, Dance and Output (with its Pair and About pages).
   back to the playing track); "‹" in a header pops. Each stack entry keeps its
   page's scroll position and expanded row. Deeper than 8, the oldest page
   above the root goes.
+- **The pages' objects** (`ui/Page.h`, `ui/Pages.h`): a page of the UI is an
+  object in `ui::Ui`, made once (no heap churn); what it shows at a place is
+  in that place's stack entry, and `Ui::pageFor()` gives the object for an
+  entry's kind. The Output tab's six pages are six objects since the pages'
+  untangling (2026-11-27; one `OutputPage` served all six kinds until then,
+  through 2 switches and 35 tests of its kind): the root (`OutputPage`),
+  `PairPage`, `AutoDjPage` (a `FilterOwner` too), `LanguagePage`, `AboutPage`
+  and `DeviceInfoPage`, each with its own state, a file each but About's two
+  (`src/ui/OutputPage.cpp`, `PairPage.cpp`, `AutoDjPage.cpp`,
+  `LanguagePage.cpp`, `AboutPage.cpp`). What they share is `OutputTabPage`
+  (the header and its touch, the list's, the way in and out, the console's
+  line) and `ui/OutputParts.h`'s pieces (the radio, the spinner and its
+  step pushed alone, the signal bars). The Library's eight kinds and its
+  listening stats' pages are still one `LibraryPage`. **`ui::Ui`'s size
+  is the owner's call, byte for byte** (a `static_assert`,
+  `src/ui/Ui.cpp`): 9,416 B until then (S3b's "Byte-exact", 2026-11-22: its
+  new bytes in padding holes), and for the untangling one TLSF block up
+  (2026-11-27: the carve is the size and 12 B rounded to 256, 9,472 B
+  before and 9,728 B now, so up to 9,716 B; 256 B of PSRAM for good, and
+  the heap after it laid out 256 B on, so heap figures against older
+  builds need a new baseline), pinned again as each part lands. The six
+  objects made it **9,520 B** (+104: each of the five new ones has its own
+  20 B of bases and touch state). IRAM, `.data` and `.bss` are main's to
+  the byte; the image is 3.9 KB larger (six vtables, the console's `uiO`).
+  CHECKED on the owner's Core2 the same day: the code before (with `uiO`
+  alone added to it) and after, the same scripted session on each (silent
+  test mode; every page opened from the console and moved three rows a
+  drag; no setting touched). Of 20 screens (the root from top to bottom in
+  6, Auto DJ in 2, Language in 3, About in 4, Device info in 4, Pair) 16
+  are the same to the pixel, and the 4 others differ in what differs:
+  About's Version row names each build's own ELF (2 screens); Device
+  info's RAM row had the internal heap's largest free block at that moment
+  (63 K and 55 K; free 73 K and the lowest 61 K on both, as all through
+  both sessions); Pair showed what its search had found (nothing yet, and
+  a TV). The header's arrow, the console's back and the tab tapped again
+  go where they went; `uiMe` over Auto DJ opens its editor; Pair's search
+  starts on the way in. The heap is as foretold: PSRAM's lowest free over
+  the boot 730,992 B for 731,248 (256 less); Auto DJ's join's kept block
+  256 B on (the same 155,586 B, the same 303,348 B at its peak) and the
+  largest free block after it the same 524,276 B; the listening stats'
+  top block where it was, the same 67,508 B above it; the Albums' mood
+  filter's carve the same 7,044 B; the sessions' lowest free PSRAM 66 K
+  on both. Not checked: by hand; a tap on a setting's row, a language
+  picked, a pairing made (their code moved as it was); the first boot's
+  language picker.
 - **The tab bar** (`TabBarModel`, host-tested for layout and redraws): 36 px
   at the top, in the panel's fixed area. Tabs 0-53, 54-107, 108-161, 162-215
   and **Output 216-319, to the screen's edge**: the user's panel reads the
@@ -4060,7 +4107,7 @@ Queue, Dance and Output (with its Pair and About pages).
   title row, and a Down there goes nowhere. A touch within 300 ms of its
   opening goes nowhere, as on a sheet. The Albums list opens it in the
   Library's violet, counting albums; Output > Auto DJ's Smart filters row
-  (`OutputPage`, a `FilterOwner` too) in blue, counting tracks, each tap
+  (`AutoDjPage`, a `FilterOwner` too) in blue, counting tracks, each tap
   applied and saved through `UiHost::autoDjSetMoods()`, whose count the
   editor shows; its close on a change settles it
   (`UiHost::autoDjMoodSettled()`) and draws the page's rows again.
@@ -4908,7 +4955,7 @@ Queue, Dance and Output (with its Pair and About pages).
     `Ui::autoDjNews()` and `Ui::queueUndoDropped()` after Auto DJ's step
     (the loop's pass, above).
 - **Device info** (Output > About > Device info, `PageKind::DeviceInfo`,
-  OutputPage's fourth kind of page): what the boot screen used to list,
+  `DeviceInfoPage`): what the boot screen used to list,
   and a little more, one row each, a label (Small) over its value (Body,
   or Small when Body doesn't fit), no icons: Board, Power chip, IMU, Chip
   (model and revision), CPU (the clock now), Flash, PSRAM (its size and
@@ -5107,7 +5154,7 @@ Queue, Dance and Output (with its Pair and About pages).
     is its background alone; and a length the backend only estimates can't
     take bars down (`AppState::durationKnown`). Their bytes sit in padding:
     `WaveState`'s 4 before `jobMsSum_`, `AppState`'s 2 after `seekable`.
-    `ui::Ui` is still 9,416 B, and IRAM, `.data` and `.bss` are main's to
+    `ui::Ui` was still 9,416 B with them, and IRAM, `.data` and `.bss` main's to
     the byte (125,915 / 25,112 / 36,392 B, both built here the same day).
 - **The length of a track** for the progress: the decoders don't expose it,
   so the backend reads it when the track opens (`TrackProgress`, host-tested):
@@ -5183,7 +5230,11 @@ Queue, Dance and Output (with its Pair and About pages).
   works); 1, 3 and 4 write their snapshot into the Dance tab's block
   (refused while that tab is up), and 1-9 are refused under `uil<n>`;
   `uiSx0` the card's own again, `uiSx` the list (LISTENING-STATS.md
-  9.3). A stats page logs a `[ui] stats` line for each item it stages
+  9.3). `uiO<p|j|l|a|d>` shows a page of the Output tab over its root, as
+  a tap on its row opens it (p Pair, whose search starts as a tap's does
+  and stops on the way out; j Auto DJ, l Language, a About, d About's
+  Device info over About), so a session has no need of a finger on a list
+  of settings. A stats page logs a `[ui] stats` line for each item it stages
   in place and for each act or tap it refuses, and `[ui] slow pass`'s
   snapshot part counts the stats' news pass. The screenshot (`X`) reads the list band back through the scroll
   offset, as before. For tests without a hand on the device there is a
