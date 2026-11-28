@@ -113,6 +113,14 @@ public:
   virtual void screenOff() {}
   // An album's cover thumbnail arrived (ui/Thumbs): redraw what shows it.
   virtual void thumbReady(uint32_t album) { (void)album; }
+  // The page shows `album`'s cover, or would as soon as it is made (a list's
+  // rows on screen and the ones kept beside them; Now Playing's cover): its
+  // request stays when a list comes to rest, the others go
+  // (Thumbs::dropUnshown()).
+  virtual bool showsCover(uint32_t album) const {
+    (void)album;
+    return false;
+  }
   // 'ui' on the console: one line about its state.
   virtual void describe(char* buf, size_t size) const;
 

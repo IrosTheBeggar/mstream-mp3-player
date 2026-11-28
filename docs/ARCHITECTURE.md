@@ -3575,10 +3575,11 @@ layer is suspended).
   its `[touch] tap` with no `[touch] long press` between them; a catch and
   a pull back (`uid160,100,160,180,300`) drew 51 frames at 52.8 a second,
   6.2 ms at most; and the owner, by hand: "The scrolling is a lot
-  smoother." Left as it was: the row the turn brings back is still rendered
-  in its first frame (the six row sprites hold no row behind a fast fling),
-  and no row is rendered ahead while the finger rests (which way it goes is
-  the finger's).
+  smoother." Left as it was then: the row the turn brings back was still
+  rendered in its first frame (the six row sprites hold no row behind a fast
+  fling), and no row is rendered ahead while the finger rests (which way it
+  goes is the finger's). The list now gets that row back while the finger
+  holds it (UI, "A list a finger caught gets its row back").
 - **The button strip** (`StripButtons`, host-tested). The three buttons
   are made from the same touch point as the glass, not taken from
   M5Unified's BtnA/B/C: those press for any point in the strip that isn't
@@ -4184,9 +4185,8 @@ Queue, Dance and Output (with its Pair and About pages).
   and carries out what comes back. test_row_slots has each rule at its
   edges and the list's use of them frame by frame over the real scroll and
   scroll map: a fling at the cap renders every row between two frames and
-  none in one, and a turn's first frame renders the top row itself, its
-  sprite having gone to the second row ahead (the baseline for the turn's
-  fix). The code as it stood was run against the new for 1.2 million
+  none in one (and a turn's first frame rendered the top row itself then,
+  its sprite having gone to the second row ahead). The code as it stood was run against the new for 1.2 million
   random steps and agreed at every one, and the two builds ran the same
   scripted session on the owner's Core2 (the Artists list of its
   19,671-track card, nothing playing): a row rendered in 2,916-2,928 us on
@@ -4195,9 +4195,35 @@ Queue, Dance and Output (with its Pair and About pages).
   68.5-69.4, the rail's scrub 49 bands in 3.18 s on both (a band
   51.1-51.3 ms), no frame over 35 ms on either. (How many frames and rows
   a scripted fling makes isn't repeatable between two runs of one build,
-  so those counts say nothing here.) Rows kept outside the band are forgotten
-  when a cover arrives or the playing track changes (they would hold the
-  placeholder, or the old mark). `ui` counts the rows rendered ahead.
+  so those counts say nothing here.) **A list a finger caught gets its row
+  back** (2026-11-27, `rowslots::unheld()`). A fast fling's second row ahead
+  takes the sprite of the row leaving at the other edge; a turn back brings
+  that row's lines on in its first frame, and it was rendered there (a
+  render the decoder can stretch to 20-39 ms). Now, from the Down that
+  catches a moving list until the finger moves it or lifts
+  (`ListView::grabbed_`), the list standing still and owing no frame, the
+  row on screen that no sprite holds is rendered, into the sprite of the
+  furthest row ahead: the rows on screen and one either side keep theirs,
+  so a flick on the same way still finds its row. test_row_slots: a turn
+  only pushes, a flick on after a catch only pushes, and a turn in the pass
+  of the catch itself renders its row as before. A motion's report counts
+  the rows its frames rendered themselves since (`[ui] scroll moves: ...;
+  its frames rendered N of their rows themselves`: the number the look-ahead
+  is there to keep at none), and on the owner's Core2 (the Albums list,
+  1,761 albums of its 19,671-track card, nothing playing, both builds with
+  the count, a fresh boot each) five flings each caught 0.4 s in and pulled
+  back rendered 3, 1, 1, 1 and 1 rows in their frames before and 2, 0, 0, 0
+  and 0 after (the first one's other two came at its start on both builds:
+  the first motion after the rail's scrub, from the list's end); a fling
+  caught and held, and one left to its rest, none on either. With an
+  MP3 decoding the same five gave 10, 2, 4, 5 and 4 before and 2, 0, 10, 2
+  and 4 after: there a fling at the cap leaves rows to its frames on both
+  builds (the decoder takes the time between them), more of them than the
+  turn's one, so those say nothing of the turn; they are the list's next
+  cost to look at. Rows kept outside the band are forgotten when the playing
+  track changes (they would hold the old mark); a cover that arrives is
+  painted into the rows that hold its album (Covers, below). `ui` counts
+  the rows rendered ahead.
   **A row's text goes straight into its sprite** and **the sprites lie in
   the PSRAM's fast half** (below: Text, and "The list's memory"): a row
   renders in 3.0-3.4 ms (5.6 before 0.14.0), and a fling draws in 1-2 ms a
@@ -5084,10 +5110,33 @@ Queue, Dance and Output (with its Pair and About pages).
   (TJpgDec reads baseline only; one of six covers on the test card) or a
   damaged one keeps the placeholder, is logged once, and gets a
   header-only file so the next boot doesn't try it again. Requests are
-  served newest first (the rows on screen when a list stops come before the
-  ones it passed; only the last 24 are kept). When one arrives, the Ui has
-  the page redraw what shows that album: a row (`refreshRow`), or Now
-  Playing's cover. **Why a worker task, not work in the loop's idle time**
+  served newest first, and only the last 24 are kept. **When a list comes to
+  rest, the requests of the rows it passed go** (2026-11-27:
+  `Thumbs::dropUnshown()` at a motion's end, `ThumbCache::keepWanted()`).
+  Kept: the albums of the rows that hold a sprite, on screen or beside the
+  band (`Page::showsCover()`), and the cover of what plays. Each of the
+  others was a card read after the list had stopped, of a cover nobody was
+  looking at, and it took one of the 64 slots from a cover somebody had
+  looked at. **When one arrives it is painted where it shows**: Now
+  Playing's cover; on a list, into each row sprite that holds the album,
+  and where the row is on screen its 40 x 40 is pushed alone
+  (`LibraryPage::thumbReady()`, `ListView::patchRow()`). Before, the row was
+  rendered and pushed whole, and the rows kept beside the band were
+  forgotten at every arrival (they held the placeholder), to be rendered
+  again: by the first frame of a swipe that came before they were. On the
+  owner's Core2 (the Albums list of its 19,671-track card, one scripted
+  session on both builds, a fresh boot each): after the rail's scrub from
+  top to bottom 24 covers were loaded before and 4 after (20 requests
+  dropped); over five flings caught and pulled back 59 and 30, with 23
+  covers pushed out of the cache before and none after; over the whole
+  session 170 and 77 (105 and 12 pushed out). The loop's covers step took
+  9.3 ms at most before and 1.7 after (25.3 and 8.2 with an MP3 decoding).
+  The rail's scrub itself is as it was (48 bands in 3.18 s, a band 52.4 ms
+  and 52.5), and a fling at the cap (67.9 and 68.0 frames a second).
+  Screenshots read back from the panel showed a cover patched in its place
+  on a scrolled list, and one painted into a row kept off screen there when
+  the row was dragged on, the same to the pixel as the band drawn again
+  whole. **Why a worker task, not work in the loop's idle time**
   (the card worker since METADATA.md's N10, shared with the card's walk and
   scan, its covers handed first: above):
   a decode takes 125-300 ms, and TJpgDec can't stop part-way and carry on
@@ -5116,7 +5165,8 @@ Queue, Dance and Output (with its Pair and About pages).
   offsets by `jpeg::parseFile()`, TJpgDec fed from a 16 KB buffer: it was
   read whole, up to 2 MB, before METADATA.md's N10), and the scaler's sums
   (~170 KB while decoding) and the job are in PSRAM. `ui` prints the
-  cache, the decodes (mean and max ms), failures, the worker's stack
+  cache (with the requests waiting, and those dropped at a list's rest),
+  the decodes (mean and max ms), failures, the worker's stack
   high-water mark and the lowest internal RAM free during its jobs; each
   decode logs `[thumb] <path>: WxH at 1/n, 40 + 96 px in N ms (read R,
   decode D, card copy W)`; console `uiT` decodes every cover again this
@@ -5273,7 +5323,8 @@ Queue, Dance and Output (with its Pair and About pages).
   under it its moves against the panel's scan: `[ui] scroll moves: N in
   their window on the panel's scan (n of them with a strip row early), N
   late, N without the scan; the address a-b lines past the band (in the
-  band for n); the fling's frames N ms apart at most, n of m late` (a scrub
+  band for n); the fling's frames N ms apart at most, n of m late; its
+  frames rendered n of their rows themselves` (a scrub
   of Now Playing's seek bar the same as `[ui] scrub: ...`; a finger on the
   A-Z rail, from its landing to the band's last catch-up, as `[ui] rail
   scrub: <ms>, <band frames> (<a second>; a band mean/max), the loop held

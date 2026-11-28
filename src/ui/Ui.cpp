@@ -1852,6 +1852,7 @@ void Ui::loop(uint32_t nowMs) {
         motion_.sumUs += us;
         if (us > motion_.maxUs) motion_.maxUs = us;
         if (us > kSlowFrameUs) ++motion_.slow;
+        if (cost) motion_.rowsOwn = static_cast<uint8_t>(std::min<uint32_t>(255, motion_.rowsOwn + cost->renders));
         // A fling's cadence: the time between its frames while every
         // refresh moves it (over ~150 px/s: 2 px a frame).
         const uint32_t at = micros();
@@ -1891,7 +1892,8 @@ void Ui::loop(uint32_t nowMs) {
   const uint32_t t1 = micros();
   const uint32_t arrived = thumbs_.loop(nowMs);
   if (arrived != Thumbs::kNone) {
-    if (list_.attached()) list_.forgetHidden();  // (a row rendered ahead holds the placeholder)
+    // (The page paints it into the rows that show it, the ones kept beside
+    // the band too: nothing rendered ahead is forgotten for a cover.)
     if (page_ && !modalUp()) {
       page_->thumbReady(arrived);
     } else {
@@ -1943,6 +1945,16 @@ void Ui::trackMotion(uint32_t nowMs) {
   if (state_.ringMatters && state_.ringMs < motion_.ringMin) motion_.ringMin = state_.ringMs;
   if (moving) return;
   motion_.on = false;
+  // The list rests (or a modal took it): the covers its rows asked for on
+  // the way are wanted no more, but the ones the page still shows, and the
+  // cover of what plays (Now Playing asked for it, and is where every page
+  // goes back to: it is there when it comes up).
+  thumbs_.dropUnshown(
+      [](uint32_t album, void* ui) {
+        const Ui& u = *static_cast<const Ui*>(ui);
+        return (u.page_ && u.page_->showsCover(album)) || u.nowPlaying_.showsCover(album);
+      },
+      this);
   const uint32_t ms = nowMs - motion_.startMs;
   if (motion_.frames + motion_.railFrames < 2) return;  // a tap's highlight, not a scroll
   char ring[24] = "n/a (not playing)";
@@ -1972,8 +1984,10 @@ void Ui::trackMotion(uint32_t nowMs) {
                 ms ? motion_.frames * 1000.0f / ms : 0.0f, meanMs, motion_.maxUs / 1000.0f, (unsigned long)motion_.slow, ring,
                 (unsigned long)(state_.underruns - motion_.underruns), ScrollGovernor::name(budget_.level));
   if (!motion_.list) return;
-  // Its moves against the panel's scan, and a fling's cadence.
+  // Its moves against the panel's scan, a fling's cadence, and the rows its
+  // frames had to render themselves.
   const ListView::ScanStats st = list_.takeScanStats();
+  const uint8_t rowsOwn = motion_.rowsOwn;
   if (st.frames + st.late + st.unsynced == 0) return;
   char gaps[72] = "";
   if (motion_.gaps) {
@@ -1981,9 +1995,11 @@ void Ui::trackMotion(uint32_t nowMs) {
              (unsigned long)motion_.gapsLate, (unsigned long)motion_.gaps);
   }
   Serial.printf("[ui] scroll moves: %lu in their window on the panel's scan (%lu of them with a strip row early), %lu "
-                "late, %lu without the scan; the address %d-%d lines past the band (in the band for %lu)%s\n",
+                "late, %lu without the scan; the address %d-%d lines past the band (in the band for %lu)%s; its frames "
+                "rendered %u%s of their rows themselves\n",
                 (unsigned long)st.frames, (unsigned long)st.early, (unsigned long)st.late, (unsigned long)st.unsynced,
-                st.phaseMax >= 0 ? st.phaseMin : 0, st.phaseMax >= 0 ? st.phaseMax : 0, (unsigned long)st.inBand, gaps);
+                st.phaseMax >= 0 ? st.phaseMin : 0, st.phaseMax >= 0 ? st.phaseMax : 0, (unsigned long)st.inBand, gaps,
+                static_cast<unsigned>(rowsOwn), rowsOwn == 255 ? " or more" : "");
 }
 
 LibraryIndex::Span Ui::shownTracks() const {

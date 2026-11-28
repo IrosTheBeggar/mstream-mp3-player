@@ -390,6 +390,53 @@ void test_cache_requests_newest_first() {
   TEST_ASSERT_FALSE(c.next(&id, &sizes));
 }
 
+// A list stopped: the requests of the rows it scrolled past go, the others
+// stay as they were, newest first, with their sizes.
+void test_cache_drops_the_requests_nobody_shows() {
+  ThumbCache c(countAlloc, countFree);
+  TEST_ASSERT_TRUE(c.begin(4, 1));
+  for (uint32_t i = 1; i <= 10; ++i) c.want(i, ThumbCache::Size::Small);
+  c.want(4, ThumbCache::Size::Large);  // (Now Playing's too: both sizes, and the newest)
+  uint32_t id;
+  uint8_t sizes;
+  TEST_ASSERT_TRUE(c.next(&id, &sizes));  // one is being made meanwhile
+  TEST_ASSERT_EQUAL_UINT32(4, id);
+  c.want(4, ThumbCache::Size::Small);     // (being made: not a request)
+  TEST_ASSERT_EQUAL_UINT32(9, c.wanted());
+  // On screen now: 2, 6, 7 and 30 (which nobody asked for).
+  struct Shown {
+    static bool has(uint32_t album, void* calls) {
+      ++*static_cast<int*>(calls);
+      return album == 2 || album == 6 || album == 7 || album == 30;
+    }
+  };
+  int calls = 0;
+  TEST_ASSERT_EQUAL_UINT32(6, c.keepWanted(Shown::has, &calls));
+  TEST_ASSERT_EQUAL_INT(9, calls);
+  TEST_ASSERT_EQUAL_UINT32(3, c.wanted());
+  TEST_ASSERT_EQUAL_UINT32(4, c.making());  // the one being made goes on
+  c.done(4);
+  const uint32_t order[] = {7, 6, 2};
+  for (uint32_t want : order) {
+    TEST_ASSERT_TRUE(c.next(&id, &sizes));
+    TEST_ASSERT_EQUAL_UINT32(want, id);
+    TEST_ASSERT_EQUAL_UINT8(ThumbCache::sizeBit(ThumbCache::Size::Small), sizes);
+    c.done(id);
+  }
+  TEST_ASSERT_FALSE(c.next(&id, &sizes));
+  // A request dropped is asked again by the row that draws it next.
+  c.want(9, ThumbCache::Size::Small);
+  TEST_ASSERT_EQUAL_UINT32(1, c.wanted());
+  // All of them shown, none of them, nothing asked.
+  calls = 0;
+  TEST_ASSERT_EQUAL_UINT32(0, c.keepWanted([](uint32_t, void*) { return true; }, nullptr));
+  TEST_ASSERT_EQUAL_UINT32(1, c.wanted());
+  TEST_ASSERT_EQUAL_UINT32(1, c.keepWanted([](uint32_t, void*) { return false; }, nullptr));
+  TEST_ASSERT_EQUAL_UINT32(0, c.wanted());
+  TEST_ASSERT_EQUAL_UINT32(0, c.keepWanted(Shown::has, &calls));
+  TEST_ASSERT_EQUAL_INT(0, calls);
+}
+
 void test_cache_keeps_only_the_last_requests() {
   ThumbCache c(countAlloc, countFree);
   TEST_ASSERT_TRUE(c.begin(4, 1));
@@ -518,6 +565,7 @@ int main(int, char**) {
   RUN_TEST(test_scaler_refuses_bad_sizes_and_no_memory);
   RUN_TEST(test_cache_stores_and_evicts_least_recently_used);
   RUN_TEST(test_cache_requests_newest_first);
+  RUN_TEST(test_cache_drops_the_requests_nobody_shows);
   RUN_TEST(test_cache_keeps_only_the_last_requests);
   RUN_TEST(test_cache_memory_goes_back);
   RUN_TEST(test_cache_pools_lent_to_the_library_update);

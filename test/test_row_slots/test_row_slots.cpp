@@ -5,10 +5,11 @@
 // sprite an item takes and what is given away for it; the items a band shows,
 // a move brings on and a forget keeps; the row rendered ahead of a moving
 // list and beside a resting one, with the range each keeps; the time a row
-// has before a frame. Then the list's own use of them, frame by frame over the
-// real scroll and the hardware scroll's map: a fling, a slow move, a swipe from
-// rest and a turn, counting the rows a frame has to render itself (the hitch a
-// decoder pass stretches), and a random session's invariants.
+// has before a frame; the row a caught list gets back. Then the list's own use
+// of them, frame by frame over the real scroll and the hardware scroll's map: a
+// fling, a slow move, a swipe from rest, a catch and a turn, counting the rows a
+// frame has to render itself (the hitch a decoder pass stretches), and a random
+// session's invariants.
 // Run: pio test -e native
 #include <unity.h>
 
@@ -215,6 +216,43 @@ void test_the_rows_rendered_beside_a_resting_list() {
   assertNext(-1, 0, 2, neighbour(heldOf(0, 1, 2, -1, -1, -1), 0, kBand, 3));
 }
 
+// A list a finger caught while it moved: the row on screen whose sprite the
+// fling's second row ahead took gets it back, from the furthest row ahead.
+void test_the_row_a_caught_list_gets_back() {
+  // Every row on screen has its sprite: nothing to do.
+  TEST_ASSERT_EQUAL_INT32(-1, unheld(heldOf(100, 101, 102, 103, 104, 105), 4230, kBand, 700).item);
+  TEST_ASSERT_EQUAL_INT32(-1, unheld(heldOf(100, 101, 102, 103, -1, -1), 4200, kBand, 700).item);
+  // After a fast fling down the list, across a row: rows 100-104 show, row
+  // 100's sprite went to row 106. It comes back; the rows on screen and one
+  // either side are kept, so row 106's sprite is the one it takes, and row
+  // 105 stays for a flick on the same way.
+  Held h = heldOf(106, 101, 102, 103, 104, 105);
+  Next n = unheld(h, 4230, kBand, 700);
+  assertNext(100, 99, 105, n);
+  TEST_ASSERT_EQUAL_INT(0, claim(h, n.keep, n.item).slot);
+  // After one up it: row 104's went to row 98.
+  h = heldOf(100, 101, 102, 103, 98, 99);
+  n = unheld(h, 4230, kBand, 700);
+  assertNext(104, 99, 105, n);
+  TEST_ASSERT_EQUAL_INT(4, claim(h, n.keep, n.item).slot);
+  // Nothing spare beyond the rows beside the band: the rows on screen alone are
+  // kept, and one of those beside it gives its sprite.
+  h = heldOf(99, 101, 102, 103, 104, 105);
+  n = unheld(h, 4230, kBand, 700);
+  assertNext(100, 100, 104, n);
+  TEST_ASSERT_EQUAL_INT(0, claim(h, n.keep, n.item).slot);
+  // More than one gone: the first, top down; the next call has the next.
+  h = heldOf(-1, -1, 102, 103, 104, 105);
+  n = unheld(h, 4230, kBand, 700);
+  assertNext(100, 99, 105, n);
+  h.item[claim(h, n.keep, n.item).slot] = n.item;
+  assertNext(101, 99, 105, unheld(h, 4230, kBand, 700));
+  // At the list's ends the range stops with it.
+  assertNext(0, 0, 5, unheld(heldOf(6, 1, 2, 3, 4, 5), 30, kBand, 700));
+  const int32_t end = 700 * kPitch - kBand;
+  assertNext(699, 695, 699, unheld(heldOf(696, 697, 698, 694, 693, -1), end, kBand, 700));
+}
+
 // Whether a row fits before the next frame, and what the last one says a row costs.
 void test_the_time_a_row_has() {
   constexpr int64_t kFrame = 14000;  // a refresh of the Core2's panel
@@ -258,9 +296,11 @@ struct List {
   int frames = 0;
   int inFrames = 0;   // rows a frame rendered itself
   int lastFrame = 0;  // ... the last frame
-  int32_t lastItem = -1;
+  int32_t lastFrameItem = -1;  // ... and the last of them (-1: it rendered none)
+  int32_t lastItem = -1;       // the last row rendered at all
   int betweenFrames = 0;  // rows rendered ahead, or beside a resting list
   int unkept = 0;         // an item took a sprite whose row was kept (claim()'s last resort)
+  bool grabbed = false;   // a finger caught it moving, and hasn't moved it yet
 
   explicit List(int32_t n, int h = kBand) : items(n), height(h) { map.configure(72, h, 2 * kPitch); }
 
@@ -313,14 +353,15 @@ struct List {
     ++frames;
     inFrames += n;
     lastFrame = n;
+    lastFrameItem = n ? lastItem : -1;
     return n;
   }
   // A jump (the A-Z rail, a scroll to a row, a page's first frame): drawn at
   // once where it goes (drawFrame()), nothing rendered ahead of the plan.
   int jump(int32_t off) { return frame(off, false); }
   bool renderAhead() {
-    if (dir == 0) return false;
-    const Next next = ahead(held, drawn, height, items, dir, step);
+    if (!grabbed && dir == 0) return false;
+    const Next next = grabbed ? unheld(held, drawn, height, items) : ahead(held, drawn, height, items, dir, step);
     if (next.item < 0) return false;
     keep = next.keep;
     rendered(next.item);
@@ -345,8 +386,10 @@ struct List {
       if (it < band.first || it > band.last) it = -1;
     }
   }
-  // A finger takes hold of it while it moves: which way next is the finger's.
-  void grab() { dir = 0; }
+  // A finger takes hold of it while it moves (which way next is the finger's),
+  // and then moves it, or lifts.
+  void grab() { grabbed = true; }
+  void letGo() { grabbed = false; }
   // No item is in two sprites, and none is past the list.
   void check() const {
     for (int i = 0; i < kSlots; ++i) {
@@ -450,47 +493,94 @@ void test_a_fling_renders_no_row_in_a_frame() {
   TEST_ASSERT_TRUE(worst >= 1 && worst <= 2);
 }
 
-// A turn: a fling down the list caught by a finger, then pulled back. Today the
-// turn's first frame renders a row itself: the top row's sprite went to the
-// second row ahead (rowslots::ahead(), "only a turn back would want it
-// again"). The frames after it are ahead again.
-void test_a_turn_renders_its_first_row_in_the_frame() {
+// A fling down the list at the cap, caught 0.3 s in across a row: the top row's
+// sprite went to the second row ahead (rowslots::ahead(), "only a turn back
+// would want it again").
+static Rig caught() {
   Rig r;
   r.list.rest();
   r.scroll.fling(r.ms, 2000.0f);
-  for (int i = 0; i < 21; ++i) {  // 0.3 s of it
+  for (int i = 0; i < 21; ++i) {
     r.ms += kFrameMs;
     r.scroll.update(r.ms);
     const int32_t off = ListLayout::stepToward(r.list.drawn, roundOf(r.scroll.offset()), kStep);
     if (off != r.list.drawn) r.list.frame(off);
     r.list.renderAhead();
   }
-  TEST_ASSERT_EQUAL_INT(4, r.list.inFrames);
   // The finger lands (ListView's Down: the list stops, and is the finger's).
   r.scroll.press(r.ms, 100);
   r.list.grab();
   const int32_t top = r.list.drawn / kPitch;
-  TEST_ASSERT_TRUE(r.list.drawn % kPitch != 0);     // across a row: five rows show
-  TEST_ASSERT_FALSE(r.list.held.holds(top));        // ... and the top one's sprite is gone
-  TEST_ASSERT_TRUE(r.list.held.holds(top + 5) && r.list.held.holds(top + 6));  // to the rows ahead
-  TEST_ASSERT_FALSE(r.list.renderAhead());          // nothing is rendered on the fling's word now
-  // It pulls back up the list, 3 px a frame.
+  TEST_ASSERT_EQUAL_INT(4, r.list.inFrames);
+  TEST_ASSERT_TRUE(r.list.drawn % kPitch != 0);  // across a row: five rows show
+  TEST_ASSERT_FALSE(r.list.held.holds(top));     // ... and the top one has no sprite
+  TEST_ASSERT_TRUE(r.list.held.holds(top + 5) && r.list.held.holds(top + 6));
+  return r;
+}
+
+// The finger pulls the list `px` a frame for `frames` frames (down the screen
+// for more than 0: back up the list). Returns the rows its first frame rendered.
+static int pull(Rig& r, int px, int frames) {
+  r.list.letGo();
   int first = -1;
-  for (int i = 1; i <= 40; ++i) {
+  for (int i = 1; i <= frames; ++i) {
     r.ms += kFrameMs;
-    r.scroll.drag(r.ms, 100 + 3 * i);
+    r.scroll.drag(r.ms, 100 + px * i);
     const int32_t off = ListLayout::stepToward(r.list.drawn, roundOf(r.scroll.offset()), kStep);
     const int n = off != r.list.drawn ? r.list.frame(off) : 0;
-    if (i == 1) {
-      first = n;
-      TEST_ASSERT_EQUAL_INT32(top, r.list.lastItem);
-    }
+    if (i == 1) first = n;
     r.list.renderAhead();
     r.list.check();
   }
-  TEST_ASSERT_EQUAL_INT(1, first);
-  TEST_ASSERT_EQUAL_INT(5, r.list.inFrames);  // that one, and no other
+  return first;
+}
+
+// A turn: the caught list stands still under the finger for a pass, gets its
+// top row's sprite back, and the pull back only pushes: no row is rendered in a
+// frame, the turn's first least of all. (Before, that frame rendered the row.)
+void test_a_turn_only_pushes() {
+  Rig r = caught();
+  const int32_t top = r.list.drawn / kPitch;
+  // While it stands: the top row, into the second row ahead's sprite; the
+  // first row ahead stays. Then nothing more, however long the finger rests.
+  const int before = r.list.betweenFrames;
+  TEST_ASSERT_TRUE(r.list.renderAhead());
+  TEST_ASSERT_EQUAL_INT32(top, r.list.lastItem);
+  TEST_ASSERT_TRUE(r.list.held.holds(top + 5));
+  TEST_ASSERT_FALSE(r.list.held.holds(top + 6));
+  for (int i = 0; i < 50; ++i) TEST_ASSERT_FALSE(r.list.renderAhead());
+  TEST_ASSERT_EQUAL_INT(1, r.list.betweenFrames - before);
+  // It pulls back up the list, 3 px a frame, then faster.
+  TEST_ASSERT_EQUAL_INT(0, pull(r, 3, 40));
+  TEST_ASSERT_EQUAL_INT(4, r.list.inFrames);
   TEST_ASSERT_EQUAL_INT(0, r.list.unkept);
+  Rig fast = caught();
+  fast.list.renderAhead();
+  TEST_ASSERT_EQUAL_INT(0, pull(fast, 20, 8));
+  TEST_ASSERT_EQUAL_INT(4, fast.list.inFrames);
+}
+
+// The catch followed by a flick on the same way (a long list scrolled flick by
+// flick): the row ahead kept its sprite through the catch, so that frame only
+// pushes too.
+void test_a_flick_on_after_a_catch_only_pushes() {
+  Rig r = caught();
+  r.list.renderAhead();
+  TEST_ASSERT_EQUAL_INT(0, pull(r, -20, 8));
+  TEST_ASSERT_EQUAL_INT(4, r.list.inFrames);
+  TEST_ASSERT_EQUAL_INT(0, r.list.unkept);
+}
+
+// A finger that turns the list before it has stood a pass under it (no time to
+// give the row back) still renders that row in the turn's first frame, as
+// before: once.
+void test_a_turn_at_once_renders_its_row() {
+  Rig r = caught();
+  const int32_t top = r.list.drawn / kPitch;
+  TEST_ASSERT_EQUAL_INT(1, pull(r, 3, 1));
+  TEST_ASSERT_EQUAL_INT32(top, r.list.lastFrameItem);
+  pull(r, 3, 39);
+  TEST_ASSERT_EQUAL_INT(5, r.list.inFrames);
 }
 
 // A jump (the A-Z rail, a scroll to a row): the band in place, its rows
@@ -536,13 +626,23 @@ void test_a_random_session() {
           TEST_ASSERT_TRUE(n <= 3);
           TEST_ASSERT_FALSE(l.map.lastPlanFull());
           for (int k = static_cast<int>(rng() % 3); k > 0; --k) l.renderAhead();
-        } else if (what < 80) {  // a jump
+        } else if (what < 78) {  // a jump
           const int32_t to = maxOffset ? static_cast<int32_t>(rng() % (maxOffset + 1)) : 0;
           TEST_ASSERT_TRUE(l.jump(to) <= 5);
-          l.grab();
-        } else if (what < 90) {  // it rests
-          l.grab();
+          l.dir = 0;
+        } else if (what < 86) {  // it rests
+          l.dir = 0;
           l.rest();
+        } else if (what < 93) {  // a finger catches it, and it gets its rows back
+          l.grab();
+          int back = 0;
+          while (l.renderAhead()) ++back;
+          TEST_ASSERT_TRUE(back <= 2);
+          const Keep on = shown(l.drawn, l.height, static_cast<uint32_t>(l.items));
+          for (uint32_t it = on.first; it <= on.last && l.items > 0; ++it) {
+            TEST_ASSERT_TRUE(l.held.holds(static_cast<int32_t>(it)));
+          }
+          l.letGo();
         } else {  // a cover arrived
           l.forgetHidden();
         }
@@ -564,10 +664,13 @@ int main(int, char**) {
   RUN_TEST(test_the_items_a_move_brings_on);
   RUN_TEST(test_the_row_rendered_ahead);
   RUN_TEST(test_the_rows_rendered_beside_a_resting_list);
+  RUN_TEST(test_the_row_a_caught_list_gets_back);
   RUN_TEST(test_the_time_a_row_has);
   RUN_TEST(test_a_first_frame_and_a_swipe_from_rest);
   RUN_TEST(test_a_fling_renders_no_row_in_a_frame);
-  RUN_TEST(test_a_turn_renders_its_first_row_in_the_frame);
+  RUN_TEST(test_a_turn_only_pushes);
+  RUN_TEST(test_a_flick_on_after_a_catch_only_pushes);
+  RUN_TEST(test_a_turn_at_once_renders_its_row);
   RUN_TEST(test_a_jump_renders_its_band);
   RUN_TEST(test_a_random_session);
   return UNITY_END();

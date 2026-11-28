@@ -158,6 +158,7 @@ void ListView::attach(Source* src, NavModel::PageRef* ref, int32_t defaultOffset
   src_ = src;
   ref_ = ref;
   touchOn_ = TouchOn::None;
+  grabbed_ = false;
   pressedItem_ = downItem_ = -1;
   pressedButton_ = -1;
   pressedX_ = -1;
@@ -247,6 +248,33 @@ int32_t ListView::pressedRow() const {
   if (pressedItem_ < 0) return -1;
   const ListLayout::Item it = layout_.item(static_cast<uint32_t>(pressedItem_));
   return it.kind == ListLayout::Kind::Row ? it.row : -1;
+}
+
+int ListView::heldRows(uint32_t rows[kSlots]) const {
+  int n = 0;
+  if (!src_ || !slots_) return 0;
+  for (int i = 0; i < kSlots; ++i) {
+    const int32_t item = slots_[i].item;
+    if (item < 0 || static_cast<uint32_t>(item) >= layout_.itemCount()) continue;
+    const ListLayout::Item it = layout_.item(static_cast<uint32_t>(item));
+    if (it.kind == ListLayout::Kind::Row) rows[n++] = static_cast<uint32_t>(it.row);
+  }
+  return n;
+}
+
+bool ListView::patchRow(uint32_t row, int x, int y, int w, int h, void (*paint)(M5Canvas& sprite, void* ctx),
+                        void* ctx) {
+  if (!src_ || !slots_ || row >= layout_.rows()) return false;
+  const auto item = static_cast<int32_t>(layout_.itemOfRow(row));
+  for (int i = 0; i < kSlots; ++i) {
+    if (slots_[i].item != item) continue;
+    paint(slots_[i].sprite, ctx);
+    // (Off screen, or the band owed whole: nothing to push, the frame that
+    // shows the row pushes it as it is now.)
+    pushOnRow(row, slots_[i].sprite, x, y, w, h, x, y);
+    return true;
+  }
+  return false;
 }
 
 void ListView::reload() {
@@ -1228,21 +1256,36 @@ bool ListView::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
 // Ui's; on the panel's scan the list knows better: its last hold's start,
 // a refresh before the next).
 bool ListView::renderAhead(uint32_t untilDueMs) {
-  if (!src_ || !slots_ || drawnOffset_ < 0 || force_ || jumped_ || lastDir_ == 0 || !moving()) return false;
+  if (!src_ || !slots_ || drawnOffset_ < 0 || force_ || jumped_ || !moving()) return false;
   const auto n = static_cast<int32_t>(layout_.itemCount());
   if (n == 0) return false;
-  // Time for a row before the next frame's window (on the panel's scan: a
-  // refresh after the last hold began; as a fling slows, later: its window
-  // follows the step), or its deadline?
-  if (onScan() && lastHoldUs_) {
-    if (!rowslots::roomOnScan(esp_timer_get_time() - lastHoldUs_, scan_->sync().panel().frameUs, rowUs_)) return false;
-  } else if (!rowslots::roomOnClock(untilDueMs, rowUs_)) {
-    return false;
+  rowslots::Next next;
+  if (grabbed_) {
+    // A list a finger caught (onEvent()'s Down), standing still under it:
+    // which way it goes next is the finger's. A row on screen whose sprite
+    // the fling's look-ahead took is rendered now (rowslots::unheld()): a
+    // turn back brings its lines on in its first frame, and rendered there
+    // a decoder pass stretched that frame. (Caught between two of its
+    // frames it owes the last one first.)
+    if (offset() != drawnOffset_) return false;
+    next = rowslots::unheld(held(), drawnOffset_, height_, n);
+  } else {
+    if (lastDir_ == 0) return false;
+    // Time for a row before the next frame's window (on the panel's scan: a
+    // refresh after the last hold began; as a fling slows, later: its window
+    // follows the step), or its deadline?
+    if (onScan() && lastHoldUs_) {
+      if (!rowslots::roomOnScan(esp_timer_get_time() - lastHoldUs_, scan_->sync().panel().frameUs, rowUs_)) {
+        return false;
+      }
+    } else if (!rowslots::roomOnClock(untilDueMs, rowUs_)) {
+      return false;
+    }
+    // The row past the edge the list moves toward, and from a fast step the
+    // one after it (the frame that brings two rows on would render one):
+    // which, and whose slots are kept for it, is rowslots::ahead()'s.
+    next = rowslots::ahead(held(), drawnOffset_, height_, n, lastDir_, lastStep_);
   }
-  // The row past the edge the list moves toward, and from a fast step the
-  // one after it (the frame that brings two rows on would render one):
-  // which, and whose slots are kept for it, is rowslots::ahead()'s.
-  const rowslots::Next next = rowslots::ahead(held(), drawnOffset_, height_, n, lastDir_, lastStep_);
   if (next.item < 0) return false;
   setKeep(next.keep);
   Slot* s = slotFor(static_cast<uint32_t>(next.item));
@@ -1463,6 +1506,7 @@ void ListView::onEvent(const InputEvent& e) {
     // it stops a moving list like a finger landing.
     touchOn_ = TouchOn::List;
     dragged_ = true;
+    grabbed_ = false;  // (it moves it already)
     downItem_ = -1;
     if (pressedItem_ >= 0) setPressed(-1, -1);
     scroll_.press(e.ms, e.y);
@@ -1497,12 +1541,12 @@ void ListView::onEvent(const InputEvent& e) {
     const bool wasMoving = scroll_.moving();
     touchOn_ = TouchOn::List;
     dragged_ = wasMoving;
-    if (wasMoving) {
-      input_->grab();
-      // (Which way it goes next is the finger's: no row rendered ahead on
-      // the fling's word while it rests, as before it counted as moving.)
-      lastDir_ = 0;
-    }
+    // (Caught: until the finger moves it or lifts, which way it goes next
+    // is the finger's. No row is rendered ahead on the fling's word; what
+    // is rendered then is a row on screen the fling left without its
+    // sprite: renderAhead().)
+    grabbed_ = wasMoving;
+    if (wasMoving) input_->grab();
     scroll_.press(e.ms, e.y);
     // Highlight what's under the finger (only once the list is still). A
     // Down that stopped the list, or with the frame behind the scroll, is
@@ -1546,6 +1590,7 @@ void ListView::onEvent(const InputEvent& e) {
     case T::DragStart:
     case T::DragMove:
       dragged_ = true;
+      grabbed_ = false;
       if (pressedItem_ >= 0) setPressed(-1, -1);
       scroll_.drag(e.ms, e.y);
       break;
@@ -1608,7 +1653,10 @@ void ListView::onEvent(const InputEvent& e) {
     default:
       break;
   }
-  if (ends) touchOn_ = TouchOn::None;
+  if (ends) {
+    touchOn_ = TouchOn::None;
+    grabbed_ = false;
+  }
 }
 
 // ---- the standard row pieces ----
@@ -1636,12 +1684,16 @@ int ListView::disc(Row& r, char initial, uint16_t colour) {
 
 int ListView::thumb(Row& r, const uint16_t* pixels) {
   if (pixels) {
-    r.c.pushImage(r.x + 6, 1, 40, 40, reinterpret_cast<const lgfx::swap565_t*>(pixels));
+    r.c.pushImage(r.x + kThumbX, kThumbY, kThumbPx, kThumbPx, reinterpret_cast<const lgfx::swap565_t*>(pixels));
   } else {
-    r.c.fillRoundRect(r.x + 6, 1, 40, 40, 4, col::BTN);
+    r.c.fillRoundRect(r.x + kThumbX, kThumbY, kThumbPx, kThumbPx, 4, col::BTN);
     icons::drawCentred(r.c, icons::kNote, r.x + 26, 21, col::FAINT);
   }
   return r.x + 54;
+}
+
+void ListView::paintThumb(M5Canvas& sprite, void* pixels) {
+  sprite.pushImage(kThumbX, kThumbY, kThumbPx, kThumbPx, static_cast<const lgfx::swap565_t*>(pixels));
 }
 
 int ListView::icon(Row& r, const icons::Icon& icon, uint16_t colour) {

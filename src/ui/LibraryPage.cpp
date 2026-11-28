@@ -500,14 +500,41 @@ bool LibraryPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
 
 bool LibraryPage::animating() const { return ui_.list().animating(); }
 
+// A row with a sprite shows the album: on screen, or kept beside the band
+// (rendered ahead of where the list was going, a resting list's neighbours:
+// their covers are worth having when they come on).
+bool LibraryPage::showsCover(uint32_t album) const {
+  if (!real()) return false;
+  uint32_t rows[ListView::kSlots];
+  const int n = ui_.list().heldRows(rows);
+  for (int k = 0; k < n; ++k) {
+    const RowRef rr = rowAt(rows[k]);
+    if (rr.kind == RowKind::Album && rr.id == album) return true;
+  }
+  return false;
+}
+
+// An album's cover arrived: into every row that shows the album and has a
+// sprite, on screen or kept beside the band, and where it shows its 40 x 40
+// pushed alone (ListView::patchRow()). The row rendered and pushed whole
+// for it was 9 ms of the loop a cover, each time a list of albums stopped,
+// and the rows kept beside the band were forgotten at each arrival, to be
+// rendered again: by the first frame of a swipe that came before they were.
 void LibraryPage::thumbReady(uint32_t album) {
   if (!real()) return;
   ListView& list = ui_.list();
-  uint32_t first, last;
-  if (!list.visibleRows(&first, &last)) return;
-  for (uint32_t r = first; r <= last; ++r) {
-    const RowRef rr = rowAt(r);
-    if (rr.kind == RowKind::Album && rr.id == album) list.refreshRow(r);
+  uint32_t rows[ListView::kSlots];
+  const int n = list.heldRows(rows);
+  const uint16_t* px = nullptr;
+  for (int k = 0; k < n; ++k) {
+    const RowRef rr = rowAt(rows[k]);
+    if (rr.kind != RowKind::Album || rr.id != album) continue;
+    // (Asked only once a row shows the album: the large size alone may have
+    // arrived, Now Playing's, and a miss here asks for the small one.)
+    if (!px) px = ui_.thumbs().get(album, ThumbCache::Size::Small);
+    if (!px) return;
+    list.patchRow(rows[k], ListView::kThumbX, ListView::kThumbY, ListView::kThumbPx, ListView::kThumbPx,
+                  ListView::paintThumb, const_cast<uint16_t*>(px));
   }
 }
 

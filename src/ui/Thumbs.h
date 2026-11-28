@@ -89,6 +89,12 @@ public:
   // The newest request as the worker's step, at `priority`. False: nothing
   // asked, or the worker couldn't take it (asked again when a row draws).
   bool startCover(CardWorker& worker, uint8_t priority, uint32_t nowMs);
+  // A list came to rest: the requests of the rows it scrolled past go
+  // (ThumbCache::keepWanted()). `shown`: an album something still shows, or
+  // would as soon as its cover is made (the page's: Page::showsCover()).
+  // Each of them was a card read, for an album with no thumbnail file yet a
+  // decode of up to a second, of a cover nobody was looking at.
+  void dropUnshown(bool (*shown)(uint32_t album, void* ctx), void* ctx);
   // The library was rebuilt: album ids mean other albums.
   void libraryChanged();
   // The library's update step (docs/METADATA.md 3.4.2) borrows the pools
@@ -121,6 +127,9 @@ private:
   Job* job_ = nullptr;          // PSRAM
   bool ready_ = false;
   bool lent_ = false;           // lend(): the pools are the library update's
+  // Requests dropped at a list's rest, for the report (in the 2 B after
+  // lent_: this object is the Ui's, whose size is pinned; it stops at 65,535).
+  uint16_t dropped_ = 0;
   uint32_t generation_ = 0;     // bumped by libraryChanged(): a job from before is dropped
   uint32_t retryAtMs_ = 0;      // the worker couldn't be made: try again then
   bool skipCard_ = false;       // redecode()

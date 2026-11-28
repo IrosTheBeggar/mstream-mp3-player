@@ -190,6 +190,7 @@ public:
   void onEvent(const InputEvent& e) override;
   void onSheet(int choice) override;
   void thumbReady(uint32_t album) override;
+  bool showsCover(uint32_t album) const override;
   void describe(char* buf, size_t size) const override;
 
 private:
@@ -450,6 +451,7 @@ public:
   void onSheet(int choice) override;
   void home() override;
   void thumbReady(uint32_t album) override;
+  bool showsCover(uint32_t album) const override;
   void describe(char* buf, size_t size) const override;
   // The segment the root shows (for a jump from Now Playing that keeps it).
   LibrarySegment segmentShown() const { return segment(); }
